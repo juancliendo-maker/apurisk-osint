@@ -699,7 +699,10 @@ def _scan_descargas(output_dir: str | None) -> dict:
             mtime = datetime.fromtimestamp(stat.st_mtime)
             return {
                 "name": Path(path).name,
-                "path": Path(path).name,  # relative for HTML link (assumes same folder served)
+                # Cuando el dashboard se sirve desde el endpoint /dashboard del FastAPI server,
+                # los archivos viven bajo /output/ (montado como StaticFiles).
+                # El path absoluto desde la raíz del server SIEMPRE funciona.
+                "path": f"/output/{Path(path).name}",
                 "size": f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb/1024:.1f} MB",
                 "mtime": mtime,
                 "mtime_str": _fmt_datetime(mtime.isoformat(timespec='seconds')),

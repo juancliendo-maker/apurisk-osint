@@ -37,6 +37,151 @@ medios_rss:
     nombre: "CNN en Español - Latinoamérica"
     url: "https://cnnespanol.cnn.com/feed/"
     categoria: medios
+  # Periodismo de investigación
+  - id: ojo_publico
+    nombre: "Ojo Público"
+    url: "https://ojo-publico.com/rss"
+    categoria: medios
+  - id: convoca_pe
+    nombre: "Convoca Perú"
+    url: "https://convoca.pe/rss.xml"
+    categoria: medios
+  # Medios regionales
+  - id: correo_arequipa
+    nombre: "Diario Correo - Arequipa"
+    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/arequipa/?outputType=xml"
+    categoria: medios
+  - id: correo_cusco
+    nombre: "Diario Correo - Cusco"
+    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/cusco/?outputType=xml"
+    categoria: medios
+  - id: correo_puno
+    nombre: "Diario Correo - Puno"
+    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/puno/?outputType=xml"
+    categoria: medios
+  - id: correo_huancayo
+    nombre: "Diario Correo - Huancayo"
+    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/huancayo/?outputType=xml"
+    categoria: medios
+  - id: losandes_puno
+    nombre: "Los Andes - Puno"
+    url: "https://losandes.com.pe/feed/"
+    categoria: medios
+  # Estado peruano - portales con feeds o noticias
+  - id: andina_politica
+    nombre: "Andina - Agencia Oficial"
+    url: "https://andina.pe/agencia/rss-noticias.aspx?cat=Politica"
+    categoria: estado
+  - id: jne_noticias
+    nombre: "JNE - Jurado Nacional de Elecciones"
+    url: "https://www.jne.gob.pe/JNE/RSS"
+    categoria: estado
+  - id: onpe_resultados
+    nombre: "ONPE - Resultados Electorales"
+    url: "https://www.onpe.gob.pe/feed/"
+    categoria: estado
+  - id: inei_estadisticas
+    nombre: "INEI - Estadísticas"
+    url: "https://www.inei.gob.pe/rss/"
+    categoria: estado
+  - id: bcrp_notas
+    nombre: "BCRP - Notas Semanales"
+    url: "https://www.bcrp.gob.pe/sitemap-news.xml"
+    categoria: estado
+  - id: contraloria_noticias
+    nombre: "Contraloría General"
+    url: "https://www.contraloria.gob.pe/wps/portal/!ut/rss"
+    categoria: estado
+  - id: mp_fiscalia
+    nombre: "Ministerio Público - Fiscalía"
+    url: "https://www.gob.pe/institucion/mpfn/noticias/rss"
+    categoria: estado
+  - id: pj_noticias
+    nombre: "Poder Judicial"
+    url: "https://www.pj.gob.pe/wps/wcm/connect/CorteSuprema/s_cortes_suprema_home/as_inicio/as_enlaces_destacados/as_rss/"
+    categoria: estado
+  - id: tc_jurisprudencia
+    nombre: "Tribunal Constitucional"
+    url: "https://www.tc.gob.pe/rss"
+    categoria: estado
+  - id: sunat_noticias
+    nombre: "Sunat - Noticias"
+    url: "https://www.gob.pe/institucion/sunat/noticias/rss"
+    categoria: estado
+  - id: sunafil_noticias
+    nombre: "Sunafil - Fiscalización Laboral"
+    url: "https://www.gob.pe/institucion/sunafil/noticias/rss"
+    categoria: estado
+  - id: ccffaa_oficial
+    nombre: "Comando Conjunto de las FFAA"
+    url: "https://www.ccffaa.mil.pe/rss"
+    categoria: estado
+  - id: mininter_oficial
+    nombre: "Ministerio del Interior"
+    url: "https://www.gob.pe/institucion/mininter/noticias/rss"
+    categoria: estado
+  - id: mre_oficial
+    nombre: "Cancillería - MRE"
+    url: "https://www.gob.pe/institucion/rree/noticias/rss"
+    categoria: estado
+  # Internacional / multilateral
+  - id: reuters_latam
+    nombre: "Reuters - Latinoamérica"
+    url: "https://www.reutersagency.com/feed/?best-regions=latin-america&post_type=best"
+    categoria: internacional
+  - id: ap_latam
+    nombre: "AP - Latin America"
+    url: "https://apnews.com/hub/latin-america.rss"
+    categoria: internacional
+  - id: bloomberg_latam
+    nombre: "Bloomberg - Latam"
+    url: "https://www.bloomberg.com/feed/podcast/etf-iq.xml"
+    categoria: internacional
+  - id: ft_emerging
+    nombre: "Financial Times - Emerging Markets"
+    url: "https://www.ft.com/emerging-markets?format=rss"
+    categoria: internacional
+  - id: bm_peru
+    nombre: "Banco Mundial - Perú"
+    url: "https://www.bancomundial.org/es/country/peru/news/rss"
+    categoria: internacional
+  - id: bid_peru
+    nombre: "BID - Perú"
+    url: "https://www.iadb.org/es/news/rss"
+    categoria: internacional
+  - id: fmi_peru
+    nombre: "FMI / IMF - Peru"
+    url: "https://www.imf.org/external/np/sec/news/rss/imfnews.xml"
+    categoria: internacional
+  - id: ocde_peru
+    nombre: "OCDE - Perú"
+    url: "https://www.oecd.org/peru/rss.xml"
+    categoria: internacional
+  - id: hrw_americas
+    nombre: "Human Rights Watch - Américas"
+    url: "https://www.hrw.org/news/feed?region%5B0%5D=11"
+    categoria: internacional
+  - id: amnesty_americas
+    nombre: "Amnistía Internacional - Américas"
+    url: "https://www.amnesty.org/en/rss/news/?region=americas"
+    categoria: internacional
+  # Redes y foros
+  - id: reddit_peru
+    nombre: "Reddit r/peru"
+    url: "https://www.reddit.com/r/peru/.rss"
+    categoria: redes
+  - id: youtube_panorama
+    nombre: "YouTube - Panorama (Panamericana)"
+    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCh0_4cr8Wo3-3HyQVPaO5tw"
+    categoria: redes
+  - id: youtube_cuartopoder
+    nombre: "YouTube - Cuarto Poder (América TV)"
+    url: "https://www.youtube.com/feeds/videos.xml?user=americatv"
+    categoria: redes
+  - id: youtube_puntofinal
+    nombre: "YouTube - Punto Final (Latina)"
+    url: "https://www.youtube.com/feeds/videos.xml?user=latinatv"
+    categoria: redes
 
 # Portales del Estado
 estado:
@@ -80,19 +225,20 @@ analisis:
   top_n_temas: 10
   umbral_riesgo_alto: 70       # 0-100
 
-# Indicadores de riesgo (categorías y pesos) — 11 categorías
+# Indicadores de riesgo (categorías y pesos) — 12 categorías
 indicadores_riesgo:
-  estabilidad_gobierno: 0.18
-  conflictos_sociales: 0.14
-  riesgo_regulatorio: 0.10
-  polarizacion: 0.08
+  estabilidad_gobierno: 0.16
+  conflictos_sociales: 0.13
+  violencia_electoral: 0.10        # NUEVO factor crítico
+  riesgo_regulatorio: 0.08
   corrupcion: 0.10
-  seguridad: 0.10
+  seguridad: 0.09
   intervencion_militar: 0.08
-  tensiones_fronterizas: 0.08
-  crisis_migratoria: 0.06
-  tensiones_diplomaticas: 0.06
-  presion_economica: 0.02
+  tensiones_fronterizas: 0.07
+  polarizacion: 0.06
+  crisis_migratoria: 0.05
+  tensiones_diplomaticas: 0.05
+  presion_economica: 0.03
 
 # Salida
 salida:
