@@ -1,0 +1,16 @@
+# APURISK 1.0 — Servidor 24/7 (deploy en Render/Railway/Fly/VPS/Docker)
+# Pin de versiones estables para evitar sorpresas en deploys
+
+# Web server
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.10
+
+# Pipeline base
+requests==2.32.3
+beautifulsoup4==4.12.3
+feedparser==6.0.11
+python-docx==1.1.2
+reportlab==4.2.5
+jinja2==3.1.4
+pyyaml==6.0.2

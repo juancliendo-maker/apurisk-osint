@@ -1,0 +1,45 @@
+# APURISK 1.0 — Configuración de deploy automático en Render.com
+#
+# Cómo usar:
+#   1. Sube este repo a GitHub (público o privado)
+#   2. Ve a https://dashboard.render.com → "New +" → "Blueprint"
+#   3. Selecciona tu repo. Render detecta este archivo y crea el servicio.
+#   4. (Opcional) Agrega TWITTER_BEARER_TOKEN en las Environment Variables.
+#   5. Click "Apply" → en ~5 min tendrás URL pública: https://apurisk-osint.onrender.com
+#
+# Free tier: aplica para web service (sleep tras 15 min sin tráfico).
+# Para tráfico 24/7 sin sleep, sube al plan Starter ($7/mes).
+
+services:
+  - type: web
+    name: apurisk-osint
+    runtime: python
+    region: oregon
+    plan: free  # Cambia a "starter" para no-sleep ($7/mes)
+
+    # Build & start
+    buildCommand: pip install -r requirements-server.txt
+    startCommand: uvicorn apurisk.server:app --host 0.0.0.0 --port $PORT
+
+    # Health check
+    healthCheckPath: /healthz
+
+    # Disco persistente (1 GB) - necesario para que el archivo SQLite
+    # y los snapshots históricos sobrevivan a redeploys
+    disk:
+      name: apurisk-data
+      mountPath: /opt/render/project/src/output
+      sizeGB: 1
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: REFRESH_SECONDS
+        value: 1800        # 30 minutos
+      - key: OUTPUT_DIR
+        value: /opt/render/project/src/output
+      - key: PYTHONUNBUFFERED
+        value: 1
+      # TWITTER_BEARER_TOKEN se agrega manualmente en Dashboard (sync: false)
+      - key: TWITTER_BEARER_TOKEN
+        sync: false

@@ -1,0 +1,102 @@
+# APURISK 1.0 - Configuración de Plataforma OSINT
+# Riesgos Políticos en Perú
+
+plataforma:
+  nombre: "APURISK 1.0"
+  version: "0.1.0-mvp"
+  pais: "PE"
+  zona_horaria: "America/Lima"
+
+# Fuentes RSS de medios peruanos
+medios_rss:
+  - id: rpp_politica
+    nombre: "RPP - Política"
+    url: "https://rpp.pe/feed"
+    categoria: medios
+  - id: larepublica_politica
+    nombre: "La República - Política"
+    url: "https://larepublica.pe/rss/politica"
+    categoria: medios
+  - id: elcomercio_politica
+    nombre: "El Comercio - Política"
+    url: "https://elcomercio.pe/arcio/rss/category/politica/"
+    categoria: medios
+  - id: gestion_politica
+    nombre: "Gestión - Política"
+    url: "https://gestion.pe/arcio/rss/category/politica/"
+    categoria: medios
+  - id: idl_reporteros
+    nombre: "IDL-Reporteros"
+    url: "https://www.idl-reporteros.pe/feed/"
+    categoria: medios
+  - id: infobae_peru
+    nombre: "Infobae Perú"
+    url: "https://www.infobae.com/feeds/rss/peru/"
+    categoria: medios
+  - id: cnn_espanol
+    nombre: "CNN en Español - Latinoamérica"
+    url: "https://cnnespanol.cnn.com/feed/"
+    categoria: medios
+
+# Portales del Estado
+estado:
+  defensoria_conflictos:
+    nombre: "Defensoría del Pueblo - Reporte de Conflictos Sociales"
+    url: "https://www.defensoria.gob.pe/areas_tematicas/paz-social/"
+  congreso_proyectos:
+    nombre: "Congreso de la República - Proyectos de Ley"
+    url: "https://wb2server.congreso.gob.pe/spley-portal/#/expediente/search"
+  jne:
+    nombre: "Jurado Nacional de Elecciones"
+    url: "https://www.jne.gob.pe/"
+  el_peruano:
+    nombre: "Diario Oficial El Peruano"
+    url: "https://elperuano.pe/noticias/seccion/politica"
+
+# Twitter / X — opinión pública en tiempo real
+# Para activar modo live, exportar TWITTER_BEARER_TOKEN como variable de entorno
+# o (no recomendado) descomentar y poner aquí: twitter_bearer_token: "AAAA..."
+twitter_queries:
+  - "(Peru OR Perú) (Congreso OR vacancia OR ministro) lang:es -is:retweet"
+  - "(Peru OR Perú) (paro OR bloqueo OR conflicto) lang:es -is:retweet"
+  - "(Peru OR Perú) (corrupción OR fiscalía OR audios) lang:es -is:retweet"
+  - "(Peru OR Perú) (riesgo país OR sol peruano OR BCR) lang:es -is:retweet"
+twitter_max_per_query: 25
+
+# Datasets internacionales
+internacional:
+  gdelt_query:
+    nombre: "GDELT - Eventos Perú"
+    url: "https://api.gdeltproject.org/api/v2/doc/doc?query=Peru%20politics&mode=ArtList&format=json&maxrecords=50"
+  acled_peru:
+    nombre: "ACLED - Conflictos Perú"
+    url: "https://api.acleddata.com/acled/read?country=Peru"
+    requiere_api_key: true
+
+# Análisis - parámetros
+analisis:
+  ventana_dias: 7              # ventana de análisis
+  top_n_entidades: 15
+  top_n_temas: 10
+  umbral_riesgo_alto: 70       # 0-100
+
+# Indicadores de riesgo (categorías y pesos) — 11 categorías
+indicadores_riesgo:
+  estabilidad_gobierno: 0.18
+  conflictos_sociales: 0.14
+  riesgo_regulatorio: 0.10
+  polarizacion: 0.08
+  corrupcion: 0.10
+  seguridad: 0.10
+  intervencion_militar: 0.08
+  tensiones_fronterizas: 0.08
+  crisis_migratoria: 0.06
+  tensiones_diplomaticas: 0.06
+  presion_economica: 0.02
+
+# Salida
+salida:
+  carpeta: "./output"
+  generar_html: true
+  generar_docx: true
+  generar_json: true

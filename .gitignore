@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Output (no commitear datos generados — el servidor los regenera)
+output/*
+!output/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Secrets (NUNCA commitear)
+.env
+.env.*
+*.pem
+*token*
+*secret*
