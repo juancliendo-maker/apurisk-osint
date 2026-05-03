@@ -56,7 +56,15 @@ class TwitterCollector(BaseCollector):
             try:
                 r = requests.get(url, headers=headers, params=params, timeout=15)
                 if r.status_code != 200:
-                    print(f"  [warn] twitter [{r.status_code}]: {r.text[:120]}")
+                    msg = r.text[:200]
+                    if r.status_code == 403:
+                        msg = ("403 Forbidden — la API Free de X NO permite "
+                               "búsquedas (search/recent). Necesitas plan Basic ($100/mes).")
+                    elif r.status_code == 401:
+                        msg = "401 Unauthorized — Bearer Token inválido o expirado."
+                    elif r.status_code == 429:
+                        msg = "429 Rate limit excedido."
+                    print(f"  [warn] twitter [{r.status_code}]: {msg}")
                     continue
                 payload = r.json()
                 users = {u["id"]: u for u in payload.get("includes", {}).get("users", [])}
@@ -105,14 +113,27 @@ class TwitterCollector(BaseCollector):
         return "baja"
 
     def _demo_tweets(self) -> list[Article]:
+        """Genera tweets demo. Distribuye los timestamps en las últimas 24h
+        relativos al momento actual (hora Lima/PET) para que siempre haya
+        contenido fresco en la pestaña Twitter del dashboard, incluso si el
+        Bearer Token no es válido o la API rechaza la búsqueda.
+        """
         from ..data.sample_data import TWEETS_DEMO
+        from datetime import datetime, timedelta, timezone
+        PET = timezone(timedelta(hours=-5))
+        now = datetime.now(PET)
+
         out = []
-        for t in TWEETS_DEMO:
+        n = max(1, len(TWEETS_DEMO))
+        for i, t in enumerate(TWEETS_DEMO):
             handle = t["handle"]
-            # En modo demo no tenemos IDs reales de tweets, así que el URL apunta al PERFIL del autor.
-            # Cuando se active el modo live con TWITTER_BEARER_TOKEN, los URLs incluirán status/ID reales.
+            # En modo demo, URLs apuntan al PERFIL del autor (verificable en x.com).
+            # En modo live con Bearer Token de plan Basic+, los URLs incluyen status/ID reales.
             tweet_url = f"https://x.com/{handle}"
             text = t["text"]
+            # Distribuir tweets uniformemente entre 0.5h y 23h atrás
+            offset_h = 0.5 + (i / max(1, n - 1)) * 22.5
+            ts = (now - timedelta(hours=offset_h)).isoformat(timespec="seconds")
             out.append(Article(
                 source_id=self.source_id,
                 source_name=f"X · @{handle}",
@@ -120,7 +141,7 @@ class TwitterCollector(BaseCollector):
                 title=text[:120] + ("…" if len(text) > 120 else ""),
                 summary=text,
                 url=tweet_url,
-                published=t.get("created_at", datetime.now().isoformat()),
+                published=ts,
                 criticidad=t.get("criticidad", "media"),
                 raw={
                     "tweet_id": t.get("id", ""),
