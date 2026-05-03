@@ -204,9 +204,10 @@ async def status():
     }
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz():
-    """Health check para Render/K8s/load balancers."""
+    """Health check para Render/K8s/load balancers/UptimeRobot.
+    Acepta GET y HEAD (UptimeRobot Free usa HEAD por default)."""
     return {"status": "ok", "now": now_pe_iso()}
 
 
