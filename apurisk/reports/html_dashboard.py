@@ -135,6 +135,27 @@ a:hover { text-decoration: underline; }
 }
 .download-item .dl-btn:hover { opacity: 0.85; text-decoration: none;}
 
+/* Botón GRANDE para "Generar AHORA" */
+.dl-btn-instant {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center;
+  color: white; padding: 14px 12px; border-radius: 8px;
+  font-weight: 700; font-size: 13px; text-decoration: none;
+  letter-spacing: 0.3px; line-height: 1.3;
+  transition: transform .15s, opacity .15s;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  min-height: 64px;
+}
+.dl-btn-instant small {
+  display: block; font-size: 10px; font-weight: 400;
+  opacity: 0.85; margin-top: 4px; letter-spacing: 0.5px;
+}
+.dl-btn-instant:hover {
+  transform: translateY(-2px); text-decoration: none;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.25);
+  opacity: 0.95;
+}
+
 /* Last update banner inside top of content */
 .fresh-banner {
   background: linear-gradient(90deg, rgba(34,197,94,0.15), transparent);
@@ -725,19 +746,64 @@ def _scan_descargas(output_dir: str | None) -> dict:
         "alertas_docx": _list("apurisk_alertas_*.docx"),
         "alertas_html": _list("apurisk_alertas_*.html"),
         "ejecutivo_docx": _list("apurisk_ejecutivo_*.docx"),
+        # NUEVOS: reportes ejecutivos diarios visuales (≤3 páginas, foco tendencias)
+        "ejecutivo_diario_pdf": _list("apurisk_ejecutivo_diario_*.pdf"),
+        "ejecutivo_diario_docx": _list("apurisk_ejecutivo_diario_*.docx"),
         "snapshots": _list("apurisk_snapshot_*.json"),
         "dashboards": _list("apurisk_dashboard_*.html"),
     }
 
 
 def _render_descargas(descargas: dict) -> str:
-    """HTML del panel de descargas."""
+    """HTML del panel de descargas con dos secciones:
+       1) GENERAR AHORA — botones que disparan endpoints /api/reporte/...
+          (funcionan SIEMPRE, generan el reporte al instante con datos más frescos)
+       2) ARCHIVOS YA GENERADOS — listado de los reportes en el output/
+    """
+
+    # ===== SECCIÓN 1: Botones "Generar AHORA" (SIEMPRE visibles y funcionales) =====
+    instant_html = """
+    <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); border: 1px solid var(--accent); margin-bottom: 18px;'>
+      <h4>⚡ Generar reporte AHORA <span class='count-badge' style='background: var(--accent); color: var(--bg-0);'>al instante</span></h4>
+      <div style='color: var(--txt-1); font-size: 13px; line-height: 1.6; margin-bottom: 12px;'>
+        Estos botones generan el reporte <b>en el momento</b> con los datos más recientes
+        del scheduler. El archivo se descarga inmediatamente.
+      </div>
+      <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;'>
+        <a href='/api/reporte/ejecutivo/pdf' target='_blank' class='dl-btn-instant' style='background: #DC2626;'>
+          📄 Ejecutivo PDF<br><small>≤3 págs · foco tendencias</small>
+        </a>
+        <a href='/api/reporte/ejecutivo/docx' target='_blank' class='dl-btn-instant' style='background: #1E40AF;'>
+          📝 Ejecutivo Word<br><small>≤3 págs · editable</small>
+        </a>
+        <a href='/api/reporte/24h/html' target='_blank' class='dl-btn-instant' style='background: #38BDF8;'>
+          📰 Reporte 24h HTML<br><small>imprimible · web</small>
+        </a>
+        <a href='/api/reporte/24h/docx' target='_blank' class='dl-btn-instant' style='background: #1E40AF;'>
+          📝 Reporte 24h Word<br><small>completo · editable</small>
+        </a>
+        <a href='/api/reporte/alertas/html' target='_blank' class='dl-btn-instant' style='background: #EA580C;'>
+          🚨 Alertas HTML<br><small>feed crítico</small>
+        </a>
+        <a href='/api/reporte/alertas/docx' target='_blank' class='dl-btn-instant' style='background: #DC2626;'>
+          🚨 Alertas Word<br><small>con acciones</small>
+        </a>
+        <a href='/api/reporte/diario/pdf' target='_blank' class='dl-btn-instant' style='background: #A78BFA;'>
+          📊 Diario PDF<br><small>detalle completo</small>
+        </a>
+        <a href='/api/reporte/semanal/pdf' target='_blank' class='dl-btn-instant' style='background: #A78BFA;'>
+          📅 Semanal PDF<br><small>tendencias 7 días</small>
+        </a>
+      </div>
+    </div>
+    """
+
     def _section(titulo, icono, items, fmt, color="var(--accent)"):
         if not items:
             return f"""
             <div class='download-section'>
-              <h4>{icono} {titulo}</h4>
-              <div style='color:var(--txt-2); font-size:12px; padding: 12px;'><em>No hay archivos disponibles. Genera reportes con <code>python -m apurisk.main --once</code>.</em></div>
+              <h4>{icono} {titulo} <span class='count-badge' style='background:var(--bg-3); color:var(--txt-2);'>0</span></h4>
+              <div style='color:var(--txt-2); font-size:12px; padding: 8px;'><em>El scheduler generará archivos en el siguiente ciclo (~30 min). Mientras tanto, usa los botones <b>"Generar AHORA"</b> arriba.</em></div>
             </div>
             """
         rows = ""
@@ -758,17 +824,27 @@ def _render_descargas(descargas: dict) -> str:
         </div>
         """
 
-    return (
-        _section("Reportes Diarios PDF", "📄", descargas["diarios_pdf"], "PDF", "var(--critico)") +
+    archivos_html = (
+        _section("Ejecutivo Diario PDF (≤3 págs)", "📄", descargas.get("ejecutivo_diario_pdf", []), "PDF", "var(--critico)") +
+        _section("Ejecutivo Diario Word (≤3 págs)", "📝", descargas.get("ejecutivo_diario_docx", []), "DOCX", "var(--accent)") +
+        _section("Reportes Diarios PDF (detallado)", "📄", descargas["diarios_pdf"], "PDF", "var(--accent-2)") +
         _section("Reportes Semanales PDF", "📅", descargas["semanales_pdf"], "PDF", "var(--accent-2)") +
         _section("Reporte 24h (HTML imprimible)", "📰", descargas["diarios_html"], "HTML", "var(--accent)") +
         _section("Reporte 24h (Word)", "📝", descargas["diarios_docx"], "DOCX") +
-        _section("Reporte ejecutivo (Word)", "📋", descargas["ejecutivo_docx"], "DOCX") +
+        _section("Reporte ejecutivo clásico (Word)", "📋", descargas["ejecutivo_docx"], "DOCX") +
         _section("Alertas Inmediatas (Word)", "🚨", descargas["alertas_docx"], "DOCX", "var(--critico)") +
         _section("Alertas Inmediatas (HTML)", "🚨", descargas["alertas_html"], "HTML", "var(--alto)") +
         _section("Snapshots de datos (JSON)", "📊", descargas["snapshots"], "JSON", "var(--bajo)") +
         _section("Dashboards históricos (HTML)", "📈", descargas["dashboards"], "HTML")
     )
+    return instant_html + """
+    <div class='download-section'>
+      <h4>📂 Archivos generados por el scheduler <span class='count-badge'>histórico</span></h4>
+      <div style='color: var(--txt-2); font-size: 12px; margin-bottom: 8px;'>
+        Los reportes que se han generado en ciclos anteriores del scheduler (cada 30 min). Click en cualquiera para descargarlo.
+      </div>
+    </div>
+    """ + archivos_html
 
 
 def _render_fuentes_estado(articulos, conflictos, proyectos, tweets) -> str:
