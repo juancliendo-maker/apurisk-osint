@@ -1161,8 +1161,11 @@ def generar_dashboard_html(
         <div class="matrix-canvas-host"><canvas id="matrixChart"></canvas></div>
       </div>
       <div class="card span-5" id="treemapCard">
-        <h3>Treemap por categoría <span class="badge">score = sqrt(P·I)</span></h3>
-        <div style="height: 360px;"><canvas id="treemapChart"></canvas></div>
+        <h3>Treemap de Factores · tamaño = score <span class="badge">score = √(P·I)</span></h3>
+        <div style="height: 400px;"><canvas id="treemapChart"></canvas></div>
+        <div style="margin-top: 8px; font-size: 11px; color: var(--txt-2); text-align: center;">
+          Cada bloque es un factor de riesgo. <b>Más grande = mayor score</b>. Color = nivel (rojo crítico · naranja alto · ámbar medio · verde bajo).
+        </div>
       </div>
 
       <div class="card span-12">
@@ -1614,6 +1617,8 @@ python -m http.server 8080 --directory output
   }}); }});
 
   // Treemap (puede fallar si el plugin no carga; safeInit aísla el error)
+  // Diseño limpio: cada factor en su propio rectángulo (sin agrupación de categoría
+  // que causaba labels superpuestas). Nombre arriba, score abajo, sin "Σ" confuso.
   const treemapData = {json.dumps(treemap_data, ensure_ascii=False)};
   safeInit('treemapChart', () => {{ window._treemapChart = new Chart(document.getElementById('treemapChart').getContext('2d'), {{
     type: 'treemap',
@@ -1621,33 +1626,60 @@ python -m http.server 8080 --directory output
       datasets: [{{
         tree: treemapData,
         key: 'value',
-        groups: ['category', 'name'],
+        // Sin 'groups' — un solo nivel: cada factor es un rectángulo independiente
         backgroundColor: (ctx) => {{
-          if (!ctx.raw || !ctx.raw._data) return 'rgba(56,189,248,0.4)';
-          const nivel = ctx.raw._data.children?.[0]?.nivel || ctx.raw._data.nivel;
-          return colorByNivel[nivel] || '#38bdf8';
+          if (!ctx.raw || !ctx.raw._data) return 'rgba(56,189,248,0.55)';
+          const nivel = ctx.raw._data.nivel;
+          const c = colorByNivel[nivel] || '#38bdf8';
+          // Añadimos transparencia para que el texto blanco resalte mejor
+          return c + 'D9';
         }},
-        borderColor: '#0f172a', borderWidth: 2, spacing: 1,
+        borderColor: '#0a0e1a', borderWidth: 2, spacing: 2,
         labels: {{
-          display: true, color: '#fff', font: {{size: 11, weight: 600}},
+          display: true,
+          align: 'left',
+          position: 'top',
+          color: '#ffffff',
+          font: {{ size: 11, weight: 'bold', family: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }},
+          padding: 6,
           formatter: (ctx) => {{
             if (!ctx.raw || !ctx.raw._data) return '';
             const d = ctx.raw._data;
-            if (d.children) return [d.g || '', `score Σ: ${{d.v || 0}}`];
-            return [d.name || '', `${{d.value || 0}}`];
-          }}
+            // Truncar nombres largos para que entren en el rectángulo
+            const nombre = (d.name || '').length > 24 ? (d.name || '').substring(0, 22) + '…' : (d.name || '');
+            // Si el rectángulo es muy chiquito (score < 30), solo mostrar score
+            if ((d.value || 0) < 30) return `${{d.value || 0}}`;
+            return [nombre, `Score: ${{d.value || 0}}  ·  ${{d.nivel || ''}}`];
+          }},
+          overflow: 'hidden',
         }}
       }}]
     }},
     options: {{
       responsive: true, maintainAspectRatio: false,
       plugins: {{
-        legend: {{display: false}},
-        tooltip: {{ callbacks: {{ label: (ctx) => {{
-          const d = ctx.raw._data;
-          if (d.children) return `${{d.g}}: score acum ${{d.v}}`;
-          return `${{d.name}}: ${{d.value}} (${{d.nivel}})`;
-        }} }} }}
+        legend: {{ display: false }},
+        tooltip: {{
+          backgroundColor: '#0f172a',
+          titleColor: '#ffffff', bodyColor: '#cbd5e1',
+          borderColor: '#334155', borderWidth: 1,
+          padding: 10,
+          callbacks: {{
+            title: (items) => {{
+              if (!items.length) return '';
+              const d = items[0].raw._data;
+              return d.name || '';
+            }},
+            label: (ctx) => {{
+              const d = ctx.raw._data;
+              return [
+                `Categoría: ${{d.category || '—'}}`,
+                `Nivel: ${{d.nivel || '—'}}`,
+                `Score: ${{d.value || 0}}`,
+              ];
+            }}
+          }}
+        }}
       }}
     }}
   }}); }});
