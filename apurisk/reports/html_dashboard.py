@@ -1462,6 +1462,37 @@ def generar_dashboard_html(
           </div>
         </div>
 
+        <h3 style="margin-top: 24px;">🗺️ Recursos de referencia externos</h3>
+        <div style="color: var(--txt-2); font-size: 12.5px; margin-bottom: 10px;">
+          Aplicaciones web oficiales con datos georreferenciados o resultados en vivo. Click para abrir directamente en una pestaña nueva.
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px;">
+          <a href="https://aplicaciones.mininter.gob.pe/mapadeldelitogeoreferenciado/" target="_blank" rel="noopener"
+             style="display: block; padding: 14px; background: var(--bg-2); border-radius: 8px; border-left: 3px solid var(--critico); text-decoration: none; color: var(--txt-0);">
+            <div style="font-size: 11px; color: var(--txt-2); text-transform: uppercase; letter-spacing: 1px;">🚨 SEGURIDAD CIUDADANA</div>
+            <div style="font-weight: 700; margin-top: 4px;">Mapa del Delito georreferenciado</div>
+            <div style="font-size: 12px; color: var(--txt-2); margin-top: 4px;">MININTER · denuncias policiales por delito y zona, cobertura nacional</div>
+          </a>
+          <a href="https://resultadoelectoral.onpe.gob.pe/" target="_blank" rel="noopener"
+             style="display: block; padding: 14px; background: var(--bg-2); border-radius: 8px; border-left: 3px solid var(--accent); text-decoration: none; color: var(--txt-0);">
+            <div style="font-size: 11px; color: var(--txt-2); text-transform: uppercase; letter-spacing: 1px;">🗳️ ELECTORAL</div>
+            <div style="font-weight: 700; margin-top: 4px;">ONPE - Resultados Electorales en Vivo</div>
+            <div style="font-size: 12px; color: var(--txt-2); margin-top: 4px;">Conteo oficial actualizado de las elecciones 2026 y balotaje</div>
+          </a>
+          <a href="https://www.jne.gob.pe/index.html" target="_blank" rel="noopener"
+             style="display: block; padding: 14px; background: var(--bg-2); border-radius: 8px; border-left: 3px solid var(--accent); text-decoration: none; color: var(--txt-0);">
+            <div style="font-size: 11px; color: var(--txt-2); text-transform: uppercase; letter-spacing: 1px;">⚖️ ELECTORAL</div>
+            <div style="font-weight: 700; margin-top: 4px;">JNE - Resoluciones del Pleno</div>
+            <div style="font-size: 12px; color: var(--txt-2); margin-top: 4px;">Resoluciones del Jurado Nacional de Elecciones</div>
+          </a>
+          <a href="https://www.defensoria.gob.pe/areas_tematicas/paz-social-y-prevencion-de-conflictos/" target="_blank" rel="noopener"
+             style="display: block; padding: 14px; background: var(--bg-2); border-radius: 8px; border-left: 3px solid var(--alto); text-decoration: none; color: var(--txt-0);">
+            <div style="font-size: 11px; color: var(--txt-2); text-transform: uppercase; letter-spacing: 1px;">🤝 CONFLICTOS SOCIALES</div>
+            <div style="font-weight: 700; margin-top: 4px;">Defensoría - Reporte mensual</div>
+            <div style="font-size: 12px; color: var(--txt-2); margin-top: 4px;">Conflictos sociales activos por región y tipo</div>
+          </a>
+        </div>
+
         <h3 style="margin-top: 24px;">🔄 Cómo activar modo live continuo</h3>
         <pre style="background: var(--bg-0); border: 1px solid var(--bg-3); padding: 14px; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--txt-1); overflow-x: auto;"><code>export TWITTER_BEARER_TOKEN="tu_bearer_de_x_api"
 python -m apurisk.main --live --watch {refresh_seconds}
