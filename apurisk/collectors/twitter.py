@@ -32,6 +32,8 @@ class TwitterCollector(BaseCollector):
         self.bearer = os.getenv("TWITTER_BEARER_TOKEN") or config.get("twitter_bearer_token")
         self.queries = config.get("twitter_queries", DEFAULT_QUERIES)
         self.max_per_query = config.get("twitter_max_per_query", 25)
+        # Ventana temporal: solo tweets de las últimas N horas (default 72)
+        self.ventana_horas = config.get("twitter_ventana_horas", 72)
 
     def collect(self) -> list[Article]:
         if self.demo or not self.bearer:
@@ -42,14 +44,21 @@ class TwitterCollector(BaseCollector):
 
     def _fetch_real(self) -> list[Article]:
         import requests
+        from datetime import datetime, timedelta, timezone
         url = "https://api.twitter.com/2/tweets/search/recent"
         headers = {"Authorization": f"Bearer {self.bearer}"}
+        # Calcular start_time: solo tweets de las últimas N horas
+        # X API search/recent solo cubre últimos 7 días; usamos ventana_horas para
+        # acotar más estrictamente y traer hashtags trending REALMENTE recientes.
+        start_time = (datetime.now(timezone.utc) - timedelta(hours=self.ventana_horas)).strftime("%Y-%m-%dT%H:%M:%SZ")
         out: list[Article] = []
         for q in self.queries:
             params = {
                 "query": q,
                 "max_results": str(min(100, self.max_per_query)),
-                "tweet.fields": "created_at,public_metrics,author_id,lang",
+                "start_time": start_time,                       # acota a últimas N horas
+                "sort_order": "recency",                         # más recientes primero
+                "tweet.fields": "created_at,public_metrics,author_id,lang,entities",
                 "expansions": "author_id",
                 "user.fields": "username,name,verified",
             }
@@ -75,6 +84,10 @@ class TwitterCollector(BaseCollector):
                     text = t["text"]
                     metrics = t.get("public_metrics", {})
                     tweet_url = f"https://x.com/{handle}/status/{t['id']}"
+                    # Extraer hashtags y menciones de entities (campo oficial de X API)
+                    entities = t.get("entities", {}) or {}
+                    hashtags_reales = [h.get("tag", "") for h in entities.get("hashtags", []) if h.get("tag")]
+                    mentions_reales = [f"@{m.get('username','')}" for m in entities.get("mentions", []) if m.get("username")]
                     out.append(Article(
                         source_id=self.source_id,
                         source_name=f"X · @{handle}",
@@ -91,6 +104,8 @@ class TwitterCollector(BaseCollector):
                             "verified": user.get("verified", False),
                             "metrics": metrics,
                             "lang": t.get("lang", "es"),
+                            "hashtags": hashtags_reales,
+                            "mentions": mentions_reales,
                             "query": q,
                         },
                     ))

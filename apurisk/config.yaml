@@ -182,6 +182,83 @@ medios_rss:
     nombre: "YouTube - Punto Final (Latina)"
     url: "https://www.youtube.com/feeds/videos.xml?user=latinatv"
     categoria: redes
+  # Medios adicionales solicitados
+  - id: willax_politica
+    nombre: "Willax - Política"
+    url: "https://willax.pe/politica/feed/"
+    categoria: medios
+    url_referencia: "https://willax.pe/politica"
+  - id: expreso_politica
+    nombre: "Diario Expreso - Política"
+    url: "https://www.expreso.com.pe/feed/"
+    categoria: medios
+  - id: reuters_peru
+    nombre: "Reuters - Perú"
+    url: "https://www.reuters.com/arc/outboundfeeds/v3/category/world/peru/?outputType=xml"
+    categoria: internacional
+  - id: ap_peru
+    nombre: "AP - Perú"
+    url: "https://apnews.com/hub/peru.rss"
+    categoria: internacional
+  # Encuestadoras (datos de opinión pública)
+  - id: iep_encuestas
+    nombre: "IEP - Instituto de Estudios Peruanos"
+    url: "https://iep.org.pe/feed/"
+    categoria: encuestas
+  - id: ipsos_peru
+    nombre: "Ipsos Perú"
+    url: "https://www.ipsos.com/es-pe/rss.xml"
+    categoria: encuestas
+  - id: cpi_encuestas
+    nombre: "CPI - Compañía Peruana de Estudios"
+    url: "https://cpi.pe/feed/"
+    categoria: encuestas
+  - id: datum_internacional
+    nombre: "Datum Internacional"
+    url: "https://www.datum.com.pe/feed"
+    categoria: encuestas
+  # Estado peruano - feeds adicionales para encuestas/seguridad ciudadana
+  - id: jne_oficial
+    nombre: "JNE - Resoluciones e Impugnaciones"
+    url: "https://www.jne.gob.pe/sitio/rss/noticias-rss"
+    categoria: estado
+  - id: onpe_oficial
+    nombre: "ONPE - Información Electoral"
+    url: "https://www.onpe.gob.pe/feed/"
+    categoria: estado
+  - id: mininter_seguridad
+    nombre: "MININTER - Seguridad Ciudadana"
+    url: "https://www.gob.pe/institucion/mininter/noticias/rss?topics[]=seguridad-ciudadana"
+    categoria: estado
+  - id: inei_seguridad
+    nombre: "INEI - Estadísticas de Seguridad Ciudadana"
+    url: "https://m.inei.gob.pe/feed/"
+    categoria: estado
+
+# Recursos de referencia georreferenciados (aplicaciones web, no RSS).
+# Se exponen como enlaces en el dashboard para consulta directa, no se
+# scrapean automáticamente.
+recursos_referencia:
+  - id: mapa_delito_mininter
+    nombre: "Mapa del Delito Georreferenciado (MININTER)"
+    url: "https://aplicaciones.mininter.gob.pe/mapadeldelitogeoreferenciado/"
+    descripcion: "Mapa interactivo del Mininter con denuncias policiales por delito y zona. Cobertura nacional."
+    categoria: seguridad_ciudadana
+  - id: defensoria_conflictos_app
+    nombre: "Reporte de Conflictos Sociales - Defensoría"
+    url: "https://www.defensoria.gob.pe/areas_tematicas/paz-social-y-prevencion-de-conflictos/"
+    descripcion: "Reporte mensual de la Defensoría del Pueblo con conflictos sociales activos."
+    categoria: conflictos_sociales
+  - id: onpe_resultados_oficial
+    nombre: "ONPE - Resultados Electorales en Vivo"
+    url: "https://resultadoelectoral.onpe.gob.pe/"
+    descripcion: "Resultados oficiales en vivo de los procesos electorales."
+    categoria: electoral
+  - id: jne_resoluciones
+    nombre: "JNE - Resoluciones del Pleno"
+    url: "https://www.jne.gob.pe/index.html"
+    descripcion: "Resoluciones del Jurado Nacional de Elecciones."
+    categoria: electoral
 
 # Portales del Estado
 estado:
@@ -199,14 +276,35 @@ estado:
     url: "https://elperuano.pe/noticias/seccion/politica"
 
 # Twitter / X — opinión pública en tiempo real
-# Para activar modo live, exportar TWITTER_BEARER_TOKEN como variable de entorno
-# o (no recomendado) descomentar y poner aquí: twitter_bearer_token: "AAAA..."
+# Para activar modo live, exportar TWITTER_BEARER_TOKEN como variable de entorno.
+# Las queries están afinadas para capturar tweets RECIENTES y trending sobre
+# riesgo político en Perú. Cada query incluye filtros de actualidad (verified
+# para reducir ruido, last 7 days implícito en search/recent).
 twitter_queries:
-  - "(Peru OR Perú) (Congreso OR vacancia OR ministro) lang:es -is:retweet"
-  - "(Peru OR Perú) (paro OR bloqueo OR conflicto) lang:es -is:retweet"
-  - "(Peru OR Perú) (corrupción OR fiscalía OR audios) lang:es -is:retweet"
-  - "(Peru OR Perú) (riesgo país OR sol peruano OR BCR) lang:es -is:retweet"
-twitter_max_per_query: 25
+  # Estabilidad institucional y vacancia
+  - "(Perú OR Peru) (vacancia OR \"moción de vacancia\" OR \"interpelación\" OR \"cuestión de confianza\") -is:retweet lang:es"
+  - "(Perú OR Peru) (\"Balcázar\" OR Congreso OR \"premier\" OR gabinete) -is:retweet lang:es"
+  # Procesos electorales (clave en 2026)
+  - "(Perú OR Peru) (JNE OR ONPE OR \"segunda vuelta\" OR balotaje OR \"actas observadas\" OR impugnación) -is:retweet lang:es"
+  - "(Perú OR Peru) (Fujimori OR \"Roberto Sánchez\" OR \"López Aliaga\" OR candidato presidencial) -is:retweet lang:es"
+  # Encuestas y opinión pública
+  - "(Perú OR Peru) (Ipsos OR Datum OR IEP OR CPI OR encuesta OR aprobación) -is:retweet lang:es"
+  # Conflictos sociales y bloqueos
+  - "(Perú OR Peru) (paro OR bloqueo OR \"Las Bambas\" OR Apurímac OR \"corredor minero\" OR Panamericana) -is:retweet lang:es"
+  # Corrupción y captura institucional
+  - "(Perú OR Peru) (corrupción OR fiscalía OR \"Lava Jato\" OR \"Ministerio Público\" OR \"organización criminal\") -is:retweet lang:es"
+  # Seguridad ciudadana y FFAA
+  - "(Perú OR Peru) (sicariato OR extorsión OR \"crimen organizado\" OR VRAEM OR \"Tren de Aragua\") -is:retweet lang:es"
+  - "(Perú OR Peru) (FFAA OR \"Comando Conjunto\" OR \"Fuerzas Armadas\" OR \"estado de emergencia\" OR Huancavelica) -is:retweet lang:es"
+  # Economía y mercados
+  - "(Perú OR Peru) (\"riesgo país\" OR BCR OR \"sol peruano\" OR \"tipo de cambio\" OR Velarde) -is:retweet lang:es"
+  # Tensiones diplomáticas y fronterizas
+  - "(Perú OR Peru) (Kast OR Sheinbaum OR \"frontera con Chile\" OR Tacna OR cancillería) -is:retweet lang:es"
+  # Cuentas oficiales que conviene seguir
+  - "from:ONPE_oficial OR from:JNE_Peru OR from:DefensoriaPeru OR from:MININTER OR from:MindefPeru OR from:PCMperu"
+twitter_max_per_query: 20
+# Solo capturar tweets de las últimas N horas (para hashtags trending recientes)
+twitter_ventana_horas: 72
 
 # Datasets internacionales
 internacional:
