@@ -5,6 +5,7 @@ from .reporte_24h import generar_reporte_24h_html, generar_reporte_24h_docx
 from .alertas_report import generar_alertas_html, generar_alertas_docx
 from .pdf_reports import generar_reporte_diario_pdf, generar_reporte_semanal_pdf
 from .ejecutivo_diario import generar_ejecutivo_docx, generar_ejecutivo_pdf
+from .analisis_caso import generar_reporte_caso_pdf
 
 __all__ = [
     "generar_dashboard_html", "generar_reporte_docx",
@@ -12,4 +13,5 @@ __all__ = [
     "generar_alertas_html", "generar_alertas_docx",
     "generar_reporte_diario_pdf", "generar_reporte_semanal_pdf",
     "generar_ejecutivo_docx", "generar_ejecutivo_pdf",
+    "generar_reporte_caso_pdf",
 ]

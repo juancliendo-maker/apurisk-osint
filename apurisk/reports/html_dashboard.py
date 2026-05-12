@@ -1214,6 +1214,7 @@ def generar_dashboard_html(
   <div class="tab" data-tab="entidades">Entidades</div>
   <div class="tab" data-tab="tendencias">📈 Tendencias 7d <span class="count">{persistentes_count}</span></div>
   <div class="tab" data-tab="descargas">📥 Descargas <span class="count">{total_descargas}</span></div>
+  <div class="tab" data-tab="analisis">🔍 Análisis de Caso</div>
   <div class="tab" data-tab="monitoreo">⟳ Monitoreo</div>
 </nav>
 
@@ -1394,6 +1395,65 @@ def generar_dashboard_html(
         <p><strong>Distribución web:</strong> sirve la carpeta <code>output/</code> con cualquier servidor estático
         (<code>python -m http.server 8080 --directory output</code>) y comparte el enlace al dashboard.
         Los stakeholders verán el dashboard live y pueden descargar cualquier reporte desde esta misma pestaña.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB: ANÁLISIS DE CASO -->
+  <section class="tab-panel" id="tab-analisis">
+    <div class="grid grid-12">
+      <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2));">
+        <h3>🔍 Análisis OSINT de Caso bajo demanda <span class="badge">Plataforma analítica</span></h3>
+        <div style="font-size:14px; line-height:1.7; color: var(--txt-1);">
+          <p>El módulo de <strong>Análisis de Caso</strong> permite al analista solicitar un estudio
+          estructurado de un evento o caso específico de riesgo político para Perú.</p>
+          <p>El sistema:</p>
+          <ol style="margin-left: 20px; margin-top: 8px;">
+            <li>Comprende el caso descrito por el analista</li>
+            <li>Identifica actores principales, secundarios, instituciones, regiones y sectores</li>
+            <li>Cruza con la base SQLite interna (snapshots, alertas, artículos archivados)</li>
+            <li>Analiza las URLs proporcionadas</li>
+            <li>Busca cobertura en las ~54 fuentes monitoreadas</li>
+            <li>Evalúa el caso en 6 dimensiones: institucional, social, electoral, económico, mediático, seguridad</li>
+            <li>Clasifica nivel de riesgo (BAJO/MODERADO/ALTO/CRÍTICO) y tendencia</li>
+            <li>Proyecta evolución mediática (24h, 48h, 72h, semana)</li>
+            <li>Construye tres escenarios prospectivos (Desescalada / Continuidad / Escalada)</li>
+            <li>Identifica alertas tempranas a monitorear</li>
+            <li>Evalúa confiabilidad de fuentes</li>
+            <li>Genera un <strong>reporte PDF estructurado en 14 secciones</strong></li>
+          </ol>
+        </div>
+        <a href="/analisis" target="_blank" style="display:inline-block; margin-top:18px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); color: var(--bg-0); padding: 14px 28px; border-radius: 8px; font-weight: 700; font-size: 14px; text-decoration: none; letter-spacing: .5px; text-transform: uppercase;">
+          📊 Abrir formulario de solicitud →
+        </a>
+      </div>
+
+      <div class="card span-12">
+        <h3>📚 Cómo usar el módulo</h3>
+        <div style="font-size:13px; line-height:1.6; color: var(--txt-1);">
+          <p><strong>1. Describe el caso</strong> — qué está ocurriendo, dónde y desde cuándo.</p>
+          <p><strong>2. Aporta tu hipótesis (opcional)</strong> — qué intuición tienes sobre el caso. El sistema la trata como hipótesis a contrastar, no como verdad confirmada.</p>
+          <p><strong>3. Proporciona URLs de referencia</strong> — enlaces específicos a notas que quieres que se analicen prioritariamente (una por línea).</p>
+          <p><strong>4. Define periodo y profundidad</strong> — qué ventana temporal cubrir y qué nivel de detalle quieres.</p>
+          <p><strong>5. Indica regiones/actores/sectores de interés</strong> — para refinar la búsqueda.</p>
+          <p><strong>6. Click "Generar reporte"</strong> — el sistema procesa y descarga un PDF estructurado con conclusión analítica y recomendación específica para el analista.</p>
+        </div>
+      </div>
+
+      <div class="card span-12" style="border-left: 3px solid var(--accent);">
+        <h3>🔐 Reglas de calidad del análisis</h3>
+        <div style="font-size:12.5px; line-height:1.6; color: var(--txt-2);">
+          <p>El reporte aplica las siguientes reglas:</p>
+          <ul style="margin-left: 18px; margin-top: 6px;">
+            <li>No inventar información; las afirmaciones provienen de fuentes verificables.</li>
+            <li>Distinguir hechos confirmados de hipótesis o rumores.</li>
+            <li>Cruzar al menos tres tipos de fuente: oficial, mediática y redes sociales.</li>
+            <li>Si una fuente no es confiable, se indica explícitamente.</li>
+            <li>Información proveniente de redes sociales sin verificación → se etiqueta como "no confirmada".</li>
+            <li>Lenguaje analítico, sobrio y profesional. Sin sesgo partidario.</li>
+            <li>Foco exclusivo en riesgo político para el Perú.</li>
+          </ul>
+        </div>
       </div>
     </div>
   </section>
