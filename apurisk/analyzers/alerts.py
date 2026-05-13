@@ -202,20 +202,42 @@ def detectar_alertas(articulos: list, conflictos: list, ventana_horas: int = 72)
 
     ventana_horas controla la antigüedad máxima permitida. Por defecto 72h
     para capturar todo el ciclo informativo reciente.
+
+    BLINDAJES contra falsos positivos:
+      1. Filtro temporal estricto: items con hours_ago > ventana_horas se descartan
+      2. Items marcados is_demo=True NO disparan alertas CRÍTICAS automáticamente
+         (solo MEDIA o ALTA si la regla así lo dispone). Esto evita que tweets
+         demo del sample_data permanezcan como críticos permanentemente.
+      3. Verificación de timestamp válido (no None, no infinito)
     """
     out: list[dict] = []
     todos = list(articulos) + list(conflictos)
     for a in todos:
         hours = a.hours_ago()
-        if hours == float("inf") or hours > ventana_horas:
+        if hours == float("inf") or hours > ventana_horas or hours < 0:
             continue
+        # Verificar si es item demo (no debe disparar alertas críticas eternas)
+        is_demo = False
+        try:
+            raw = getattr(a, "raw", {}) or {}
+            is_demo = bool(raw.get("is_demo", False))
+        except Exception:
+            is_demo = False
+
         text = _texto(a)
         for r in REGLAS:
             if any(p in text for p in r["patrones"]):
-                # bonificación de severidad si la criticidad del item es alta
                 nivel = r["nivel"]
-                if a.criticidad == "alta" and nivel == "ALTA":
-                    nivel = "CRÍTICA"
+                # Items demo: rebajar nivel CRÍTICA → ALTA, ALTA → MEDIA
+                if is_demo:
+                    if nivel == "CRÍTICA":
+                        nivel = "ALTA"
+                    elif nivel == "ALTA":
+                        nivel = "MEDIA"
+                else:
+                    # bonificación de severidad si la criticidad del item REAL es alta
+                    if a.criticidad == "alta" and nivel == "ALTA":
+                        nivel = "CRÍTICA"
                 out.append({
                     "alert_id": f"{r['id']}_{abs(hash(a.title)) % 10000}",
                     "regla": r["id"],
@@ -230,6 +252,7 @@ def detectar_alertas(articulos: list, conflictos: list, ventana_horas: int = 72)
                     "timestamp": a.published,
                     "accion": r["accion"],
                     "ventana_24h": hours <= 24,
+                    "is_demo": is_demo,
                 })
                 break  # una sola regla por ítem, la primera que matchee
     # ordenar: críticas primero, luego por antigüedad ascendente

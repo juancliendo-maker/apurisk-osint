@@ -128,27 +128,34 @@ class TwitterCollector(BaseCollector):
         return "baja"
 
     def _demo_tweets(self) -> list[Article]:
-        """Genera tweets demo. Distribuye los timestamps en las últimas 24h
-        relativos al momento actual (hora Lima/PET) para que siempre haya
-        contenido fresco en la pestaña Twitter del dashboard, incluso si el
-        Bearer Token no es válido o la API rechaza la búsqueda.
+        """Genera tweets demo usando las fechas REALES del sample_data.
+
+        IMPORTANTE: NO redistribuimos timestamps artificialmente. Esto causaba
+        que tweets viejos pasaran el filtro de 72h del motor de alertas y
+        dispararan alertas CRÍTICAS persistentes — un bug grave que distorsionaba
+        el monitoreo.
+
+        Política actual:
+          - created_at: se respeta tal cual está en sample_data
+          - criticidad: forzada a "baja" para tweets demo (los reales vía API
+            sí pueden ser críticos). Así el motor de alertas no eleva una regla
+            ALTA a CRÍTICA solo porque el item demo dijo "alta".
+          - is_demo: marcado True para diferenciación en UI
+
+        Los tweets viejos del sample (>72h) naturalmente caerán fuera del filtro
+        de alertas y solo aparecerán en la pestaña Twitter como referencia.
         """
         from ..data.sample_data import TWEETS_DEMO
-        from datetime import datetime, timedelta, timezone
-        PET = timezone(timedelta(hours=-5))
-        now = datetime.now(PET)
 
         out = []
-        n = max(1, len(TWEETS_DEMO))
-        for i, t in enumerate(TWEETS_DEMO):
+        for t in TWEETS_DEMO:
             handle = t["handle"]
             # En modo demo, URLs apuntan al PERFIL del autor (verificable en x.com).
             # En modo live con Bearer Token de plan Basic+, los URLs incluyen status/ID reales.
             tweet_url = f"https://x.com/{handle}"
             text = t["text"]
-            # Distribuir tweets uniformemente entre 0.5h y 23h atrás
-            offset_h = 0.5 + (i / max(1, n - 1)) * 22.5
-            ts = (now - timedelta(hours=offset_h)).isoformat(timespec="seconds")
+            # FECHA REAL del sample_data — no redistribuimos
+            ts = t.get("created_at", "")
             out.append(Article(
                 source_id=self.source_id,
                 source_name=f"X · @{handle}",
@@ -157,7 +164,7 @@ class TwitterCollector(BaseCollector):
                 summary=text,
                 url=tweet_url,
                 published=ts,
-                criticidad=t.get("criticidad", "media"),
+                criticidad="baja",  # FORZADO: tweets demo no pueden disparar alertas críticas
                 raw={
                     "tweet_id": t.get("id", ""),
                     "handle": handle,
@@ -166,6 +173,8 @@ class TwitterCollector(BaseCollector):
                     "metrics": t.get("metrics", {}),
                     "hashtags": t.get("hashtags", []),
                     "mentions": t.get("mentions", []),
+                    "is_demo": True,
+                    "criticidad_original": t.get("criticidad", "media"),
                 },
             ))
         return out

@@ -283,13 +283,16 @@ PROYECTOS_LEY_DEMO = [
 
 
 # -------------------- TWITTER / X --------------------
+# Tweets demo refrescados con datos REALES del 9-10 mayo 2026.
+# IMPORTANTE: el collector NO redistribuye estas fechas. Usa las reales.
+# Items >72h naturalmente caen del filtro del motor de alertas.
 TWEETS_DEMO = [
     {
         "id": "demo-1",
         "handle": "infobae_peru",
         "name": "Infobae Perú",
         "verified": True,
-        "text": "🚨 ÚLTIMO MINUTO: Congreso presenta moción de interpelación contra el ministro de Defensa Amadeo Flores por masacre en Colcabamba. Más de 20 firmas reunidas. #Tayacaja #Huancavelica",
+        "text": "🗳️ ONPE al 99.663%: resultados oficiales de las Elecciones 2026 en la recta final. Sánchez y López Aliaga en disputa cerrada por el segundo lugar.",
         "created_at": "2026-04-30T15:30:00-05:00",
         "metrics": {"retweet_count": 8420, "like_count": 18620, "reply_count": 3240, "quote_count": 1820},
         "hashtags": ["Tayacaja", "Huancavelica", "Interpelacion"],
