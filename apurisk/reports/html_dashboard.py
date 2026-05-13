@@ -930,9 +930,20 @@ def generar_dashboard_html(
     alertas_24 = [a for a in alertas_sorted if a.get("hours_ago", 999) <= 24]
     alertas_criticas = [a for a in alertas_sorted if a["nivel"] == "CRÍTICA"]
 
-    # Construir markers para el mapa: alertas con coords + conflictos con coords
+    # Construir markers para el mapa: SOLO alertas y conflictos REALMENTE recientes.
+    # Ventana temporal estricta: 48 horas. Esto evita que markers viejos
+    # (ej. caso Huancavelica del 30 abril) sigan apareciendo en tiempo real.
+    # También excluimos items demo para que no contaminen el mapa.
+    MAPA_VENTANA_HORAS = 48
     map_markers = []
     for a in alertas:
+        # Filtro temporal estricto
+        h_ago = a.get("hours_ago", 999)
+        if h_ago is None or h_ago > MAPA_VENTANA_HORAS or h_ago < 0:
+            continue
+        # Excluir items demo
+        if a.get("is_demo", False):
+            continue
         coords = None
         if a.get("region"):
             coords = buscar_coords(a["region"])
@@ -945,9 +956,25 @@ def generar_dashboard_html(
                 "titulo": a["titulo"], "resumen": a["resumen"],
                 "url": a.get("url", ""), "fuente": a["fuente"],
                 "categoria": a["categoria"], "region": a.get("region", ""),
-                "hours_ago": a["hours_ago"],
+                "hours_ago": h_ago,
+                "fecha": _fmt_datetime(a.get("timestamp", "")),
+                "fecha_iso": a.get("timestamp", ""),
             })
     for c in conflictos:
+        # Filtro temporal estricto para conflictos
+        try:
+            ch = c.hours_ago()
+            if ch == float("inf") or ch > MAPA_VENTANA_HORAS or ch < 0:
+                continue
+        except Exception:
+            continue
+        # Excluir items demo si la marca está presente
+        try:
+            raw_marker = getattr(c, "raw", {}) or {}
+            if raw_marker.get("is_demo", False):
+                continue
+        except Exception:
+            pass
         raw = c.raw or {}
         region = raw.get("region") or c.region
         coords = buscar_coords(region or "") if region else None
@@ -963,22 +990,10 @@ def generar_dashboard_html(
                 "url": c.url, "fuente": c.source_name,
                 "categoria": raw.get("tipo", "conflicto social"),
                 "region": region or "",
-                "hours_ago": round(c.hours_ago(), 1) if c.hours_ago() != float("inf") else None,
+                "hours_ago": round(ch, 1),
                 "fecha": _fmt_datetime(c.published),
                 "fecha_iso": c.published or "",
             })
-
-    # añadir fecha legible a los markers de alertas
-    for m in map_markers:
-        if "fecha" not in m:
-            m["fecha"] = ""
-            m["fecha_iso"] = ""
-    for a in alertas:
-        # buscar el marker correspondiente y añadirle fecha si falta
-        for m in map_markers:
-            if m["tipo"] == "alerta" and m["titulo"] == a["titulo"] and not m.get("fecha"):
-                m["fecha"] = _fmt_datetime(a.get("timestamp", ""))
-                m["fecha_iso"] = a.get("timestamp", "")
 
     # Datos para charts
     matriz_data = [
@@ -1256,13 +1271,18 @@ def generar_dashboard_html(
   <section class="tab-panel" id="tab-geo">
     <div class="grid grid-12">
       <div class="card span-12">
-        <h3>Geolocalización de alertas y conflictos <span class="badge">{len(map_markers)} puntos</span></h3>
+        <h3>Geolocalización de alertas y conflictos · ÚLTIMAS 48 HORAS <span class="badge" style="background:{'var(--critico)' if len(map_markers) == 0 else 'var(--accent)'};">{len(map_markers)} {'punto' if len(map_markers) == 1 else 'puntos'} activos</span></h3>
+        <div style="font-size: 12px; color: var(--txt-2); margin-bottom: 10px;">
+          🕒 Filtro temporal estricto: solo eventos con timestamp dentro de las últimas <b>48 horas</b>.
+          Items demo y eventos viejos NO aparecen aquí. Se renueva automáticamente cada 30 min con el scheduler.
+        </div>
+        {('<div style="background: var(--bg-2); border-left: 3px solid var(--accent); padding: 18px; margin-bottom: 12px; border-radius: 6px;"><strong style="color: var(--accent);">ℹ Sin eventos georreferenciados en las últimas 48 horas.</strong><br><span style="color: var(--txt-2); font-size: 13px;">Cuando ocurra un evento real con ubicación identificable (Apurímac, Tacna, Huancavelica, etc.) en una fuente monitoreada, aparecerá aquí automáticamente en el siguiente ciclo del scheduler.</span></div>' if len(map_markers) == 0 else '')}
         <div id="peru-map"></div>
-        <div style="display:flex; gap:18px; margin-top:14px; font-size:12px; color: var(--txt-2);">
+        <div style="display:flex; gap:18px; margin-top:14px; font-size:12px; color: var(--txt-2); flex-wrap: wrap;">
           <span><span style="display:inline-block; width:12px; height:12px; background:#ef4444; border-radius:50%; margin-right:6px;"></span>Crítica</span>
           <span><span style="display:inline-block; width:12px; height:12px; background:#f97316; border-radius:50%; margin-right:6px;"></span>Alta</span>
           <span><span style="display:inline-block; width:12px; height:12px; background:#f59e0b; border-radius:50%; margin-right:6px;"></span>Media</span>
-          <span style="margin-left: auto;">Mapa: OpenStreetMap · Capas: Leaflet</span>
+          <span style="margin-left: auto;">Mapa: OpenStreetMap · Capas: Leaflet · Ventana: 48h</span>
         </div>
       </div>
     </div>
