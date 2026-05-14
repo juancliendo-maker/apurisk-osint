@@ -182,24 +182,50 @@ medios_rss:
     nombre: "YouTube - Punto Final (Latina)"
     url: "https://www.youtube.com/feeds/videos.xml?user=latinatv"
     categoria: redes
-  # Medios adicionales solicitados
+  # === FUENTES PRIORITARIAS (definidas como activas importantes por analista) ===
   - id: willax_politica
-    nombre: "Willax - Política"
+    nombre: "★ Willax - Política"
     url: "https://willax.pe/politica/feed/"
     categoria: medios
-    url_referencia: "https://willax.pe/politica"
+    url_referencia: "https://willax.pe"
+    prioritaria: true
+  - id: willax_general
+    nombre: "★ Willax - General (todo el sitio)"
+    url: "https://willax.pe/feed/"
+    categoria: medios
+    url_referencia: "https://willax.pe"
+    prioritaria: true
   - id: expreso_politica
-    nombre: "Diario Expreso - Política"
+    nombre: "★ Diario Expreso - Política"
     url: "https://www.expreso.com.pe/feed/"
     categoria: medios
+    url_referencia: "https://www.expreso.com.pe"
+    prioritaria: true
   - id: reuters_peru
-    nombre: "Reuters - Perú"
+    nombre: "★ Reuters - Perú"
     url: "https://www.reuters.com/arc/outboundfeeds/v3/category/world/peru/?outputType=xml"
     categoria: internacional
+    url_referencia: "https://www.reuters.com/world/peru/"
+    prioritaria: true
   - id: ap_peru
-    nombre: "AP - Perú"
+    nombre: "★ AP - Perú"
     url: "https://apnews.com/hub/peru.rss"
     categoria: internacional
+    url_referencia: "https://apnews.com/hub/peru"
+    prioritaria: true
+  # Deutsche Welle Español - cobertura internacional con foco en América Latina/Perú
+  - id: dw_espanol
+    nombre: "★ DW - Español (Latinoamérica)"
+    url: "https://rss.dw.com/rdf/rss-es-all"
+    categoria: internacional
+    url_referencia: "https://www.dw.com/es/perú/t-17409849"
+    prioritaria: true
+  - id: dw_espanol_atom
+    nombre: "★ DW - Español (Atom backup)"
+    url: "https://rss.dw.com/atom/rss-es-all"
+    categoria: internacional
+    url_referencia: "https://www.dw.com/es/"
+    prioritaria: true
   # Encuestadoras (datos de opinión pública)
   - id: iep_encuestas
     nombre: "IEP - Instituto de Estudios Peruanos"
