@@ -323,6 +323,14 @@ analisis:
   top_n_temas: 10
   umbral_riesgo_alto: 70       # 0-100
 
+# Clasificadores REAL-TIME para pestañas Legislativo y Conflictos.
+# El sistema procesa los artículos RSS de medios ya recolectados y los
+# clasifica como actividad legislativa o conflicto social en tiempo real.
+congreso_ventana_dias: 7         # solo items legislativos de últimos N días
+congreso_max_items: 30
+conflictos_ventana_dias: 7       # solo conflictos sociales de últimos N días
+conflictos_max_items: 40
+
 # Indicadores de riesgo (categorías y pesos) — 12 categorías
 indicadores_riesgo:
   estabilidad_gobierno: 0.16

@@ -130,17 +130,38 @@ def recolectar(config: dict, demo: bool = True) -> dict:
         print(f"  · {c.source_name}: {len(items)} ítems")
         medios_articulos.extend(items)
 
-    dc = DefensoriaCollector(config, demo=demo)
-    conflictos = dc.collect()
-    print(f"  · {dc.source_name}: {len(conflictos)} conflictos")
-
+    # GDELT primero porque también aporta material para clasificación
     gd = GDELTCollector(config, demo=demo)
     gdelt = gd.collect()
     print(f"  · {gd.source_name}: {len(gdelt)} eventos")
 
+    # Conflictos sociales — clasificación REAL-TIME desde RSS de medios + GDELT.
+    # Si no hay material clasificable, cae a demo como último recurso.
+    dc = DefensoriaCollector(config, demo=demo)
+    if not demo:
+        conflictos = dc.classify_from_media(medios_articulos + gdelt)
+        print(f"  · {dc.source_name} (clasificación RSS real-time): {len(conflictos)} conflictos")
+        if not conflictos:
+            print(f"  [info] Sin conflictos detectados en RSS reciente → fallback demo")
+            conflictos = dc._demo_articles()
+    else:
+        conflictos = dc.collect()
+        print(f"  · {dc.source_name}: {len(conflictos)} conflictos")
+
+    # Actividad legislativa — clasificación REAL-TIME desde RSS de medios.
+    # Filtra por keywords legislativos (proyecto de ley, moción, interpelación,
+    # comisión, dictamen, etc.) y mantiene solo items dentro de la ventana
+    # temporal configurada (default 7 días).
     cc = CongresoCollector(config, demo=demo)
-    proyectos = cc.collect()
-    print(f"  · {cc.source_name}: {len(proyectos)} proyectos")
+    if not demo:
+        proyectos = cc.classify_from_media(medios_articulos)
+        print(f"  · {cc.source_name} (clasificación RSS real-time): {len(proyectos)} items")
+        if not proyectos:
+            print(f"  [info] Sin actividad legislativa en RSS reciente → fallback demo")
+            proyectos = cc._demo_articles()
+    else:
+        proyectos = cc.collect()
+        print(f"  · {cc.source_name}: {len(proyectos)} proyectos")
 
     tw = TwitterCollector(config, demo=demo)
     tweets = tw.collect()

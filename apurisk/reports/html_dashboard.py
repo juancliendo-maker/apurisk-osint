@@ -1037,8 +1037,19 @@ def generar_dashboard_html(
     tweets_para_mostrar = [t for t in tweets_sorted if t.hours_ago() <= 24]
     tweets_html = "".join(_tweet_html(t) for t in tweets_para_mostrar) if tweets_para_mostrar else "<em style='color:var(--txt-2)'>Sin tweets en las últimas 24 horas. Configura TWITTER_BEARER_TOKEN para activar API live.</em>"
 
-    # Conflict cards 24h
-    conflictos_24h = [c for c in conflictos_sorted if c.hours_ago() <= 24]
+    # Conflict cards — ventana 7 DÍAS (los conflictos sociales se desarrollan
+    # típicamente en varios días, no en horas). Mantenemos la filtración a 72h
+    # de alertas y 48h del mapa, pero la pestaña de Conflictos muestra el
+    # cuadro completo de la última semana para que el analista vea el contexto.
+    CONF_VENTANA_HORAS = 24 * 7
+    conflictos_recientes = [c for c in conflictos_sorted if c.hours_ago() <= CONF_VENTANA_HORAS]
+    # Excluir items demo si el pipeline real-time ya devolvió algo
+    conflictos_reales = [c for c in conflictos_recientes if not (c.raw or {}).get("is_demo", False)]
+    if conflictos_reales:
+        conflictos_24h = conflictos_reales
+    else:
+        # Si no hay reales, mostramos lo que haya (demo) para no dejar pestaña vacía
+        conflictos_24h = conflictos_recientes
 
     # Tweets virales
     virales = twitter_stats.get("virales", [])
@@ -1078,13 +1089,20 @@ def generar_dashboard_html(
     if not hashtags_html:
         hashtags_html = "<em style='color:var(--txt-2)'>—</em>"
 
-    # Conflict cards 24h — sólo de las últimas 24h
+    # Conflict cards — ventana de últimos 7 días, ordenados por más recientes primero
     conflict_cards = "".join(_conflict_card(c) for c in conflictos_24h)
     if not conflict_cards:
-        conflict_cards = "<em style='color:var(--txt-2)'>Sin conflictos activos reportados en las últimas 24 horas.</em>"
+        conflict_cards = "<em style='color:var(--txt-2)'>Sin conflictos sociales detectados en la última semana en fuentes RSS monitoreadas.</em>"
 
-    # PL cards — ordenados por fecha desc
-    pl_cards = "".join(_pl_card(p) for p in proyectos_sorted)
+    # PL cards — solo legislativo REAL-TIME (excluir demo si hay reales)
+    proyectos_reales = [p for p in proyectos_sorted if not (p.raw or {}).get("is_demo", False)]
+    if proyectos_reales:
+        proyectos_para_mostrar = proyectos_reales
+    else:
+        proyectos_para_mostrar = proyectos_sorted
+    pl_cards = "".join(_pl_card(p) for p in proyectos_para_mostrar)
+    if not pl_cards:
+        pl_cards = "<em style='color:var(--txt-2)'>Sin actividad legislativa detectada en la última semana en fuentes RSS monitoreadas.</em>"
 
     # Entity cards (no más tabla)
     def _entity_block(items, label, max_n=10):
@@ -1358,19 +1376,33 @@ def generar_dashboard_html(
     </div>
   </section>
 
-  <!-- TAB: CONFLICTOS (cards) -->
+  <!-- TAB: CONFLICTOS (cards) — clasificación REAL-TIME desde RSS de medios -->
   <section class="tab-panel" id="tab-conflictos">
     <div class="card">
-      <h3>Conflictos sociales en seguimiento <span class="badge">{len(conflictos)}</span></h3>
-      {conflict_cards or '<em style="color:var(--txt-2)">Sin conflictos activos.</em>'}
+      <h3>Conflictos sociales · ÚLTIMOS 7 DÍAS
+        <span class="badge" style="background:{'var(--critico)' if len(conflictos_24h) == 0 else 'var(--accent)'};">
+          {len(conflictos_24h)} {'evento' if len(conflictos_24h) == 1 else 'eventos'}
+        </span>
+      </h3>
+      <div style="font-size:12px; color:var(--txt-2); margin: 6px 0 14px;">
+        🔄 Clasificación automática en tiempo real desde RSS de medios. Detecta paros, huelgas, marchas, bloqueos, protestas y movilizaciones por departamento.
+      </div>
+      {conflict_cards}
     </div>
   </section>
 
-  <!-- TAB: LEGISLATIVO -->
+  <!-- TAB: LEGISLATIVO — clasificación REAL-TIME desde RSS de medios -->
   <section class="tab-panel" id="tab-legislativo">
     <div class="card">
-      <h3>Proyectos de ley en seguimiento <span class="badge">{len(proyectos)}</span></h3>
-      {pl_cards or '<em style="color:var(--txt-2)">Sin proyectos en seguimiento.</em>'}
+      <h3>Actividad legislativa · ÚLTIMOS 7 DÍAS
+        <span class="badge" style="background:{'var(--critico)' if len(proyectos_para_mostrar) == 0 else 'var(--accent)'};">
+          {len(proyectos_para_mostrar)} {'item' if len(proyectos_para_mostrar) == 1 else 'items'}
+        </span>
+      </h3>
+      <div style="font-size:12px; color:var(--txt-2); margin: 6px 0 14px;">
+        🔄 Clasificación automática en tiempo real desde RSS de medios. Detecta proyectos de ley, mociones, interpelaciones, censuras, dictámenes y reformas constitucionales.
+      </div>
+      {pl_cards}
     </div>
   </section>
 
