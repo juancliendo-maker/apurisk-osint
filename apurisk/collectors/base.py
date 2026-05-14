@@ -52,11 +52,31 @@ class BaseCollector:
             print(f"  [warn] {self.source_id}: requests no instalado (pip install requests)")
             return None
 
+        # User-Agent + headers de un navegador moderno real.
+        # Muchos sites (Willax, Expreso, ONPE) usan Cloudflare/WAF que bloquean
+        # bots de datacenter con UA "Mozilla/5.0 (compatible; ...)". Un UA de
+        # Chrome real + headers Sec-Fetch ayudan a pasar los filtros básicos.
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; APURISK/1.0; +osint-research)",
-            "Accept": "application/rss+xml, application/xml, text/xml, application/json, text/html;q=0.9, */*;q=0.7",
-            "Accept-Language": "es-PE,es;q=0.9,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/130.0.0.0 Safari/537.36"
+            ),
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "application/rss+xml,application/atom+xml,application/rdf+xml,"
+                "image/avif,image/webp,*/*;q=0.8"
+            ),
+            "Accept-Language": "es-PE,es;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "DNT": "1",
         }
         backoff = 1.5
         last_err = None

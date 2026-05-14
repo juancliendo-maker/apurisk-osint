@@ -183,46 +183,56 @@ medios_rss:
     url: "https://www.youtube.com/feeds/videos.xml?user=latinatv"
     categoria: redes
   # === FUENTES PRIORITARIAS (definidas como activas importantes por analista) ===
+  # Estrategia: usar Google News RSS como agregador estable. Los feeds directos
+  # (willax.pe, expreso.com.pe, reuters.com, apnews.com, dw.com) están protegidos
+  # por Cloudflare/WAF que bloquean IPs de datacenter de Render (HTTP 403/404).
+  # Google News RSS NO bloquea y entrega artículos recientes con timestamp ISO.
   - id: willax_politica
-    nombre: "★ Willax - Política"
+    nombre: "★ Willax (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:willax.pe&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://willax.pe"
+    prioritaria: true
+  - id: willax_directo
+    nombre: "★ Willax - Política (feed directo)"
     url: "https://willax.pe/politica/feed/"
     categoria: medios
-    url_referencia: "https://willax.pe"
-    prioritaria: true
-  - id: willax_general
-    nombre: "★ Willax - General (todo el sitio)"
-    url: "https://willax.pe/feed/"
-    categoria: medios
-    url_referencia: "https://willax.pe"
+    url_referencia: "https://willax.pe/politica"
     prioritaria: true
   - id: expreso_politica
-    nombre: "★ Diario Expreso - Política"
+    nombre: "★ Diario Expreso (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:expreso.com.pe&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://www.expreso.com.pe"
+    prioritaria: true
+  - id: expreso_directo
+    nombre: "★ Diario Expreso - Política (feed directo)"
     url: "https://www.expreso.com.pe/feed/"
     categoria: medios
     url_referencia: "https://www.expreso.com.pe"
     prioritaria: true
   - id: reuters_peru
-    nombre: "★ Reuters - Perú"
-    url: "https://www.reuters.com/arc/outboundfeeds/v3/category/world/peru/?outputType=xml"
+    nombre: "★ Reuters - Perú (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:reuters.com+peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: internacional
     url_referencia: "https://www.reuters.com/world/peru/"
     prioritaria: true
   - id: ap_peru
-    nombre: "★ AP - Perú"
-    url: "https://apnews.com/hub/peru.rss"
+    nombre: "★ AP - Perú (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:apnews.com+peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: internacional
     url_referencia: "https://apnews.com/hub/peru"
     prioritaria: true
-  # Deutsche Welle Español - cobertura internacional con foco en América Latina/Perú
+  # Deutsche Welle Español — cobertura internacional con foco en América Latina/Perú
   - id: dw_espanol
-    nombre: "★ DW - Español (Latinoamérica)"
-    url: "https://rss.dw.com/rdf/rss-es-all"
+    nombre: "★ DW - Español Perú (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:dw.com+peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: internacional
     url_referencia: "https://www.dw.com/es/perú/t-17409849"
     prioritaria: true
-  - id: dw_espanol_atom
-    nombre: "★ DW - Español (Atom backup)"
-    url: "https://rss.dw.com/atom/rss-es-all"
+  - id: dw_espanol_directo
+    nombre: "★ DW - Español (RSS directo)"
+    url: "https://rss.dw.com/rdf/rss-es-all"
     categoria: internacional
     url_referencia: "https://www.dw.com/es/"
     prioritaria: true
