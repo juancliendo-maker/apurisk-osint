@@ -5,6 +5,8 @@ from .defensoria import DefensoriaCollector
 from .gdelt import GDELTCollector
 from .congreso import CongresoCollector
 from .twitter import TwitterCollector
+from .acled import ACLEDCollector
+from .crimen_organizado import CrimenOrganizadoCollector
 
 __all__ = [
     "BaseCollector",
@@ -14,4 +16,6 @@ __all__ = [
     "GDELTCollector",
     "CongresoCollector",
     "TwitterCollector",
+    "ACLEDCollector",
+    "CrimenOrganizadoCollector",
 ]

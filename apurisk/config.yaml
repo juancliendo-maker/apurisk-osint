@@ -352,6 +352,22 @@ internacional:
     url: "https://api.acleddata.com/acled/read?country=Peru"
     requiere_api_key: true
 
+# ACLED — eventos georreferenciados de conflicto político
+# Requiere: ACLED_API_KEY y ACLED_EMAIL como variables de entorno en Render
+# Registro: https://developer.acleddata.com/ (gratis para uso académico/no comercial)
+acled_country: "Peru"
+acled_ventana_dias: 14
+acled_limit: 500
+# Filtro de event_types — vacío = todos. Otros: ["Protests", "Riots", "Battles",
+#   "Violence against civilians", "Explosions/Remote violence", "Strategic developments"]
+# acled_event_types: ["Protests", "Riots", "Violence against civilians", "Battles"]
+
+# Clasificador temático: crimen organizado, narcotráfico, minería ilegal,
+# tala ilegal, contrabando, migración irregular, extorsión/sicariato.
+# Procesa los RSS reales y los clasifica por tipología en tiempo real.
+crimen_ventana_dias: 14
+crimen_max_items: 100
+
 # Análisis - parámetros
 analisis:
   ventana_dias: 7              # ventana de análisis

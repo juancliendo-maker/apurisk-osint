@@ -18,7 +18,8 @@ try:
     from .storage import ApuriskArchive
     from .collectors import (
         RSSMediaCollector, DefensoriaCollector, GDELTCollector,
-        CongresoCollector, TwitterCollector,
+        CongresoCollector, TwitterCollector, ACLEDCollector,
+        CrimenOrganizadoCollector,
     )
     from .analyzers import (
         analizar_sentimiento, extraer_entidades, detectar_temas,
@@ -38,7 +39,8 @@ except ImportError:
     from apurisk.storage import ApuriskArchive
     from apurisk.collectors import (
         RSSMediaCollector, DefensoriaCollector, GDELTCollector,
-        CongresoCollector, TwitterCollector,
+        CongresoCollector, TwitterCollector, ACLEDCollector,
+        CrimenOrganizadoCollector,
     )
     from apurisk.analyzers import (
         analizar_sentimiento, extraer_entidades, detectar_temas,
@@ -167,7 +169,30 @@ def recolectar(config: dict, demo: bool = True) -> dict:
     tweets = tw.collect()
     print(f"  · {tw.source_name}: {len(tweets)} tweets")
 
-    todos = medios_articulos + conflictos + gdelt + tweets
+    # ACLED — eventos georreferenciados de violencia política y protestas.
+    # Si ACLED_API_KEY y ACLED_EMAIL están como env vars, jala datos reales.
+    # Si no, cae a demo georreferenciado (8 eventos con coords reales).
+    acled_col = ACLEDCollector(config, demo=demo)
+    acled_events = acled_col.collect()
+    print(f"  · {acled_col.source_name}: {len(acled_events)} eventos georreferenciados")
+
+    # Clasificación temática REAL-TIME: crimen organizado, narcotráfico,
+    # minería ilegal, tala ilegal, contrabando, migración irregular,
+    # extorsión/sicariato. Procesa los RSS reales y los etiqueta.
+    co_col = CrimenOrganizadoCollector(config, demo=demo)
+    if not demo:
+        crimen_items = co_col.classify_from_media(medios_articulos)
+        print(f"  · {co_col.source_name} (clasificación RSS real-time): {len(crimen_items)} items")
+        # Desglose por tipología
+        from collections import Counter
+        tipologias = Counter(it.raw.get("tipologia") for it in crimen_items)
+        for tip, n in tipologias.most_common():
+            print(f"      · {tip}: {n}")
+    else:
+        crimen_items = []
+
+    # Universo "todos": medios + conflictos + GDELT + tweets + ACLED + crimen
+    todos = medios_articulos + conflictos + gdelt + tweets + acled_events + crimen_items
     return {
         "todos": todos,
         "medios": medios_articulos,
@@ -175,6 +200,8 @@ def recolectar(config: dict, demo: bool = True) -> dict:
         "gdelt": gdelt,
         "proyectos": proyectos,
         "tweets": tweets,
+        "acled_events": acled_events,
+        "crimen_items": crimen_items,
     }
 
 
@@ -231,6 +258,8 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
     conf_24 = [c for c in data["conflictos"] if c.hours_ago() <= 24]
     alertas_24 = [a for a in an["alertas"] if a.get("ventana_24h")]
     tweets = data.get("tweets", [])
+    acled_events = data.get("acled_events", [])
+    crimen_items = data.get("crimen_items", [])
 
     # Snapshot JSON
     snapshot = {
@@ -241,6 +270,8 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
         "n_conflictos": len(data["conflictos"]),
         "n_proyectos": len(data["proyectos"]),
         "n_tweets": len(tweets),
+        "n_acled_events": len(acled_events),
+        "n_crimen_items": len(crimen_items),
         "entidades": an["entidades"],
         "temas": an["temas"],
         "riesgo": an["riesgo"],
@@ -251,6 +282,8 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
         "conflictos": [c.to_dict() for c in data["conflictos"]],
         "proyectos": [p.to_dict() for p in data["proyectos"]],
         "tweets": [t.to_dict() for t in tweets],
+        "acled_events": [e.to_dict() for e in acled_events],
+        "crimen_items": [c.to_dict() for c in crimen_items],
     }
     json_path = out_dir / f"apurisk_snapshot_{ts}.json"
     json_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -268,6 +301,8 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
         modo=modo, ventana=24,
         refresh_seconds=refresh_seconds,
         output_dir=str(out_dir),
+        acled_events=acled_events,
+        crimen_items=crimen_items,
     )
     paths["dashboard_html"] = str(dash_path)
     print(f"  · DASHBOARD: {dash_path.name}")

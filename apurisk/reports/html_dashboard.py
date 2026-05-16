@@ -911,9 +911,13 @@ def generar_dashboard_html(
     ventana: int = 24,
     refresh_seconds: int = 1800,
     output_dir: str = None,
+    acled_events: list = None,
+    crimen_items: list = None,
 ):
     tweets = tweets or []
     twitter_stats = twitter_stats or {}
+    acled_events = acled_events or []
+    crimen_items = crimen_items or []
 
     # 24h slice — todos ordenados por fecha desc (más reciente primero)
     articulos_sorted = sorted(articulos, key=lambda a: a.hours_ago())
@@ -994,6 +998,55 @@ def generar_dashboard_html(
                 "fecha": _fmt_datetime(c.published),
                 "fecha_iso": c.published or "",
             })
+
+    # ACLED markers — coordenadas exactas reales (lat/lng del evento)
+    # ACLED entrega eventos verificados con coordenadas precisas, así que
+    # no usamos buscar_coords sino los valores directos del evento.
+    # Ventana temporal más amplia (14 días) porque ACLED reporta con lag.
+    ACLED_VENTANA_HORAS = 24 * 14
+    for ev in acled_events:
+        try:
+            eh = ev.hours_ago()
+            if eh == float("inf") or eh > ACLED_VENTANA_HORAS or eh < 0:
+                continue
+        except Exception:
+            continue
+        raw = ev.raw or {}
+        lat = raw.get("latitude")
+        lng = raw.get("longitude")
+        if not (lat and lng):
+            continue
+        # Nivel basado en criticidad + fatalities
+        fatal = raw.get("fatalities", 0) or 0
+        if fatal >= 5 or ev.criticidad == "alta":
+            nivel = "CRÍTICA"
+        elif ev.criticidad == "alta":
+            nivel = "ALTA"
+        elif ev.criticidad == "media":
+            nivel = "ALTA"
+        else:
+            nivel = "MEDIA"
+        evt_type = raw.get("event_type", "Evento ACLED")
+        categoria_label = raw.get("tipo_descripcion", evt_type)
+        is_demo_acled = raw.get("is_demo", False)
+        map_markers.append({
+            "lat": float(lat), "lng": float(lng),
+            "tipo": "acled",
+            "nivel": nivel,
+            "titulo": ev.title,
+            "resumen": ev.summary,
+            "url": ev.url,
+            "fuente": ev.source_name,
+            "categoria": categoria_label,
+            "region": ev.region or raw.get("admin1", ""),
+            "hours_ago": round(eh, 1),
+            "fecha": _fmt_datetime(ev.published),
+            "fecha_iso": ev.published or "",
+            "fatalities": fatal,
+            "actor1": raw.get("actor1", ""),
+            "actor2": raw.get("actor2", ""),
+            "is_demo": is_demo_acled,
+        })
 
     # Datos para charts
     matriz_data = [
@@ -1103,6 +1156,128 @@ def generar_dashboard_html(
     pl_cards = "".join(_pl_card(p) for p in proyectos_para_mostrar)
     if not pl_cards:
         pl_cards = "<em style='color:var(--txt-2)'>Sin actividad legislativa detectada en la última semana en fuentes RSS monitoreadas.</em>"
+
+    # CRIMEN ORGANIZADO cards — agrupados por tipología
+    crimen_sorted = sorted(crimen_items, key=lambda c: c.hours_ago()) if crimen_items else []
+    crimen_por_tipo = {}
+    for it in crimen_sorted:
+        tip = (it.raw or {}).get("tipologia", "otros")
+        crimen_por_tipo.setdefault(tip, []).append(it)
+
+    tipologias_labels = {
+        "narcotrafico": ("🚫 Narcotráfico", "var(--critico)"),
+        "mineria_ilegal": ("⛏️ Minería ilegal", "var(--alto)"),
+        "tala_ilegal": ("🪓 Tala ilegal", "var(--alto)"),
+        "contrabando": ("📦 Contrabando", "var(--medio)"),
+        "migracion_irregular": ("🌐 Migración irregular", "var(--medio)"),
+        "extorsion_sicariato": ("🔫 Extorsión / Sicariato", "var(--critico)"),
+    }
+
+    def _crimen_card(it):
+        raw = it.raw or {}
+        sev = raw.get("severidad", "media")
+        region = raw.get("region") or it.region or "—"
+        tip = raw.get("tipologia", "otros")
+        label = tipologias_labels.get(tip, (tip, "var(--accent)"))[0]
+        url_link = ""
+        if it.url:
+            url_link = (
+                f"<a href='{_esc(it.url)}' target='_blank' rel='noopener' title='{_esc(it.url)}'>"
+                f"🔗 {_esc(_short_url(it.url, 55))}</a>"
+            )
+        titulo_html = _esc(it.title)
+        if it.url:
+            titulo_html = f"<a href='{_esc(it.url)}' target='_blank' rel='noopener'>{titulo_html}</a>"
+        return f"""
+        <div class="conflict-card {sev}">
+          <div class="head">
+            <div class="titulo">{titulo_html}</div>
+            <span class="region-tag" style="background:{tipologias_labels.get(tip, (tip, 'var(--accent)'))[1]}33; color:{tipologias_labels.get(tip, (tip, 'var(--accent)'))[1]};">{label}</span>
+          </div>
+          <div class="desc">{_esc(it.summary)}</div>
+          <div class="meta">
+            <span title="{_esc(it.published or '')}">📍 {_esc(region)} · severidad <strong>{sev}</strong> · 🕒 {_fmt_datetime(it.published)} · {_fmt_hours(it.hours_ago())}</span>
+            {url_link}
+          </div>
+        </div>
+        """
+
+    crimen_html_blocks = ""
+    for tip in ("narcotrafico", "mineria_ilegal", "tala_ilegal", "contrabando", "migracion_irregular", "extorsion_sicariato"):
+        items = crimen_por_tipo.get(tip, [])
+        if not items:
+            continue
+        label, color = tipologias_labels.get(tip, (tip, "var(--accent)"))
+        cards = "".join(_crimen_card(it) for it in items[:10])
+        crimen_html_blocks += f"""
+        <div class="card span-12" style="border-left: 4px solid {color};">
+          <h3 style="color:{color};">{label} <span class="badge">{len(items)}</span></h3>
+          {cards}
+        </div>
+        """
+    if not crimen_html_blocks:
+        crimen_html_blocks = "<div class='card'><em style='color:var(--txt-2)'>Sin eventos de crimen organizado / migración detectados en las últimas 2 semanas en fuentes RSS monitoreadas.</em></div>"
+
+    # ACLED cards — eventos georreferenciados
+    acled_sorted = sorted(acled_events, key=lambda a: a.hours_ago()) if acled_events else []
+    def _acled_card(ev):
+        raw = ev.raw or {}
+        evt_type = raw.get("event_type", "Evento")
+        evt_desc = raw.get("tipo_descripcion", evt_type)
+        sub_event = raw.get("sub_event_type", "")
+        location = raw.get("location") or ev.region or "—"
+        actor1 = raw.get("actor1", "")
+        actor2 = raw.get("actor2", "")
+        fatal = raw.get("fatalities", 0) or 0
+        is_demo_ev = raw.get("is_demo", False)
+        sev = ev.criticidad
+
+        # Color por event_type
+        color_evt = {
+            "Protests": "var(--medio)",
+            "Riots": "var(--alto)",
+            "Violence against civilians": "var(--critico)",
+            "Battles": "var(--critico)",
+            "Explosions/Remote violence": "var(--critico)",
+            "Strategic developments": "var(--accent)",
+        }.get(evt_type, "var(--accent)")
+
+        actores_html = ""
+        if actor1:
+            actores_html = f"<div style='font-size:12px; color:var(--txt-2); margin-top:6px;'>👥 <strong>{_esc(actor1)}</strong>"
+            if actor2:
+                actores_html += f" ↔ {_esc(actor2)}"
+            actores_html += "</div>"
+
+        fatal_html = ""
+        if fatal > 0:
+            fatal_html = f"<span style='color:var(--critico); font-weight:600;'>☠️ {fatal} fallecidos</span> · "
+
+        url_link = ""
+        if ev.url and "acleddata.com" not in ev.url:
+            url_link = (
+                f"<a href='{_esc(ev.url)}' target='_blank' rel='noopener'>"
+                f"🔗 {_esc(_short_url(ev.url, 50))}</a>"
+            )
+        demo_tag = "<span style='background:var(--bg-3); color:var(--txt-2); padding:2px 8px; border-radius:4px; font-size:10px;'>DEMO</span>" if is_demo_ev else ""
+        return f"""
+        <div class="conflict-card {sev}" style="border-left: 4px solid {color_evt};">
+          <div class="head">
+            <div class="titulo">{_esc(ev.title)} {demo_tag}</div>
+            <span class="region-tag" style="background:{color_evt}33; color:{color_evt};">{_esc(evt_desc)}</span>
+          </div>
+          <div class="desc">{_esc(ev.summary[:300])}{'…' if len(ev.summary) > 300 else ''}</div>
+          {actores_html}
+          <div class="meta">
+            <span title="{_esc(ev.published or '')}">{fatal_html}📍 {_esc(location)} · 🕒 {_fmt_datetime(ev.published)} · {_fmt_hours(ev.hours_ago())}</span>
+            {url_link}
+          </div>
+        </div>
+        """
+
+    acled_cards = "".join(_acled_card(ev) for ev in acled_sorted[:30])
+    if not acled_cards:
+        acled_cards = "<em style='color:var(--txt-2)'>Sin eventos ACLED disponibles. Configura las variables ACLED_API_KEY y ACLED_EMAIL en Render para activar datos reales.</em>"
 
     # Entity cards (no más tabla)
     def _entity_block(items, label, max_n=10):
@@ -1244,6 +1419,8 @@ def generar_dashboard_html(
   <div class="tab" data-tab="twitter">Twitter / X <span class="count">{kpi_tweets}</span></div>
   <div class="tab" data-tab="conflictos">Conflictos</div>
   <div class="tab" data-tab="legislativo">Legislativo</div>
+  <div class="tab" data-tab="crimen">🛡️ Crimen Organizado <span class="count">{len(crimen_items)}</span></div>
+  <div class="tab" data-tab="acled">📍 ACLED Eventos <span class="count">{len(acled_events)}</span></div>
   <div class="tab" data-tab="entidades">Entidades</div>
   <div class="tab" data-tab="tendencias">📈 Tendencias 7d <span class="count">{persistentes_count}</span></div>
   <div class="tab" data-tab="descargas">📥 Descargas <span class="count">{total_descargas}</span></div>
@@ -1403,6 +1580,38 @@ def generar_dashboard_html(
         🔄 Clasificación automática en tiempo real desde RSS de medios. Detecta proyectos de ley, mociones, interpelaciones, censuras, dictámenes y reformas constitucionales.
       </div>
       {pl_cards}
+    </div>
+  </section>
+
+  <!-- TAB: CRIMEN ORGANIZADO Y MIGRACIÓN — clasificación temática REAL-TIME -->
+  <section class="tab-panel" id="tab-crimen">
+    <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
+      <h3 style="margin-bottom: 6px;">🛡️ Crimen Organizado, Tráficos Ilícitos y Migración Irregular <span class="badge">{len(crimen_items)} eventos</span></h3>
+      <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
+        Clasificación automática en tiempo real de artículos RSS por tipología:
+        narcotráfico, minería ilegal, tala ilegal, contrabando, migración irregular,
+        extorsión y sicariato. Ventana: últimos 14 días.
+      </div>
+    </div>
+    <div class="grid grid-12">
+      {crimen_html_blocks}
+    </div>
+  </section>
+
+  <!-- TAB: ACLED — eventos georreferenciados de violencia política y protestas -->
+  <section class="tab-panel" id="tab-acled">
+    <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
+      <h3 style="margin-bottom: 6px;">📍 ACLED · Eventos Georreferenciados <span class="badge">{len(acled_events)} eventos</span></h3>
+      <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
+        <strong>ACLED (Armed Conflict Location & Event Data)</strong> — referencia mundial para
+        eventos políticos georreferenciados: protestas, disturbios, batallas, violencia contra
+        civiles, explosiones, desarrollos estratégicos. Cada evento incluye coordenadas exactas,
+        actores y fuentes verificadas. Ventana: últimos 14 días.
+        <br><a href="https://acleddata.com/dashboard" target="_blank" rel="noopener" style="color:var(--accent);">🔗 Ver dashboard oficial ACLED</a>
+      </div>
+    </div>
+    <div class="card">
+      {acled_cards}
     </div>
   </section>
 
