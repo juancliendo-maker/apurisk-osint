@@ -190,12 +190,54 @@ a:hover { text-decoration: underline; }
 .nivel-MEDIO { color: var(--medio);}
 .nivel-BAJO { color: var(--bajo);}
 
-.tabs { display:flex; gap:0; padding: 0 28px; border-bottom: 1px solid var(--bg-3); background: var(--bg-0); position:sticky; top: 64px; z-index: 100;}
-.tab { padding: 12px 20px; cursor:pointer; color: var(--txt-2); font-weight:500; border-bottom: 2px solid transparent; transition: all .15s; font-size:13px; white-space: nowrap;}
-.tab:hover { color: var(--txt-0);}
+/* Tabs responsivas: flex-wrap evita scroll horizontal. Si las 14 tabs no
+   caben en una sola fila, se acomodan en 2 filas automáticamente. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 0;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--bg-3);
+  background: var(--bg-0);
+  position: sticky;
+  top: 64px;
+  z-index: 100;
+  row-gap: 0;
+}
+.tab {
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--txt-2);
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  transition: all .15s;
+  font-size: 12.5px;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.tab:hover { color: var(--txt-0); background: rgba(255,255,255,0.02);}
 .tab.active { color: var(--accent); border-bottom-color: var(--accent);}
-.tab .count { background: var(--bg-3); color: var(--txt-0); padding: 2px 8px; border-radius: 10px; font-size:11px; margin-left:8px;}
+.tab .count {
+  background: var(--bg-3);
+  color: var(--txt-0);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10.5px;
+  margin-left: 6px;
+  font-weight: 600;
+}
 .tab.active .count { background: var(--accent); color: var(--bg-0);}
+
+/* En pantallas pequeñas, reducir aún más padding lateral y tamaño */
+@media (max-width: 980px) {
+  .tabs { padding: 0 14px; }
+  .tab { padding: 9px 10px; font-size: 12px; }
+  .tab .count { padding: 1px 6px; font-size: 10px; margin-left: 5px; }
+}
+@media (max-width: 640px) {
+  .tabs { padding: 0 10px; }
+  .tab { padding: 8px 9px; font-size: 11.5px; }
+}
 
 .content { padding: 18px 28px 60px;}
 .tab-panel { display: none;}
