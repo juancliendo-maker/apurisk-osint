@@ -113,8 +113,13 @@ class ACLEDCollector(BaseCollector):
         if self.demo:
             return self._demo_articles()
         if not (self.api_key and self.email):
-            print("  [info] acled: ACLED_API_KEY/ACLED_EMAIL no configurados → fallback demo")
-            return self._demo_articles()
+            # IMPORTANTE: en modo live (production) sin credenciales NO devolvemos
+            # demo porque los datos demo son estáticos y contaminarían el dashboard
+            # con markers que no corresponden a la coyuntura real. Mejor pestaña
+            # vacía con mensaje informativo que datos sintéticos engañosos.
+            print("  [info] acled: ACLED_API_KEY/ACLED_EMAIL no configurados → "
+                  "pestaña ACLED y markers del mapa quedan vacíos (esperando aprobación de API key)")
+            return []
         return self._fetch_real()
 
     def _fetch_real(self) -> list[Article]:
@@ -122,7 +127,7 @@ class ACLEDCollector(BaseCollector):
             import requests
         except ImportError:
             print("  [warn] acled: requests no instalado")
-            return self._demo_articles()
+            return []
 
         url = "https://api.acleddata.com/acled/read"
         hoy = datetime.now(timezone.utc).date()
@@ -144,17 +149,20 @@ class ACLEDCollector(BaseCollector):
             else:
                 params["event_type"] = str(self.event_types)
 
+        # IMPORTANTE: en errores devolvemos [] en lugar de demo. Los datos demo
+        # son estáticos y contaminarían el dashboard. Mejor pestaña vacía con
+        # mensaje informativo que datos sintéticos engañosos.
         try:
             r = requests.get(url, params=params, timeout=30,
                               headers={"User-Agent": "APURISK-OSINT/1.0"})
             if r.status_code != 200:
                 print(f"  [warn] acled HTTP {r.status_code}: {r.text[:200]}")
-                return self._demo_articles()
+                return []
             data = r.json()
             if not data.get("success"):
                 err = data.get("error", "respuesta sin success")
                 print(f"  [warn] acled: {err}")
-                return self._demo_articles()
+                return []
             events = data.get("data", [])
             print(f"  [acled] {len(events)} eventos recibidos (ventana {self.ventana_dias}d)")
             out = [self._evento_a_article(ev) for ev in events]
@@ -163,7 +171,7 @@ class ACLEDCollector(BaseCollector):
             return out
         except Exception as e:
             print(f"  [warn] acled excepción: {e}")
-            return self._demo_articles()
+            return []
 
     def _evento_a_article(self, ev: dict) -> Article | None:
         """Convierte un evento ACLED a Article normalizado.

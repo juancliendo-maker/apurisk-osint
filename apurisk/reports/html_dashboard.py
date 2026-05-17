@@ -1277,7 +1277,23 @@ def generar_dashboard_html(
 
     acled_cards = "".join(_acled_card(ev) for ev in acled_sorted[:30])
     if not acled_cards:
-        acled_cards = "<em style='color:var(--txt-2)'>Sin eventos ACLED disponibles. Configura las variables ACLED_API_KEY y ACLED_EMAIL en Render para activar datos reales.</em>"
+        acled_cards = """
+        <div style="padding: 30px; text-align: center; background: var(--bg-2); border-radius: 8px; border: 1px dashed var(--bg-3);">
+          <div style="font-size: 40px; margin-bottom: 12px;">⏳</div>
+          <div style="color: var(--txt-1); font-size: 15px; margin-bottom: 8px;"><strong>ACLED API en espera de aprobación</strong></div>
+          <div style="color: var(--txt-2); font-size: 13px; line-height: 1.6; max-width: 540px; margin: 0 auto;">
+            Esta pestaña mostrará eventos georreferenciados verificados (protestas, disturbios,
+            violencia política, enfrentamientos) cuando la API key de ACLED sea aprobada.
+            <br><br>
+            <strong>Paso 1:</strong> Registrarse en <a href="https://acleddata.com/register/" target="_blank" rel="noopener" style="color:var(--accent);">acleddata.com/register</a> (aprobación: 1-2 días hábiles)<br>
+            <strong>Paso 2:</strong> Agregar <code>ACLED_API_KEY</code> y <code>ACLED_EMAIL</code> como variables de entorno en Render<br>
+            <strong>Paso 3:</strong> Reiniciar el servicio. Los eventos aparecerán automáticamente.
+            <br><br>
+            Mientras tanto, la pestaña <strong>🛡️ Crimen Organizado</strong> está clasificando
+            eventos similares desde fuentes RSS peruanas en tiempo real.
+          </div>
+        </div>
+        """
 
     # Entity cards (no más tabla)
     def _entity_block(items, label, max_n=10):
