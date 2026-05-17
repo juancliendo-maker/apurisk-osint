@@ -32,17 +32,20 @@ medios_rss:
     url: "https://elcomercio.pe/arcio/rss/category/politica/"
     categoria: medios
   - id: gestion_politica
-    nombre: "Gestión - Política"
-    url: "https://gestion.pe/arcio/rss/category/politica/"
+    nombre: "Gestión - Política (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:gestion.pe+politica&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
+    url_referencia: "https://gestion.pe/politica/"
   - id: idl_reporteros
-    nombre: "IDL-Reporteros"
-    url: "https://www.idl-reporteros.pe/feed/"
+    nombre: "IDL-Reporteros (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:idl-reporteros.pe&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
+    url_referencia: "https://www.idl-reporteros.pe"
   - id: ojo_publico
-    nombre: "Ojo Público"
-    url: "https://ojo-publico.com/rss"
+    nombre: "Ojo Público (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:ojo-publico.com&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
+    url_referencia: "https://ojo-publico.com"
   - id: convoca_pe
     nombre: "Convoca Perú"
     url: "https://convoca.pe/rss.xml"
@@ -141,35 +144,43 @@ medios_rss:
     url_referencia: "https://www.dw.com/es/"
     prioritaria: true
 
-  # === ESTADO PERUANO (gob.pe oficiales — generalmente funcionan) ===
+  # === ESTADO PERUANO (gob.pe oficiales — vía Google News porque gob.pe
+  # bloquea IPs de datacenter de Render desde mayo 2026) ===
   - id: andina_politica
-    nombre: "Andina - Agencia Oficial"
-    url: "https://andina.pe/agencia/rss-noticias.aspx?cat=Politica"
+    nombre: "Andina - Agencia Oficial (Google News)"
+    url: "https://news.google.com/rss/search?q=site:andina.pe+politica&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: estado
+    url_referencia: "https://andina.pe"
   - id: mp_fiscalia
-    nombre: "Ministerio Público - Fiscalía"
-    url: "https://www.gob.pe/institucion/mpfn/noticias/rss"
+    nombre: "Ministerio Público - Fiscalía (Google News)"
+    url: "https://news.google.com/rss/search?q=site:gob.pe+mpfn+OR+Ministerio+Publico+Peru+fiscalia&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: estado
+    url_referencia: "https://www.gob.pe/mpfn"
   - id: sunat_noticias
-    nombre: "Sunat - Noticias"
-    url: "https://www.gob.pe/institucion/sunat/noticias/rss"
+    nombre: "Sunat - Noticias (Google News)"
+    url: "https://news.google.com/rss/search?q=site:gob.pe+sunat+OR+SUNAT+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: estado
+    url_referencia: "https://www.gob.pe/sunat"
   - id: sunafil_noticias
-    nombre: "Sunafil - Fiscalización Laboral"
-    url: "https://www.gob.pe/institucion/sunafil/noticias/rss"
+    nombre: "Sunafil - Fiscalización Laboral (Google News)"
+    url: "https://news.google.com/rss/search?q=Sunafil+Peru+fiscalizacion+laboral&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: estado
+    url_referencia: "https://www.gob.pe/sunafil"
   - id: mininter_oficial
-    nombre: "Ministerio del Interior"
-    url: "https://www.gob.pe/institucion/mininter/noticias/rss"
+    nombre: "Ministerio del Interior (Google News)"
+    url: "https://news.google.com/rss/search?q=Ministerio+Interior+Peru+OR+MININTER+ministro&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: estado
+    url_referencia: "https://www.gob.pe/mininter"
   - id: mre_oficial
-    nombre: "Cancillería - MRE"
-    url: "https://www.gob.pe/institucion/rree/noticias/rss"
+    nombre: "Cancillería - MRE (Google News)"
+    url: "https://news.google.com/rss/search?q=Cancilleria+Peru+OR+RREE+OR+Ministerio+Relaciones+Exteriores+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: estado
+    url_referencia: "https://www.gob.pe/rree"
   - id: bcrp_notas
-    nombre: "BCRP - Notas Semanales (sitemap)"
-    url: "https://www.bcrp.gob.pe/sitemap-news.xml"
+    nombre: "BCRP - Banco Central Reserva (Google News)"
+    url: "https://news.google.com/rss/search?q=BCRP+Peru+OR+Banco+Central+Reserva+Peru+politica+monetaria&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: estado
+    url_referencia: "https://www.bcrp.gob.pe"
 
   # === ESTADO PERUANO (vía Google News — feeds directos rotos) ===
   - id: jne_noticias
@@ -296,14 +307,19 @@ medios_rss:
     url_referencia: "https://www.economist.com/the-americas/"
 
   # === REDES SOCIALES Y FOROS ===
+  # Reddit cambió su política de feeds RSS y ahora bloquea IPs datacenter.
+  # Estrategia: usar Google News RSS para indexar threads de r/peru con
+  # mucho engagement. Pierde frescura inmediata pero mantiene cobertura.
   - id: reddit_peru
-    nombre: "Reddit r/peru"
-    url: "https://www.reddit.com/r/peru/.rss"
+    nombre: "Reddit r/peru (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:reddit.com/r/peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: redes
+    url_referencia: "https://www.reddit.com/r/peru/"
   - id: reddit_lima
-    nombre: "Reddit r/lima"
-    url: "https://www.reddit.com/r/lima/.rss"
+    nombre: "Reddit r/lima (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:reddit.com/r/lima&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: redes
+    url_referencia: "https://www.reddit.com/r/lima/"
   - id: youtube_cuartopoder
     nombre: "YouTube - Cuarto Poder (América TV)"
     url: "https://www.youtube.com/feeds/videos.xml?user=americatv"
