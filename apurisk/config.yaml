@@ -320,10 +320,14 @@ medios_rss:
     url: "https://news.google.com/rss/search?q=site:reddit.com/r/lima&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: redes
     url_referencia: "https://www.reddit.com/r/lima/"
-  - id: youtube_cuartopoder
-    nombre: "YouTube - Cuarto Poder (América TV)"
-    url: "https://www.youtube.com/feeds/videos.xml?user=americatv"
+  # ELIMINADO 2026-05-16: youtube_cuartopoder con user=americatv apuntaba al
+  # canal Telefe/America TV de Argentina (espectaculos), no a Cuarto Poder Peru.
+  # Reemplazado por busqueda Google News del programa real.
+  - id: cuartopoder_gnews
+    nombre: "Cuarto Poder América TV Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=%22Cuarto+Poder%22+Peru+America+TV+investigacion&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: redes
+    url_referencia: "https://www.americatv.com.pe/cuarto-poder"
   - id: youtube_panorama_gnews
     nombre: "Panorama Panamericana (Google News)"
     url: "https://news.google.com/rss/search?q=Panorama+Panamericana+Peru+politica&hl=es-419&gl=PE&ceid=PE:es-419"
