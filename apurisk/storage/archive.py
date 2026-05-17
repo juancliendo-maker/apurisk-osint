@@ -96,6 +96,33 @@ CREATE TABLE IF NOT EXISTS factores (
 
 CREATE INDEX IF NOT EXISTS idx_factores_factor_id ON factores(factor_id);
 CREATE INDEX IF NOT EXISTS idx_factores_score ON factores(score);
+
+-- Reportes de caso (minera, gobierno, etc.) — generados semanalmente
+-- y consolidados mensualmente. Almacena metadata + ruta PDF + JSON resumido
+-- para búsqueda histórica y consolidación.
+CREATE TABLE IF NOT EXISTS reportes_caso (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha_generacion TEXT NOT NULL,
+    plantilla TEXT NOT NULL,        -- minera | gobierno | minera_mensual | gobierno_mensual
+    cliente TEXT,                    -- empresa o entidad solicitante
+    solicitante TEXT,
+    periodo TEXT,                    -- ej. "12/05/2026 — 19/05/2026"
+    semana_iso INTEGER,
+    mes INTEGER,
+    año INTEGER,
+    score_global REAL,
+    nivel TEXT,
+    pdf_path TEXT,                   -- ruta al PDF generado
+    json_resumen TEXT,               -- JSON con resumen ejecutivo para búsqueda
+    metadata TEXT,                   -- JSON con parámetros completos del caso
+    UNIQUE(plantilla, cliente, semana_iso, año)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reportes_plantilla ON reportes_caso(plantilla);
+CREATE INDEX IF NOT EXISTS idx_reportes_cliente ON reportes_caso(cliente);
+CREATE INDEX IF NOT EXISTS idx_reportes_fecha ON reportes_caso(fecha_generacion);
+CREATE INDEX IF NOT EXISTS idx_reportes_año_mes ON reportes_caso(año, mes);
+CREATE INDEX IF NOT EXISTS idx_reportes_semana ON reportes_caso(semana_iso, año);
 """
 
 
@@ -335,6 +362,124 @@ class ApuriskArchive:
             return True
         except Exception:
             return False
+
+    # ============== REPORTES DE CASO (minera, gobierno) ==============
+    def archivar_reporte_caso(self, reporte_meta: dict, pdf_path: str,
+                                json_resumen: dict, parametros: dict) -> int:
+        """Registra un reporte generado en la base de datos.
+
+        Args:
+            reporte_meta: dict del 'metadata' del análisis
+            pdf_path: ruta al PDF generado
+            json_resumen: dict con resumen ejecutivo (sección 1)
+            parametros: parámetros del caso (cliente, departamentos, etc.)
+        Returns:
+            id del reporte registrado
+        """
+        with self._conn() as c:
+            cur = c.cursor()
+            cur.execute(
+                """INSERT OR REPLACE INTO reportes_caso
+                   (fecha_generacion, plantilla, cliente, solicitante, periodo,
+                    semana_iso, mes, año, score_global, nivel,
+                    pdf_path, json_resumen, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    reporte_meta.get("generado"),
+                    reporte_meta.get("tipo", "desconocido"),
+                    reporte_meta.get("empresa", "—"),
+                    reporte_meta.get("solicitante", "—"),
+                    reporte_meta.get("periodo", "—"),
+                    int(reporte_meta.get("semana_iso", 0)),
+                    int(reporte_meta.get("mes", 0)),
+                    int(reporte_meta.get("año", 0)),
+                    float(json_resumen.get("score_global", 0)),
+                    json_resumen.get("nivel", "—"),
+                    pdf_path,
+                    json.dumps(json_resumen, ensure_ascii=False, default=str),
+                    json.dumps(parametros, ensure_ascii=False, default=str),
+                ),
+            )
+            return cur.lastrowid or -1
+
+    def listar_reportes(self, plantilla: str = None, cliente: str = None,
+                          año: int = None, mes: int = None,
+                          limit: int = 100) -> list[dict]:
+        """Lista reportes archivados con filtros opcionales."""
+        sql = "SELECT * FROM reportes_caso WHERE 1=1"
+        params = []
+        if plantilla:
+            sql += " AND plantilla = ?"
+            params.append(plantilla)
+        if cliente:
+            sql += " AND cliente LIKE ?"
+            params.append(f"%{cliente}%")
+        if año:
+            sql += " AND año = ?"
+            params.append(año)
+        if mes:
+            sql += " AND mes = ?"
+            params.append(mes)
+        sql += " ORDER BY fecha_generacion DESC LIMIT ?"
+        params.append(limit)
+        with self._conn() as c:
+            rows = c.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def buscar_reportes(self, keyword: str, plantilla: str = None,
+                          limit: int = 50) -> list[dict]:
+        """Busca reportes por keyword en el json_resumen."""
+        sql = ("SELECT * FROM reportes_caso WHERE "
+                "(cliente LIKE ? OR json_resumen LIKE ?)")
+        params = [f"%{keyword}%", f"%{keyword}%"]
+        if plantilla:
+            sql += " AND plantilla = ?"
+            params.append(plantilla)
+        sql += " ORDER BY fecha_generacion DESC LIMIT ?"
+        params.append(limit)
+        with self._conn() as c:
+            rows = c.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def reportes_de_mes(self, año: int, mes: int,
+                          plantilla: str = "riesgo_minera_semanal") -> list[dict]:
+        """Reportes semanales del mes especificado, para consolidación mensual."""
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT * FROM reportes_caso
+                   WHERE año = ? AND mes = ? AND plantilla = ?
+                   ORDER BY semana_iso ASC""",
+                (año, mes, plantilla)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def ultimo_reporte_semanal(self, plantilla: str, cliente: str = None) -> dict | None:
+        """Devuelve el reporte semanal más reciente para un cliente/plantilla."""
+        sql = "SELECT * FROM reportes_caso WHERE plantilla = ?"
+        params = [plantilla]
+        if cliente:
+            sql += " AND cliente = ?"
+            params.append(cliente)
+        sql += " ORDER BY fecha_generacion DESC LIMIT 1"
+        with self._conn() as c:
+            row = c.execute(sql, params).fetchone()
+        return dict(row) if row else None
+
+    def stats_reportes(self) -> dict:
+        """Métricas agregadas de reportes archivados."""
+        with self._conn() as c:
+            total = c.execute("SELECT COUNT(*) FROM reportes_caso").fetchone()[0]
+            por_plantilla = c.execute(
+                "SELECT plantilla, COUNT(*) AS n FROM reportes_caso GROUP BY plantilla"
+            ).fetchall()
+            ultimo = c.execute(
+                "SELECT MAX(fecha_generacion) FROM reportes_caso"
+            ).fetchone()[0]
+        return {
+            "total_reportes": total,
+            "por_plantilla": {r["plantilla"]: r["n"] for r in por_plantilla},
+            "ultimo_reporte": ultimo,
+        }
 
 
 def archive_from_outputs(outputs_dir: str, db_path: str = None) -> dict:

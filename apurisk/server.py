@@ -44,6 +44,7 @@ try:
     from .storage import ApuriskArchive
     from .main import run_once as pipeline_run_once
     from .analyzers.caso_analyzer import analizar_caso
+    from .analyzers.riesgo_minera import analizar_riesgo_minera
     from .reports import (
         generar_ejecutivo_docx, generar_ejecutivo_pdf,
         generar_reporte_diario_pdf, generar_reporte_semanal_pdf,
@@ -51,12 +52,14 @@ try:
         generar_alertas_html, generar_alertas_docx,
         generar_reporte_caso_pdf,
     )
+    from .reports.pdf_minera import generar_reporte_minera_pdf
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from apurisk.utils.timezone_pe import now_pe, now_pe_iso
     from apurisk.storage import ApuriskArchive
     from apurisk.main import run_once as pipeline_run_once
     from apurisk.analyzers.caso_analyzer import analizar_caso
+    from apurisk.analyzers.riesgo_minera import analizar_riesgo_minera
     from apurisk.reports import (
         generar_ejecutivo_docx, generar_ejecutivo_pdf,
         generar_reporte_diario_pdf, generar_reporte_semanal_pdf,
@@ -64,6 +67,7 @@ except ImportError:
         generar_alertas_html, generar_alertas_docx,
         generar_reporte_caso_pdf,
     )
+    from apurisk.reports.pdf_minera import generar_reporte_minera_pdf
 
 
 # Configuración
@@ -129,10 +133,80 @@ async def _scheduler_loop():
         await asyncio.sleep(REFRESH_SECONDS)
 
 
+async def _scheduler_semanal_minera():
+    """Loop que ejecuta cada lunes 06:00 AM Lima:
+    - Genera reporte semanal de Riesgo Minero genérico nacional
+    - Lo archiva en SQLite
+
+    Adicionalmente, el primer lunes de cada mes consolida los 4 reportes
+    del mes previo en un único reporte mensual (TODO Fase futura).
+    """
+    from datetime import timedelta as _td
+    print("[scheduler-minera] iniciado · proxima corrida: proximo lunes 06:00 PET")
+    while True:
+        try:
+            ahora = now_pe()
+            # Calcular próximo lunes 06:00 PET
+            # weekday(): lunes=0, ..., domingo=6
+            dias_hasta_lunes = (7 - ahora.weekday()) % 7
+            if dias_hasta_lunes == 0 and ahora.hour >= 6:
+                # Ya pasó la hora hoy lunes — programar para el próximo lunes
+                dias_hasta_lunes = 7
+            proximo = ahora.replace(hour=6, minute=0, second=0, microsecond=0) \
+                            + _td(days=dias_hasta_lunes)
+            espera_seg = (proximo - ahora).total_seconds()
+            print(f"[scheduler-minera] próximo reporte: {proximo.isoformat()} "
+                  f"(en {int(espera_seg/3600)}h {int((espera_seg%3600)/60)}m)")
+            await asyncio.sleep(max(60, espera_seg))
+
+            # Generar reporte minero genérico nacional
+            print(f"[scheduler-minera] generando reporte semanal a las {now_pe_iso()}")
+            payload = {
+                "empresa": "Sector Minero Peruano (reporte semanal automático)",
+                "alcance": "nacional",
+                "periodo_dias": 7,
+                "solicitante": "Generación automática lunes 6am",
+            }
+            # Llamar al pipeline interno (sin pasar por HTTP)
+            snap = None
+            snap_path = _ultimo_snapshot_path()
+            if snap_path:
+                with open(snap_path, encoding="utf-8") as f:
+                    snap = json.load(f)
+            archive = None
+            db_path = OUTPUT_DIR / "apurisk_archive.db"
+            if db_path.exists():
+                archive = ApuriskArchive(str(db_path))
+            try:
+                analisis = analizar_riesgo_minera(
+                    payload, archive=archive, snapshot_actual=snap,
+                )
+                meta = analisis["metadata"]
+                ts = now_pe().strftime("%Y%m%d_%H%M%S")
+                filename = (f"riesgo_minera_semanal_W{meta['semana_iso']}_"
+                            f"{meta['año']}_{ts}.pdf")
+                pdf_path = REPORTES_DIR / filename
+                generar_reporte_minera_pdf(str(pdf_path), analisis)
+                if archive:
+                    archive.archivar_reporte_caso(
+                        reporte_meta=meta,
+                        pdf_path=str(pdf_path),
+                        json_resumen=analisis["seccion_1_resumen_ejecutivo"],
+                        parametros=payload,
+                    )
+                print(f"[scheduler-minera] OK reporte generado: {filename}")
+            except Exception as e:
+                print(f"[scheduler-minera] ERROR generando reporte: {e}")
+        except Exception as e:
+            print(f"[scheduler-minera] ERROR ciclo: {e}")
+            await asyncio.sleep(3600)  # espera 1h en caso de error grave
+
+
 @app.on_event("startup")
 async def _startup():
-    # Lanzar el scheduler como tarea background
+    # Lanzar los schedulers como tareas background
     asyncio.create_task(_scheduler_loop())
+    asyncio.create_task(_scheduler_semanal_minera())
 
 
 # ======================================================================
@@ -579,6 +653,310 @@ async def analisis_form():
     } finally {
       btn.disabled = false;
       btn.textContent = '📊 Generar reporte PDF';
+    }
+  });
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+# ======================================================================
+# RIESGO POLÍTICO MINERO — generación y archivo de reportes
+# ======================================================================
+REPORTES_DIR = OUTPUT_DIR / "reportes_caso"
+REPORTES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.post("/api/riesgo-minera/generar")
+async def generar_riesgo_minera(payload: dict = Body(default={})):
+    """Genera un reporte semanal de Riesgo Político Minero ad-hoc.
+
+    Body JSON (todos opcionales):
+      {
+        "empresa": "Sector Minero Peruano",
+        "departamentos": ["Apurímac", "Cusco", "Cajamarca"],
+        "alcance": "nacional",
+        "solicitante": "Cliente piloto",
+        "periodo_dias": 7
+      }
+
+    Si no se provee body, genera reporte genérico nacional 7 días.
+    Devuelve el PDF directamente y archiva en SQLite.
+    """
+    parametros = payload or {}
+    # Cargar snapshot actual
+    snap = None
+    snap_path = _ultimo_snapshot_path()
+    if snap_path:
+        try:
+            with open(snap_path, encoding="utf-8") as f:
+                snap = json.load(f)
+        except Exception as e:
+            print(f"[warn] no se pudo cargar snapshot: {e}")
+
+    # Cargar archive
+    archive = None
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if db_path.exists():
+        try:
+            archive = ApuriskArchive(str(db_path))
+        except Exception as e:
+            print(f"[warn] archive no disponible: {e}")
+
+    # Ejecutar análisis
+    try:
+        analisis = analizar_riesgo_minera(parametros, archive=archive,
+                                            snapshot_actual=snap)
+    except Exception as e:
+        raise HTTPException(status_code=500,
+                              detail=f"Error en análisis minero: {e}")
+
+    # Generar PDF
+    meta = analisis["metadata"]
+    ts = now_pe().strftime("%Y%m%d_%H%M%S")
+    safe_cliente = "".join(c if c.isalnum() else "_"
+                            for c in meta.get("empresa", "generico")[:30]).strip("_")
+    filename = f"riesgo_minera_{safe_cliente}_W{meta['semana_iso']}_{meta['año']}_{ts}.pdf"
+    pdf_path = REPORTES_DIR / filename
+    try:
+        generar_reporte_minera_pdf(str(pdf_path), analisis)
+    except Exception as e:
+        raise HTTPException(status_code=500,
+                              detail=f"Error generando PDF minero: {e}")
+
+    # Archivar en SQLite
+    if archive:
+        try:
+            archive.archivar_reporte_caso(
+                reporte_meta=meta,
+                pdf_path=str(pdf_path),
+                json_resumen=analisis["seccion_1_resumen_ejecutivo"],
+                parametros=parametros,
+            )
+        except Exception as e:
+            print(f"[warn] no se pudo archivar reporte: {e}")
+
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=filename,
+    )
+
+
+@app.get("/api/reportes")
+async def listar_reportes(
+    plantilla: Optional[str] = Query(None),
+    cliente: Optional[str] = Query(None),
+    año: Optional[int] = Query(None),
+    mes: Optional[int] = Query(None),
+    keyword: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Lista reportes archivados con filtros opcionales."""
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=503,
+                              detail="Archivo histórico aún no disponible")
+    archive = ApuriskArchive(str(db_path))
+    if keyword:
+        rows = archive.buscar_reportes(keyword, plantilla=plantilla, limit=limit)
+    else:
+        rows = archive.listar_reportes(
+            plantilla=plantilla, cliente=cliente,
+            año=año, mes=mes, limit=limit,
+        )
+    return {
+        "count": len(rows),
+        "stats": archive.stats_reportes(),
+        "results": rows,
+    }
+
+
+@app.get("/api/reportes/{reporte_id}/pdf")
+async def descargar_reporte(reporte_id: int):
+    """Descarga el PDF de un reporte archivado."""
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=503, detail="Archivo no disponible")
+    archive = ApuriskArchive(str(db_path))
+    rows = archive.listar_reportes(limit=1000)
+    reporte = next((r for r in rows if r["id"] == reporte_id), None)
+    if not reporte:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    pdf_path = reporte.get("pdf_path")
+    if not pdf_path or not Path(pdf_path).exists():
+        raise HTTPException(status_code=404,
+                              detail="PDF físico no encontrado en disco")
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=Path(pdf_path).name,
+    )
+
+
+@app.get("/riesgo-minera", response_class=HTMLResponse)
+async def riesgo_minera_form():
+    """Formulario HTML para generar reporte de Riesgo Político Minero."""
+    html = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>APURISK · Riesgo Político Minero</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg-0:#0a0e1a; --bg-1:#0f172a; --bg-2:#1e293b; --bg-3:#334155;
+    --txt-0:#f1f5f9; --txt-1:#cbd5e1; --txt-2:#94a3b8;
+    --accent:#38bdf8; --accent-2:#a78bfa;
+    --critico:#ef4444; --bajo:#22c55e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+         background: var(--bg-0); color: var(--txt-0); font-size: 14px;
+         padding: 30px 20px; max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 24px; color: var(--txt-0); margin-bottom: 6px;
+       background: linear-gradient(90deg, var(--accent), var(--accent-2));
+       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+       background-clip: text; }
+  .subtitle { color: var(--txt-2); font-size: 13px; margin-bottom: 24px; }
+  .container { background: var(--bg-1); border: 1px solid var(--bg-3); border-radius: 12px; padding: 24px; }
+  label { display: block; margin-top: 14px; margin-bottom: 6px; font-weight: 600; font-size: 13px; color: var(--txt-1); }
+  label small { color: var(--txt-2); font-weight: normal; font-size: 11px; margin-left: 6px; }
+  input[type="text"], input[type="number"], textarea, select {
+    width: 100%; padding: 10px 12px; background: var(--bg-2); color: var(--txt-0);
+    border: 1px solid var(--bg-3); border-radius: 8px; font-family: inherit; font-size: 13px;
+  }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  .checks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
+  .checks label { display:flex; align-items:center; gap:6px; margin: 0; font-weight: normal; font-size: 12px; cursor: pointer; }
+  .checks input { width: 14px; height: 14px; }
+  .btn {
+    margin-top: 22px; background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    color: var(--bg-0); border: none; padding: 14px 28px; border-radius: 8px;
+    font-weight: 700; font-size: 14px; letter-spacing: .5px;
+    cursor: pointer; width: 100%; text-transform: uppercase;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { background: var(--bg-3); color: var(--txt-2); cursor: not-allowed; opacity: 1; }
+  .status { margin-top: 18px; padding: 12px; border-radius: 8px; font-size: 13px; display: none; }
+  .status.loading { background: rgba(56,189,248,0.1); color: var(--accent); display: block;
+                    border-left: 3px solid var(--accent); }
+  .status.error { background: rgba(239,68,68,0.1); color: var(--critico); display: block;
+                  border-left: 3px solid var(--critico); }
+  .status.success { background: rgba(34,197,94,0.1); color: var(--bajo); display: block;
+                    border-left: 3px solid var(--bajo); }
+  .nav { display: flex; gap: 14px; margin-bottom: 18px; font-size: 13px; }
+  .nav a { color: var(--accent); text-decoration: none; }
+  .help { color: var(--txt-2); font-size: 11px; margin-top: 4px; }
+  .info-box { background: rgba(56,189,248,0.08); border-left: 3px solid var(--accent);
+              padding: 12px 14px; border-radius: 4px; margin-bottom: 18px;
+              font-size: 12px; color: var(--txt-1); line-height: 1.6; }
+</style>
+</head>
+<body>
+  <div class="nav">
+    <a href="/dashboard">← Dashboard</a>
+    <a href="/api/reportes" target="_blank">Reportes archivados</a>
+  </div>
+  <h1>⛏️ Riesgo Político Minero — Reporte Semanal</h1>
+  <div class="subtitle">
+    Genera un reporte de 12 secciones (~15 páginas PDF) con análisis OSINT
+    estructurado del sector minero peruano.
+  </div>
+
+  <div class="info-box">
+    <strong>Plantilla genérica nacional</strong> — configurable por empresa y departamentos.
+    Incluye 8 factores P×I propietarios mineros, mapeo de stakeholders, escenarios prospectivos
+    y recomendaciones operativas. Generación automática programada cada <strong>lunes 6:00 AM</strong> Lima.
+  </div>
+
+  <div class="container">
+    <form id="form-minera">
+      <label>Empresa / Cliente: <small>(opcional, default: Sector Minero Peruano)</small></label>
+      <input type="text" name="empresa" placeholder="Ej: Las Bambas, Antamina, Yanacocha o nombre del cliente" />
+
+      <label>Departamentos de operación: <small>(selecciona los relevantes)</small></label>
+      <div class="checks">
+        <label><input type="checkbox" name="dep" value="Apurímac" /> Apurímac</label>
+        <label><input type="checkbox" name="dep" value="Áncash" /> Áncash</label>
+        <label><input type="checkbox" name="dep" value="Arequipa" /> Arequipa</label>
+        <label><input type="checkbox" name="dep" value="Cajamarca" /> Cajamarca</label>
+        <label><input type="checkbox" name="dep" value="Cusco" /> Cusco</label>
+        <label><input type="checkbox" name="dep" value="Junín" /> Junín</label>
+        <label><input type="checkbox" name="dep" value="La Libertad" /> La Libertad</label>
+        <label><input type="checkbox" name="dep" value="Madre de Dios" /> Madre de Dios</label>
+        <label><input type="checkbox" name="dep" value="Moquegua" /> Moquegua</label>
+        <label><input type="checkbox" name="dep" value="Pasco" /> Pasco</label>
+        <label><input type="checkbox" name="dep" value="Piura" /> Piura</label>
+        <label><input type="checkbox" name="dep" value="Puno" /> Puno</label>
+        <label><input type="checkbox" name="dep" value="Tacna" /> Tacna</label>
+      </div>
+      <div class="help">Si no seleccionas ninguno, se considera alcance nacional con todos los departamentos mineros.</div>
+
+      <label>Alcance del reporte:</label>
+      <select name="alcance">
+        <option value="nacional" selected>Nacional</option>
+        <option value="regional">Regional (departamentos seleccionados)</option>
+      </select>
+
+      <label>Ventana temporal de análisis (días):</label>
+      <input type="number" name="periodo_dias" value="7" min="1" max="30" />
+      <div class="help">7 = última semana (default). 14 = quincena. 30 = último mes.</div>
+
+      <label>Solicitante: <small>(opcional)</small></label>
+      <input type="text" name="solicitante" placeholder="Tu nombre o ID interno" />
+
+      <button type="submit" class="btn" id="btn-submit">⛏️ Generar reporte PDF semanal</button>
+      <div id="status" class="status"></div>
+    </form>
+  </div>
+
+<script>
+  document.getElementById('form-minera').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = document.getElementById('btn-submit');
+    const status = document.getElementById('status');
+    const fd = new FormData(ev.target);
+    const departamentos = fd.getAll('dep');
+    const payload = {
+      empresa: fd.get('empresa') || 'Sector Minero Peruano',
+      departamentos: departamentos.length ? departamentos : null,
+      alcance: fd.get('alcance'),
+      periodo_dias: parseInt(fd.get('periodo_dias') || '7'),
+      solicitante: fd.get('solicitante') || 'Cliente piloto',
+    };
+    btn.disabled = true;
+    btn.textContent = '⏳ Generando reporte...';
+    status.className = 'status loading';
+    status.textContent = 'Procesando: análisis OSINT, factores P×I, escenarios, generación de PDF...';
+    try {
+      const resp = await fetch('/api/riesgo-minera/generar', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({detail: resp.statusText}));
+        throw new Error(err.detail || 'Error desconocido');
+      }
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+      const cd = resp.headers.get('content-disposition') || '';
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const filename = m ? m[1] : 'riesgo_minera.pdf';
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+      status.className = 'status success';
+      status.textContent = '✓ Reporte generado, descargado y archivado.';
+    } catch (e) {
+      status.className = 'status error';
+      status.textContent = '✗ Error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '⛏️ Generar reporte PDF semanal';
     }
   });
 </script>
