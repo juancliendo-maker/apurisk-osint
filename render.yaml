@@ -3,12 +3,19 @@ services:
     name: apurisk-osint
     runtime: python
     region: oregon
-    plan: free
+    plan: starter            # $7/mes - always-on + permite disco persistente
 
     buildCommand: pip install -r requirements-server.txt
     startCommand: uvicorn apurisk.server:app --host 0.0.0.0 --port $PORT
 
     healthCheckPath: /healthz
+
+    # Disco persistente para la base SQLite, snapshots JSON, reportes PDF/DOCX.
+    # Sin este disco, todo en /output/ se pierde en cada deploy/restart.
+    disk:
+      name: apurisk-data
+      mountPath: /opt/render/project/src/output
+      sizeGB: 1
 
     envVars:
       - key: PYTHON_VERSION
@@ -20,4 +27,8 @@ services:
       - key: PYTHONUNBUFFERED
         value: 1
       - key: TWITTER_BEARER_TOKEN
-        sync: false
+        sync: false           # NO sincronizar desde render.yaml; setear en UI
+      - key: ACLED_API_KEY
+        sync: false           # NO sincronizar; setear cuando ACLED apruebe
+      - key: ACLED_EMAIL
+        sync: false           # NO sincronizar; setear con tu email registrado
