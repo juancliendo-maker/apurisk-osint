@@ -1481,6 +1481,7 @@ def generar_dashboard_html(
   <div class="tab" data-tab="acled">📍 ACLED Eventos <span class="count">{len(acled_events)}</span></div>
   <div class="tab" data-tab="entidades">Entidades</div>
   <div class="tab" data-tab="tendencias">📈 Tendencias 7d <span class="count">{persistentes_count}</span></div>
+  <div class="tab" data-tab="riesgo_minero">⛏️ Riesgo Minero</div>
   <div class="tab" data-tab="descargas">📥 Descargas <span class="count">{total_descargas}</span></div>
   <div class="tab" data-tab="analisis">🔍 Análisis de Caso</div>
   <div class="tab" data-tab="monitoreo">⟳ Monitoreo</div>
@@ -1677,6 +1678,113 @@ def generar_dashboard_html(
   <section class="tab-panel" id="tab-tendencias">
     <div class="grid grid-12">
       {tendencias_html}
+    </div>
+  </section>
+
+  <!-- TAB: RIESGO MINERO — formulario + reportes archivados -->
+  <section class="tab-panel" id="tab-riesgo_minero">
+    <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
+      <h3 style="margin-bottom: 6px;">⛏️ Riesgo Político Minero · Reportes Semanales</h3>
+      <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
+        Producto comercial APURISK: reporte ejecutivo de 12 secciones (~15 páginas PDF) con análisis
+        OSINT estructurado del sector minero peruano. Incluye 8 factores P×I propietarios, mapeo de
+        stakeholders, escenarios prospectivos y recomendaciones operativas accionables.
+        <br><br>
+        🗓️ <strong>Generación automática:</strong> cada lunes 06:00 AM Lima (PET).
+        Los reportes se almacenan en disco persistente y quedan disponibles para descarga histórica.
+      </div>
+    </div>
+
+    <div class="grid grid-12" style="margin-bottom: 14px;">
+      <!-- COLUMNA IZQUIERDA: Formulario de generación on-demand -->
+      <div class="card span-6">
+        <h3>📝 Generar reporte ad-hoc</h3>
+        <form id="form-riesgo-minero" style="margin-top: 10px;">
+          <label style="display:block; margin-top:10px; font-size:12px; color:var(--txt-1); font-weight:600;">
+            Empresa / Cliente <small style="color:var(--txt-2); font-weight:normal;">(opcional)</small>
+          </label>
+          <input type="text" name="empresa" placeholder="Ej: Las Bambas, Antamina, Yanacocha…"
+                 style="width:100%; padding:9px 10px; background:var(--bg-2); color:var(--txt-0); border:1px solid var(--bg-3); border-radius:6px; font-size:13px; margin-top:4px;" />
+
+          <label style="display:block; margin-top:10px; font-size:12px; color:var(--txt-1); font-weight:600;">
+            Departamentos de operación
+          </label>
+          <div id="dep-checks" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:5px 10px; margin-top:6px; font-size:12px;">
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Apurímac" /> Apurímac</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Áncash" /> Áncash</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Arequipa" /> Arequipa</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Cajamarca" /> Cajamarca</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Cusco" /> Cusco</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Junín" /> Junín</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="La Libertad" /> La Libertad</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Madre de Dios" /> M. de Dios</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Moquegua" /> Moquegua</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Pasco" /> Pasco</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Piura" /> Piura</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Puno" /> Puno</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--txt-1);"><input type="checkbox" name="dep" value="Tacna" /> Tacna</label>
+          </div>
+          <div style="font-size:10.5px; color:var(--txt-2); margin-top:4px;">
+            Sin selección = alcance nacional con todos los departamentos.
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
+            <div>
+              <label style="display:block; font-size:12px; color:var(--txt-1); font-weight:600;">Ventana (días)</label>
+              <input type="number" name="periodo_dias" value="7" min="1" max="30"
+                     style="width:100%; padding:9px 10px; background:var(--bg-2); color:var(--txt-0); border:1px solid var(--bg-3); border-radius:6px; font-size:13px; margin-top:4px;" />
+            </div>
+            <div>
+              <label style="display:block; font-size:12px; color:var(--txt-1); font-weight:600;">Alcance</label>
+              <select name="alcance"
+                      style="width:100%; padding:9px 10px; background:var(--bg-2); color:var(--txt-0); border:1px solid var(--bg-3); border-radius:6px; font-size:13px; margin-top:4px;">
+                <option value="nacional" selected>Nacional</option>
+                <option value="regional">Regional</option>
+              </select>
+            </div>
+          </div>
+
+          <label style="display:block; margin-top:10px; font-size:12px; color:var(--txt-1); font-weight:600;">
+            Solicitante <small style="color:var(--txt-2); font-weight:normal;">(opcional)</small>
+          </label>
+          <input type="text" name="solicitante" placeholder="Tu nombre o ID interno"
+                 style="width:100%; padding:9px 10px; background:var(--bg-2); color:var(--txt-0); border:1px solid var(--bg-3); border-radius:6px; font-size:13px; margin-top:4px;" />
+
+          <button type="submit" id="btn-minero-gen"
+                  style="width:100%; margin-top:16px; padding:12px; background:linear-gradient(90deg, var(--accent), var(--accent-2)); color:var(--bg-0); border:none; border-radius:6px; font-weight:700; font-size:13px; letter-spacing:.5px; cursor:pointer; text-transform:uppercase;">
+            ⛏️ Generar reporte PDF semanal
+          </button>
+          <div id="status-minero" style="margin-top:12px; padding:10px; border-radius:6px; font-size:12px; display:none;"></div>
+        </form>
+      </div>
+
+      <!-- COLUMNA DERECHA: Información y stats -->
+      <div class="card span-6">
+        <h3>📊 Estadísticas de reportes</h3>
+        <div id="minero-stats" style="margin-top:14px; font-size:13px; color:var(--txt-1); line-height:1.7;">
+          <div style="color:var(--txt-2); font-style:italic;">Cargando estadísticas…</div>
+        </div>
+
+        <h3 style="margin-top:20px;">⚙️ Configuración del producto</h3>
+        <div style="margin-top:10px; font-size:12.5px; color:var(--txt-1); line-height:1.6;">
+          • <strong>Plantilla:</strong> Genérica nacional<br>
+          • <strong>Factores propietarios:</strong> 8 dimensiones P×I mineros<br>
+          • <strong>Secciones del reporte:</strong> 12 (~15 páginas PDF)<br>
+          • <strong>Frecuencia automática:</strong> Lunes 06:00 AM PET<br>
+          • <strong>Storage:</strong> Disco persistente Render<br>
+          • <strong>Consolidación mensual:</strong> En desarrollo (Fase 8)
+        </div>
+      </div>
+    </div>
+
+    <!-- LISTA DE REPORTES ARCHIVADOS -->
+    <div class="card span-12">
+      <h3 style="margin-bottom:14px;">📚 Reportes archivados <span id="minero-count-badge" class="badge">…</span></h3>
+      <div id="minero-reportes-list">
+        <div style="color:var(--txt-2); font-style:italic; padding:20px; text-align:center;">
+          Cargando reportes archivados…
+        </div>
+      </div>
     </div>
   </section>
 
@@ -1964,7 +2072,144 @@ python -m http.server 8080 --directory output
         }} catch (e) {{ console.error('chart resize:', e); }}
       }}, 100);
     }}
+    // Cuando se abre la pestaña Riesgo Minero, cargar la lista de reportes archivados
+    if (t.dataset.tab === 'riesgo_minero') {{
+      cargarReportesMineros();
+    }}
   }}));
+
+  // ====== Pestaña RIESGO MINERO: cargar lista de reportes archivados =====
+  async function cargarReportesMineros() {{
+    const list = document.getElementById('minero-reportes-list');
+    const badge = document.getElementById('minero-count-badge');
+    const statsBox = document.getElementById('minero-stats');
+    if (!list) return;
+    list.innerHTML = '<div style="color:var(--txt-2); font-style:italic; padding:20px; text-align:center;">Cargando reportes archivados…</div>';
+    try {{
+      const resp = await fetch('/api/reportes?plantilla=riesgo_minera_semanal&limit=50');
+      if (!resp.ok) throw new Error('No se pudo cargar la lista');
+      const data = await resp.json();
+      const reportes = data.results || [];
+      if (badge) badge.textContent = reportes.length + ' archivados';
+
+      // Stats
+      if (statsBox && data.stats) {{
+        const total = data.stats.total_reportes || 0;
+        const ultimo = data.stats.ultimo_reporte || '—';
+        const ultimoFmt = ultimo !== '—' ? new Date(ultimo).toLocaleString('es-PE') : '—';
+        statsBox.innerHTML = `
+          • <strong>Total reportes archivados:</strong> ${{total}}<br>
+          • <strong>Reportes mineros semanales:</strong> ${{reportes.length}}<br>
+          • <strong>Último reporte generado:</strong> ${{ultimoFmt}}<br>
+          • <strong>Plantilla activa:</strong> riesgo_minera_semanal<br>
+          • <strong>Próximo automático:</strong> Lunes 06:00 AM PET
+        `;
+      }}
+
+      // Lista de reportes
+      if (reportes.length === 0) {{
+        list.innerHTML = '<div style="color:var(--txt-2); font-style:italic; padding:20px; text-align:center;">Sin reportes archivados aún. Genera el primer reporte usando el formulario de la izquierda.</div>';
+        return;
+      }}
+      let html = '<div style="display:grid; gap:10px;">';
+      reportes.forEach(r => {{
+        const fecha = new Date(r.fecha_generacion).toLocaleString('es-PE');
+        const score = r.score_global || 0;
+        const nivel = r.nivel || '—';
+        const colores = {{
+          'CRÍTICO': 'var(--critico)',
+          'ALTO': 'var(--alto)',
+          'MEDIO': 'var(--medio)',
+          'BAJO': 'var(--bajo)',
+        }};
+        const color = colores[nivel] || 'var(--accent)';
+        html += `
+          <div style="background:var(--bg-2); border-left:4px solid ${{color}}; border-radius:6px; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:14px;">
+            <div style="flex:1;">
+              <div style="font-weight:600; color:var(--txt-0); font-size:13.5px; margin-bottom:4px;">
+                ${{r.cliente || 'Sector Minero'}} · Semana ${{r.semana_iso}}/${{r.año}}
+              </div>
+              <div style="font-size:11.5px; color:var(--txt-2);">
+                📅 ${{fecha}} · 👤 ${{r.solicitante || '—'}} · 📍 ${{r.periodo || '—'}}
+              </div>
+            </div>
+            <div style="text-align:center; min-width:80px;">
+              <div style="font-size:18px; font-weight:700; color:${{color}};">${{score}}</div>
+              <div style="font-size:10px; color:var(--txt-2); text-transform:uppercase;">${{nivel}}</div>
+            </div>
+            <a href="/api/reportes/${{r.id}}/pdf" target="_blank" rel="noopener"
+               style="background:var(--accent); color:var(--bg-0); padding:8px 14px; border-radius:6px; font-size:12px; font-weight:600; text-decoration:none; white-space:nowrap;">
+              📥 PDF
+            </a>
+          </div>
+        `;
+      }});
+      html += '</div>';
+      list.innerHTML = html;
+    }} catch (e) {{
+      list.innerHTML = '<div style="color:var(--critico); padding:20px; text-align:center;">Error cargando reportes: ' + e.message + '</div>';
+      if (badge) badge.textContent = 'error';
+    }}
+  }}
+
+  // ====== Pestaña RIESGO MINERO: formulario de generación on-demand =====
+  const formMinero = document.getElementById('form-riesgo-minero');
+  if (formMinero) {{
+    formMinero.addEventListener('submit', async (ev) => {{
+      ev.preventDefault();
+      const btn = document.getElementById('btn-minero-gen');
+      const status = document.getElementById('status-minero');
+      const fd = new FormData(formMinero);
+      const departamentos = fd.getAll('dep');
+      const payload = {{
+        empresa: fd.get('empresa') || 'Sector Minero Peruano',
+        departamentos: departamentos.length ? departamentos : null,
+        alcance: fd.get('alcance'),
+        periodo_dias: parseInt(fd.get('periodo_dias') || '7'),
+        solicitante: fd.get('solicitante') || 'Cliente piloto',
+      }};
+      btn.disabled = true;
+      btn.textContent = '⏳ Generando…';
+      status.style.display = 'block';
+      status.style.background = 'rgba(56,189,248,0.1)';
+      status.style.color = 'var(--accent)';
+      status.style.borderLeft = '3px solid var(--accent)';
+      status.textContent = 'Procesando análisis OSINT, factores P×I, escenarios, PDF…';
+      try {{
+        const resp = await fetch('/api/riesgo-minera/generar', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify(payload),
+        }});
+        if (!resp.ok) {{
+          const err = await resp.json().catch(() => ({{detail: resp.statusText}}));
+          throw new Error(err.detail || 'Error desconocido');
+        }}
+        const blob = await resp.blob();
+        const url = window.URL.createObjectURL(blob);
+        const cd = resp.headers.get('content-disposition') || '';
+        const m = cd.match(/filename="?([^";]+)"?/);
+        const filename = m ? m[1] : 'riesgo_minera.pdf';
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        window.URL.revokeObjectURL(url);
+        status.style.background = 'rgba(34,197,94,0.1)';
+        status.style.color = 'var(--bajo)';
+        status.style.borderLeft = '3px solid var(--bajo)';
+        status.textContent = '✓ Reporte generado, descargado y archivado. Refrescando lista…';
+        setTimeout(cargarReportesMineros, 600);
+      }} catch (e) {{
+        status.style.background = 'rgba(239,68,68,0.1)';
+        status.style.color = 'var(--critico)';
+        status.style.borderLeft = '3px solid var(--critico)';
+        status.textContent = '✗ Error: ' + e.message;
+      }} finally {{
+        btn.disabled = false;
+        btn.textContent = '⛏️ Generar reporte PDF semanal';
+      }}
+    }});
+  }}
 
   // ====== Countdown + auto-refresh (SIN auto-reload - solo display) =====
   (function () {{
