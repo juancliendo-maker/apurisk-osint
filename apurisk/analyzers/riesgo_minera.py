@@ -313,7 +313,15 @@ def _filtrar_por_fecha(items, desde, campo_fecha="published"):
 
 
 def _filtrar_por_relevancia_minera(articulos, departamentos):
-    """Filtra artículos relevantes para sector minero según keywords y geografía."""
+    """Filtra artículos relevantes para sector minero según keywords y geografía.
+
+    Aplica filtro defensivo de contenido deportivo/espectáculos primero.
+    """
+    try:
+        from ..utils.content_filter import es_contenido_irrelevante
+    except ImportError:
+        from apurisk.utils.content_filter import es_contenido_irrelevante
+
     KEYWORDS_MINERAS = [
         "minería", "mineria", "minera", "minero", "minerí­a", "extracción minera",
         "concesión minera", "explotación minera", "exploración minera",
@@ -329,6 +337,9 @@ def _filtrar_por_relevancia_minera(articulos, departamentos):
 
     out = []
     for a in articulos:
+        # DEFENSA: rechazar deportes/espectáculos antes de matching minero
+        if es_contenido_irrelevante(a):
+            continue
         texto = _texto(a).lower()
         # Match por keyword minera
         if any(kw in texto for kw in KEYWORDS_MINERAS):

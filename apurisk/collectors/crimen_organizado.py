@@ -251,7 +251,11 @@ class CrimenOrganizadoCollector(BaseCollector):
             Lista de Article con source_id='crimen_organizado' y raw['tipologia']
             indicando la categoría (narcotrafico, mineria_ilegal, tala_ilegal,
             contrabando, migracion_irregular, extorsion_sicariato).
+
+        FILTRO DEFENSIVO: descarta contenido deportivo y de espectáculos
+        antes de cualquier análisis (defensa de falsos positivos).
         """
+        from ..utils.content_filter import es_contenido_irrelevante
         out: list[Article] = []
         ventana_horas = self.ventana_dias * 24
 
@@ -261,6 +265,10 @@ class CrimenOrganizadoCollector(BaseCollector):
                 if h_ago == float("inf") or h_ago < 0 or h_ago > ventana_horas:
                     continue
             except Exception:
+                continue
+
+            # Capa defensiva: rechazar deportes/farándula antes de clasificar
+            if es_contenido_irrelevante(art):
                 continue
 
             texto = f"{art.title} {art.summary}"

@@ -185,7 +185,12 @@ class DefensoriaCollector(BaseCollector):
         reportan protestas, paros, bloqueos, marchas, etc. Cada item
         clasificado se enriquece con tipo, severidad y región (cuando
         son extraíbles del texto).
+
+        FILTRO DEFENSIVO: descarta contenido deportivo y de espectáculos
+        ANTES de cualquier análisis, para evitar falsos positivos
+        (ej: "Melgar se enfrentará ante Sport Huancayo" no es conflicto).
         """
+        from ..utils.content_filter import es_contenido_irrelevante
         out: list[Article] = []
         ventana_horas = self.ventana_dias * 24
 
@@ -195,6 +200,10 @@ class DefensoriaCollector(BaseCollector):
                 if h_ago == float("inf") or h_ago < 0 or h_ago > ventana_horas:
                     continue
             except Exception:
+                continue
+
+            # Capa defensiva: rechazar deportes/farándula antes de clasificar
+            if es_contenido_irrelevante(art):
                 continue
 
             texto = f"{art.title} {art.summary}"

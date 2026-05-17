@@ -141,13 +141,10 @@ class CongresoCollector(BaseCollector):
         los que mencionan actividad parlamentaria. Esto garantiza que la
         pestaña Legislativo refleje noticias REALES y RECIENTES.
 
-        Args:
-            rss_articles: lista de Article ya recolectados de medios RSS.
-
-        Returns:
-            Lista de Article re-etiquetados como source_id='congreso_proyectos'
-            con metadatos legislativos en raw.
+        FILTRO DEFENSIVO: descarta contenido deportivo y de espectáculos
+        antes de cualquier análisis (defensa de falsos positivos).
         """
+        from ..utils.content_filter import es_contenido_irrelevante
         out: list[Article] = []
         # Cutoff: solo items dentro de la ventana temporal configurada.
         ventana_horas = self.ventana_dias * 24
@@ -159,6 +156,10 @@ class CongresoCollector(BaseCollector):
                 if h_ago == float("inf") or h_ago < 0 or h_ago > ventana_horas:
                     continue
             except Exception:
+                continue
+
+            # Capa defensiva: rechazar deportes/farándula antes de clasificar
+            if es_contenido_irrelevante(art):
                 continue
 
             texto = f"{art.title} {art.summary}"
