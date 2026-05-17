@@ -7,8 +7,18 @@ plataforma:
   pais: "PE"
   zona_horaria: "America/Lima"
 
-# Fuentes RSS de medios peruanos
+# =====================================================================
+# FUENTES RSS DE MEDIOS
+# Estrategia tras sweep de URLs (mayo 2026):
+#   - Feeds directos que respondieron HTTP 200 → se mantienen tal cual
+#   - Feeds que devolvieron 403/404 → reemplazados por Google News RSS
+#     (https://news.google.com/rss/search?q=site:...) que es estable, no
+#     bloquea IPs de datacenter, y entrega artículos recientes con timestamp.
+#   - Fuentes irrecuperables (YouTube panorama/puntofinal con channel_id
+#     legacy) → eliminadas para reducir ruido en logs.
+# =====================================================================
 medios_rss:
+  # === MEDIOS NACIONALES (feeds directos verificados) ===
   - id: rpp_politica
     nombre: "RPP - Política"
     url: "https://rpp.pe/feed"
@@ -29,15 +39,6 @@ medios_rss:
     nombre: "IDL-Reporteros"
     url: "https://www.idl-reporteros.pe/feed/"
     categoria: medios
-  - id: infobae_peru
-    nombre: "Infobae Perú"
-    url: "https://www.infobae.com/feeds/rss/peru/"
-    categoria: medios
-  - id: cnn_espanol
-    nombre: "CNN en Español - Latinoamérica"
-    url: "https://cnnespanol.cnn.com/feed/"
-    categoria: medios
-  # Periodismo de investigación
   - id: ojo_publico
     nombre: "Ojo Público"
     url: "https://ojo-publico.com/rss"
@@ -46,147 +47,51 @@ medios_rss:
     nombre: "Convoca Perú"
     url: "https://convoca.pe/rss.xml"
     categoria: medios
-  # Medios regionales
+
+  # === MEDIOS vía Google News RSS (los directos dieron 404/403) ===
+  - id: infobae_peru
+    nombre: "Infobae Perú (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:infobae.com/peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://www.infobae.com/peru/"
+  - id: cnn_espanol
+    nombre: "CNN en Español (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:cnnespanol.cnn.com+peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://cnnespanol.cnn.com"
+  - id: peru21_politica
+    nombre: "Perú21 (vía Google News)"
+    url: "https://news.google.com/rss/search?q=site:peru21.pe&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://peru21.pe"
+
+  # === REGIONALES vía Google News (correo regionales con feed roto) ===
   - id: correo_arequipa
-    nombre: "Diario Correo - Arequipa"
-    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/arequipa/?outputType=xml"
+    nombre: "Diario Correo - Arequipa (Google News)"
+    url: "https://news.google.com/rss/search?q=site:diariocorreo.pe+Arequipa&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
+    url_referencia: "https://diariocorreo.pe/edicion/arequipa/"
   - id: correo_cusco
-    nombre: "Diario Correo - Cusco"
-    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/cusco/?outputType=xml"
+    nombre: "Diario Correo - Cusco (Google News)"
+    url: "https://news.google.com/rss/search?q=site:diariocorreo.pe+Cusco&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
+    url_referencia: "https://diariocorreo.pe/edicion/cusco/"
   - id: correo_puno
-    nombre: "Diario Correo - Puno"
-    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/puno/?outputType=xml"
+    nombre: "Diario Correo - Puno (Google News)"
+    url: "https://news.google.com/rss/search?q=site:diariocorreo.pe+Puno&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
+    url_referencia: "https://diariocorreo.pe/edicion/puno/"
   - id: correo_huancayo
-    nombre: "Diario Correo - Huancayo"
-    url: "https://diariocorreo.pe/arc/outboundfeeds/rss/category/edicion/huancayo/?outputType=xml"
+    nombre: "Diario Correo - Huancayo/Junín (Google News)"
+    url: "https://news.google.com/rss/search?q=site:diariocorreo.pe+Huancayo+OR+Junin&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
+    url_referencia: "https://diariocorreo.pe/edicion/huancayo/"
   - id: losandes_puno
     nombre: "Los Andes - Puno"
     url: "https://losandes.com.pe/feed/"
     categoria: medios
-  # Estado peruano - portales con feeds o noticias
-  - id: andina_politica
-    nombre: "Andina - Agencia Oficial"
-    url: "https://andina.pe/agencia/rss-noticias.aspx?cat=Politica"
-    categoria: estado
-  - id: jne_noticias
-    nombre: "JNE - Jurado Nacional de Elecciones"
-    url: "https://www.jne.gob.pe/JNE/RSS"
-    categoria: estado
-  - id: onpe_resultados
-    nombre: "ONPE - Resultados Electorales"
-    url: "https://www.onpe.gob.pe/feed/"
-    categoria: estado
-  - id: inei_estadisticas
-    nombre: "INEI - Estadísticas"
-    url: "https://www.inei.gob.pe/rss/"
-    categoria: estado
-  - id: bcrp_notas
-    nombre: "BCRP - Notas Semanales"
-    url: "https://www.bcrp.gob.pe/sitemap-news.xml"
-    categoria: estado
-  - id: contraloria_noticias
-    nombre: "Contraloría General"
-    url: "https://www.contraloria.gob.pe/wps/portal/!ut/rss"
-    categoria: estado
-  - id: mp_fiscalia
-    nombre: "Ministerio Público - Fiscalía"
-    url: "https://www.gob.pe/institucion/mpfn/noticias/rss"
-    categoria: estado
-  - id: pj_noticias
-    nombre: "Poder Judicial"
-    url: "https://www.pj.gob.pe/wps/wcm/connect/CorteSuprema/s_cortes_suprema_home/as_inicio/as_enlaces_destacados/as_rss/"
-    categoria: estado
-  - id: tc_jurisprudencia
-    nombre: "Tribunal Constitucional"
-    url: "https://www.tc.gob.pe/rss"
-    categoria: estado
-  - id: sunat_noticias
-    nombre: "Sunat - Noticias"
-    url: "https://www.gob.pe/institucion/sunat/noticias/rss"
-    categoria: estado
-  - id: sunafil_noticias
-    nombre: "Sunafil - Fiscalización Laboral"
-    url: "https://www.gob.pe/institucion/sunafil/noticias/rss"
-    categoria: estado
-  - id: ccffaa_oficial
-    nombre: "Comando Conjunto de las FFAA"
-    url: "https://www.ccffaa.mil.pe/rss"
-    categoria: estado
-  - id: mininter_oficial
-    nombre: "Ministerio del Interior"
-    url: "https://www.gob.pe/institucion/mininter/noticias/rss"
-    categoria: estado
-  - id: mre_oficial
-    nombre: "Cancillería - MRE"
-    url: "https://www.gob.pe/institucion/rree/noticias/rss"
-    categoria: estado
-  # Internacional / multilateral
-  - id: reuters_latam
-    nombre: "Reuters - Latinoamérica"
-    url: "https://www.reutersagency.com/feed/?best-regions=latin-america&post_type=best"
-    categoria: internacional
-  - id: ap_latam
-    nombre: "AP - Latin America"
-    url: "https://apnews.com/hub/latin-america.rss"
-    categoria: internacional
-  - id: bloomberg_latam
-    nombre: "Bloomberg - Latam"
-    url: "https://www.bloomberg.com/feed/podcast/etf-iq.xml"
-    categoria: internacional
-  - id: ft_emerging
-    nombre: "Financial Times - Emerging Markets"
-    url: "https://www.ft.com/emerging-markets?format=rss"
-    categoria: internacional
-  - id: bm_peru
-    nombre: "Banco Mundial - Perú"
-    url: "https://www.bancomundial.org/es/country/peru/news/rss"
-    categoria: internacional
-  - id: bid_peru
-    nombre: "BID - Perú"
-    url: "https://www.iadb.org/es/news/rss"
-    categoria: internacional
-  - id: fmi_peru
-    nombre: "FMI / IMF - Peru"
-    url: "https://www.imf.org/external/np/sec/news/rss/imfnews.xml"
-    categoria: internacional
-  - id: ocde_peru
-    nombre: "OCDE - Perú"
-    url: "https://www.oecd.org/peru/rss.xml"
-    categoria: internacional
-  - id: hrw_americas
-    nombre: "Human Rights Watch - Américas"
-    url: "https://www.hrw.org/news/feed?region%5B0%5D=11"
-    categoria: internacional
-  - id: amnesty_americas
-    nombre: "Amnistía Internacional - Américas"
-    url: "https://www.amnesty.org/en/rss/news/?region=americas"
-    categoria: internacional
-  # Redes y foros
-  - id: reddit_peru
-    nombre: "Reddit r/peru"
-    url: "https://www.reddit.com/r/peru/.rss"
-    categoria: redes
-  - id: youtube_panorama
-    nombre: "YouTube - Panorama (Panamericana)"
-    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCh0_4cr8Wo3-3HyQVPaO5tw"
-    categoria: redes
-  - id: youtube_cuartopoder
-    nombre: "YouTube - Cuarto Poder (América TV)"
-    url: "https://www.youtube.com/feeds/videos.xml?user=americatv"
-    categoria: redes
-  - id: youtube_puntofinal
-    nombre: "YouTube - Punto Final (Latina)"
-    url: "https://www.youtube.com/feeds/videos.xml?user=latinatv"
-    categoria: redes
-  # === FUENTES PRIORITARIAS (definidas como activas importantes por analista) ===
-  # Estrategia: usar Google News RSS como agregador estable. Los feeds directos
-  # (willax.pe, expreso.com.pe, reuters.com, apnews.com, dw.com) están protegidos
-  # por Cloudflare/WAF que bloquean IPs de datacenter de Render (HTTP 403/404).
-  # Google News RSS NO bloquea y entrega artículos recientes con timestamp ISO.
+
+  # === FUENTES PRIORITARIAS (★ definidas como activas importantes) ===
   - id: willax_politica
     nombre: "★ Willax (vía Google News)"
     url: "https://news.google.com/rss/search?q=site:willax.pe&hl=es-419&gl=PE&ceid=PE:es-419"
@@ -223,7 +128,6 @@ medios_rss:
     categoria: internacional
     url_referencia: "https://apnews.com/hub/peru"
     prioritaria: true
-  # Deutsche Welle Español — cobertura internacional con foco en América Latina/Perú
   - id: dw_espanol
     nombre: "★ DW - Español Perú (vía Google News)"
     url: "https://news.google.com/rss/search?q=site:dw.com+peru&hl=es-419&gl=PE&ceid=PE:es-419"
@@ -236,7 +140,186 @@ medios_rss:
     categoria: internacional
     url_referencia: "https://www.dw.com/es/"
     prioritaria: true
-  # Encuestadoras (datos de opinión pública)
+
+  # === ESTADO PERUANO (gob.pe oficiales — generalmente funcionan) ===
+  - id: andina_politica
+    nombre: "Andina - Agencia Oficial"
+    url: "https://andina.pe/agencia/rss-noticias.aspx?cat=Politica"
+    categoria: estado
+  - id: mp_fiscalia
+    nombre: "Ministerio Público - Fiscalía"
+    url: "https://www.gob.pe/institucion/mpfn/noticias/rss"
+    categoria: estado
+  - id: sunat_noticias
+    nombre: "Sunat - Noticias"
+    url: "https://www.gob.pe/institucion/sunat/noticias/rss"
+    categoria: estado
+  - id: sunafil_noticias
+    nombre: "Sunafil - Fiscalización Laboral"
+    url: "https://www.gob.pe/institucion/sunafil/noticias/rss"
+    categoria: estado
+  - id: mininter_oficial
+    nombre: "Ministerio del Interior"
+    url: "https://www.gob.pe/institucion/mininter/noticias/rss"
+    categoria: estado
+  - id: mre_oficial
+    nombre: "Cancillería - MRE"
+    url: "https://www.gob.pe/institucion/rree/noticias/rss"
+    categoria: estado
+  - id: bcrp_notas
+    nombre: "BCRP - Notas Semanales (sitemap)"
+    url: "https://www.bcrp.gob.pe/sitemap-news.xml"
+    categoria: estado
+
+  # === ESTADO PERUANO (vía Google News — feeds directos rotos) ===
+  - id: jne_noticias
+    nombre: "JNE - Jurado Nacional de Elecciones (Google News)"
+    url: "https://news.google.com/rss/search?q=site:jne.gob.pe+OR+JNE+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.jne.gob.pe"
+  - id: onpe_noticias
+    nombre: "ONPE - Oficina Nacional de Procesos Electorales (Google News)"
+    url: "https://news.google.com/rss/search?q=site:onpe.gob.pe+OR+ONPE+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.onpe.gob.pe"
+  - id: inei_estadisticas
+    nombre: "INEI - Estadísticas (Google News)"
+    url: "https://news.google.com/rss/search?q=site:inei.gob.pe&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.inei.gob.pe"
+  - id: contraloria_noticias
+    nombre: "Contraloría General (Google News)"
+    url: "https://news.google.com/rss/search?q=site:contraloria.gob.pe+OR+contraloria+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.contraloria.gob.pe"
+  - id: pj_noticias
+    nombre: "Poder Judicial (Google News)"
+    url: "https://news.google.com/rss/search?q=site:pj.gob.pe+OR+Poder+Judicial+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.pj.gob.pe"
+  - id: tc_jurisprudencia
+    nombre: "Tribunal Constitucional (Google News)"
+    url: "https://news.google.com/rss/search?q=site:tc.gob.pe+OR+Tribunal+Constitucional+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.tc.gob.pe"
+  - id: ccffaa_oficial
+    nombre: "Comando Conjunto FFAA (Google News)"
+    url: "https://news.google.com/rss/search?q=site:ccffaa.mil.pe+OR+Comando+Conjunto+FFAA+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.ccffaa.mil.pe"
+  - id: mininter_seguridad
+    nombre: "MININTER - Seguridad Ciudadana (Google News)"
+    url: "https://news.google.com/rss/search?q=Peru+MININTER+seguridad+ciudadana&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.gob.pe/mininter"
+  - id: inei_seguridad
+    nombre: "INEI - Seguridad Ciudadana (Google News)"
+    url: "https://news.google.com/rss/search?q=INEI+seguridad+ciudadana+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.inei.gob.pe"
+  - id: mindef_oficial
+    nombre: "Ministerio de Defensa (Google News)"
+    url: "https://news.google.com/rss/search?q=site:gob.pe+mindef+OR+Ministerio+Defensa+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://www.gob.pe/mindef"
+  - id: el_peruano
+    nombre: "El Peruano - Diario Oficial (Google News)"
+    url: "https://news.google.com/rss/search?q=site:elperuano.pe&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: estado
+    url_referencia: "https://elperuano.pe"
+
+  # === INTERNACIONAL vía Google News (feeds directos rotos o sin contenido Perú) ===
+  - id: reuters_latam
+    nombre: "Reuters - Latinoamérica (Google News)"
+    url: "https://news.google.com/rss/search?q=site:reuters.com+(Peru+OR+Bolivia+OR+Ecuador+OR+Chile)&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.reuters.com/world/americas/"
+  - id: ap_latam
+    nombre: "AP - Latin America (Google News)"
+    url: "https://news.google.com/rss/search?q=site:apnews.com+(Peru+OR+Bolivia+OR+Ecuador)&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://apnews.com/hub/latin-america"
+  - id: bbc_americalatina
+    nombre: "BBC Mundo - América Latina (Google News)"
+    url: "https://news.google.com/rss/search?q=site:bbc.com/mundo+(Peru+OR+Bolivia+OR+Ecuador)&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.bbc.com/mundo/topics/c00000a7p3rt"
+  - id: el_pais_peru
+    nombre: "El País (España) - Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:elpais.com+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://elpais.com/america/peru/"
+  - id: bm_peru
+    nombre: "Banco Mundial - Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:worldbank.org+Peru+OR+site:bancomundial.org+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.bancomundial.org/es/country/peru"
+  - id: bid_peru
+    nombre: "BID - Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:iadb.org+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.iadb.org/es/paises/peru"
+  - id: fmi_peru
+    nombre: "FMI / IMF - Peru (Google News)"
+    url: "https://news.google.com/rss/search?q=site:imf.org+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.imf.org/en/Countries/PER"
+  - id: ocde_peru
+    nombre: "OCDE - Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:oecd.org+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.oecd.org/en/countries/peru.html"
+  - id: hrw_peru
+    nombre: "Human Rights Watch - Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:hrw.org+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.hrw.org/americas/peru"
+  - id: amnesty_peru
+    nombre: "Amnistía Internacional - Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:amnesty.org+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.amnesty.org/en/location/americas/south-america/peru/"
+  - id: bloomberg_latam
+    nombre: "Bloomberg - Latam (Google News)"
+    url: "https://news.google.com/rss/search?q=site:bloomberg.com+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.bloomberg.com/latam"
+  - id: ft_emerging
+    nombre: "Financial Times - Perú/Emerging Markets (Google News)"
+    url: "https://news.google.com/rss/search?q=site:ft.com+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.ft.com/emerging-markets"
+  - id: economist_americas
+    nombre: "The Economist - Americas (Google News)"
+    url: "https://news.google.com/rss/search?q=site:economist.com+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.economist.com/the-americas/"
+
+  # === REDES SOCIALES Y FOROS ===
+  - id: reddit_peru
+    nombre: "Reddit r/peru"
+    url: "https://www.reddit.com/r/peru/.rss"
+    categoria: redes
+  - id: reddit_lima
+    nombre: "Reddit r/lima"
+    url: "https://www.reddit.com/r/lima/.rss"
+    categoria: redes
+  - id: youtube_cuartopoder
+    nombre: "YouTube - Cuarto Poder (América TV)"
+    url: "https://www.youtube.com/feeds/videos.xml?user=americatv"
+    categoria: redes
+  - id: youtube_panorama_gnews
+    nombre: "Panorama Panamericana (Google News)"
+    url: "https://news.google.com/rss/search?q=Panorama+Panamericana+Peru+politica&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: redes
+    url_referencia: "https://panamericana.pe/panorama"
+  - id: youtube_puntofinal_gnews
+    nombre: "Punto Final Latina (Google News)"
+    url: "https://news.google.com/rss/search?q=Punto+Final+Latina+Peru+investigacion&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: redes
+    url_referencia: "https://www.latina.pe/punto-final"
+
+  # === ENCUESTADORAS Y OPINIÓN PÚBLICA ===
   - id: iep_encuestas
     nombre: "IEP - Instituto de Estudios Peruanos"
     url: "https://iep.org.pe/feed/"
@@ -250,30 +333,20 @@ medios_rss:
     url: "https://cpi.pe/feed/"
     categoria: encuestas
   - id: datum_internacional
-    nombre: "Datum Internacional"
-    url: "https://www.datum.com.pe/feed"
+    nombre: "Datum Internacional (Google News)"
+    url: "https://news.google.com/rss/search?q=site:datum.com.pe+OR+Datum+encuesta+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: encuestas
-  # Estado peruano - feeds adicionales para encuestas/seguridad ciudadana
-  - id: jne_oficial
-    nombre: "JNE - Resoluciones e Impugnaciones"
-    url: "https://www.jne.gob.pe/sitio/rss/noticias-rss"
-    categoria: estado
-  - id: onpe_oficial
-    nombre: "ONPE - Información Electoral"
-    url: "https://www.onpe.gob.pe/feed/"
-    categoria: estado
-  - id: mininter_seguridad
-    nombre: "MININTER - Seguridad Ciudadana"
-    url: "https://www.gob.pe/institucion/mininter/noticias/rss?topics[]=seguridad-ciudadana"
-    categoria: estado
-  - id: inei_seguridad
-    nombre: "INEI - Estadísticas de Seguridad Ciudadana"
-    url: "https://m.inei.gob.pe/feed/"
-    categoria: estado
+    url_referencia: "https://www.datum.com.pe"
+  - id: encuestas_peru_gnews
+    nombre: "Encuestas políticas Perú (Google News agregador)"
+    url: "https://news.google.com/rss/search?q=encuesta+Peru+(Ipsos+OR+Datum+OR+IEP+OR+CPI)+politica&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: encuestas
 
+# =====================================================================
 # Recursos de referencia georreferenciados (aplicaciones web, no RSS).
 # Se exponen como enlaces en el dashboard para consulta directa, no se
 # scrapean automáticamente.
+# =====================================================================
 recursos_referencia:
   - id: mapa_delito_mininter
     nombre: "Mapa del Delito Georreferenciado (MININTER)"
@@ -295,8 +368,13 @@ recursos_referencia:
     url: "https://www.jne.gob.pe/index.html"
     descripcion: "Resoluciones del Jurado Nacional de Elecciones."
     categoria: electoral
+  - id: acled_dashboard
+    nombre: "ACLED Dashboard Perú"
+    url: "https://acleddata.com/dashboard/#/dashboard"
+    descripcion: "Dashboard oficial ACLED con eventos georreferenciados verificados."
+    categoria: conflictos_sociales
 
-# Portales del Estado
+# Portales del Estado (referencia)
 estado:
   defensoria_conflictos:
     nombre: "Defensoría del Pueblo - Reporte de Conflictos Sociales"
@@ -311,11 +389,11 @@ estado:
     nombre: "Diario Oficial El Peruano"
     url: "https://elperuano.pe/noticias/seccion/politica"
 
+# =====================================================================
 # Twitter / X — opinión pública en tiempo real
-# Para activar modo live, exportar TWITTER_BEARER_TOKEN como variable de entorno.
-# Las queries están afinadas para capturar tweets RECIENTES y trending sobre
-# riesgo político en Perú. Cada query incluye filtros de actualidad (verified
-# para reducir ruido, last 7 days implícito en search/recent).
+# Para activar modo live, exportar TWITTER_BEARER_TOKEN como variable de
+# entorno. Plan Basic ($100/mes) requerido para search/recent.
+# =====================================================================
 twitter_queries:
   # Estabilidad institucional y vacancia
   - "(Perú OR Peru) (vacancia OR \"moción de vacancia\" OR \"interpelación\" OR \"cuestión de confianza\") -is:retweet lang:es"
@@ -339,10 +417,11 @@ twitter_queries:
   # Cuentas oficiales que conviene seguir
   - "from:ONPE_oficial OR from:JNE_Peru OR from:DefensoriaPeru OR from:MININTER OR from:MindefPeru OR from:PCMperu"
 twitter_max_per_query: 20
-# Solo capturar tweets de las últimas N horas (para hashtags trending recientes)
 twitter_ventana_horas: 72
 
-# Datasets internacionales
+# =====================================================================
+# Datasets internacionales (referencia)
+# =====================================================================
 internacional:
   gdelt_query:
     nombre: "GDELT - Eventos Perú"
@@ -354,40 +433,35 @@ internacional:
 
 # ACLED — eventos georreferenciados de conflicto político
 # Requiere: ACLED_API_KEY y ACLED_EMAIL como variables de entorno en Render
-# Registro: https://developer.acleddata.com/ (gratis para uso académico/no comercial)
+# Registro: https://acleddata.com/register/ (myACLED portal)
 acled_country: "Peru"
 acled_ventana_dias: 14
 acled_limit: 500
-# Filtro de event_types — vacío = todos. Otros: ["Protests", "Riots", "Battles",
-#   "Violence against civilians", "Explosions/Remote violence", "Strategic developments"]
 # acled_event_types: ["Protests", "Riots", "Violence against civilians", "Battles"]
 
 # Clasificador temático: crimen organizado, narcotráfico, minería ilegal,
 # tala ilegal, contrabando, migración irregular, extorsión/sicariato.
-# Procesa los RSS reales y los clasifica por tipología en tiempo real.
 crimen_ventana_dias: 14
 crimen_max_items: 100
 
 # Análisis - parámetros
 analisis:
-  ventana_dias: 7              # ventana de análisis
+  ventana_dias: 7
   top_n_entidades: 15
   top_n_temas: 10
-  umbral_riesgo_alto: 70       # 0-100
+  umbral_riesgo_alto: 70
 
 # Clasificadores REAL-TIME para pestañas Legislativo y Conflictos.
-# El sistema procesa los artículos RSS de medios ya recolectados y los
-# clasifica como actividad legislativa o conflicto social en tiempo real.
-congreso_ventana_dias: 7         # solo items legislativos de últimos N días
+congreso_ventana_dias: 7
 congreso_max_items: 30
-conflictos_ventana_dias: 7       # solo conflictos sociales de últimos N días
+conflictos_ventana_dias: 7
 conflictos_max_items: 40
 
 # Indicadores de riesgo (categorías y pesos) — 12 categorías
 indicadores_riesgo:
   estabilidad_gobierno: 0.16
   conflictos_sociales: 0.13
-  violencia_electoral: 0.10        # NUEVO factor crítico
+  violencia_electoral: 0.10
   riesgo_regulatorio: 0.08
   corrupcion: 0.10
   seguridad: 0.09
