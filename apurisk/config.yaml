@@ -68,6 +68,21 @@ medios_rss:
     categoria: medios
     url_referencia: "https://peru21.pe"
 
+  # === ANÁLISIS POLÍTICO E INVESTIGACIÓN DE FONDO (semanarios/revistas) ===
+  # Caretas, Hildebrandt en sus Trece son referentes históricos de periodismo
+  # de investigación política en Perú. Suelen publicar primicias y análisis
+  # profundo que la prensa diaria no cubre.
+  - id: caretas
+    nombre: "Caretas - Revista de análisis político (Google News)"
+    url: "https://news.google.com/rss/search?q=site:caretas.pe&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://caretas.pe"
+  - id: hildebrandt_trece
+    nombre: "Hildebrandt en sus Trece - Semanario (Google News)"
+    url: "https://news.google.com/rss/search?q=%22Hildebrandt+en+sus+Trece%22+OR+site:hildebrandtensustrece.com&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://hildebrandtensustrece.com"
+
   # === REGIONALES vía Google News (correo regionales con feed roto) ===
   - id: correo_arequipa
     nombre: "Diario Correo - Arequipa (Google News)"
@@ -328,6 +343,11 @@ medios_rss:
     url: "https://news.google.com/rss/search?q=%22Cuarto+Poder%22+Peru+America+TV+investigacion&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: redes
     url_referencia: "https://www.americatv.com.pe/cuarto-poder"
+  - id: sin_medias_tintas
+    nombre: "Sin Medias Tintas - Programa político (Google News)"
+    url: "https://news.google.com/rss/search?q=%22Sin+Medias+Tintas%22+Peru+politica&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: redes
+    url_referencia: "https://www.willax.pe/sin-medias-tintas/"
   - id: youtube_panorama_gnews
     nombre: "Panorama Panamericana (Google News)"
     url: "https://news.google.com/rss/search?q=Panorama+Panamericana+Peru+politica&hl=es-419&gl=PE&ceid=PE:es-419"
