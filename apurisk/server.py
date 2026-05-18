@@ -678,7 +678,9 @@ async def generar_riesgo_minera(payload: dict = Body(default={})):
         "departamentos": ["Apurímac", "Cusco", "Cajamarca"],
         "alcance": "nacional",
         "solicitante": "Cliente piloto",
-        "periodo_dias": 7
+        "periodo_dias": 7,
+        "hipotesis": "La operación enfrenta riesgo creciente de...",
+        "urls_adjuntas": ["https://transparency.org/...", "https://..."]
       }
 
     Si no se provee body, genera reporte genérico nacional 7 días.
@@ -704,10 +706,24 @@ async def generar_riesgo_minera(payload: dict = Body(default={})):
         except Exception as e:
             print(f"[warn] archive no disponible: {e}")
 
-    # Ejecutar análisis
+    # URL fetcher para procesar URLs aportadas por el analista
+    def _url_fetcher(url: str) -> str | None:
+        try:
+            import requests
+            r = requests.get(url, timeout=10,
+                              headers={"User-Agent": "Mozilla/5.0 APURISK-OSINT/1.0"})
+            if r.status_code == 200:
+                return r.text
+        except Exception:
+            return None
+        return None
+
+    # Ejecutar análisis (pasando url_fetcher para procesar URLs adjuntas)
     try:
-        analisis = analizar_riesgo_minera(parametros, archive=archive,
-                                            snapshot_actual=snap)
+        analisis = analizar_riesgo_minera(
+            parametros, archive=archive, snapshot_actual=snap,
+            url_fetcher=_url_fetcher,
+        )
     except Exception as e:
         raise HTTPException(status_code=500,
                               detail=f"Error en análisis minero: {e}")

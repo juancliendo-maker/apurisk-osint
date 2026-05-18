@@ -1750,6 +1750,24 @@ def generar_dashboard_html(
           <input type="text" name="solicitante" placeholder="Tu nombre o ID interno"
                  style="width:100%; padding:9px 10px; background:var(--bg-2); color:var(--txt-0); border:1px solid var(--bg-3); border-radius:6px; font-size:13px; margin-top:4px;" />
 
+          <label style="display:block; margin-top:14px; font-size:12px; color:var(--txt-1); font-weight:600;">
+            🧠 Hipótesis o enfoque del analista <small style="color:var(--txt-2); font-weight:normal;">(opcional, recomendado)</small>
+          </label>
+          <textarea name="hipotesis" rows="4" placeholder="Ej: La operación X enfrenta riesgo creciente de bloqueos en el corredor minero debido a la ruptura del diálogo con la comunidad Y. Hipótesis: la cobertura mediática se ha radicalizado en las últimas 2 semanas y los frentes regionales se están alineando."
+                    style="width:100%; padding:9px 10px; background:var(--bg-2); color:var(--txt-0); border:1px solid var(--bg-3); border-radius:6px; font-size:12.5px; margin-top:4px; resize:vertical; font-family:inherit;"></textarea>
+          <div style="font-size:10.5px; color:var(--txt-2); margin-top:4px;">
+            Tu hipótesis enriquece el matching de keywords y queda destacada en el reporte PDF.
+          </div>
+
+          <label style="display:block; margin-top:14px; font-size:12px; color:var(--txt-1); font-weight:600;">
+            🔗 URLs de referencia <small style="color:var(--txt-2); font-weight:normal;">(una por línea, opcional)</small>
+          </label>
+          <textarea name="urls_adjuntas" rows="3" placeholder="https://transparency.org.au/publications/peru-corruption-risks-in-the-mining-sector/&#10;https://www.bnamericas.com/en/analysis/illegal-mining-...&#10;https://documents1.worldbank.org/curated/.../Peru-Mining-Sector-Diagnostic.pdf"
+                    style="width:100%; padding:9px 10px; background:var(--bg-2); color:var(--txt-0); border:1px solid var(--bg-3); border-radius:6px; font-size:12px; margin-top:4px; resize:vertical; font-family:monospace;"></textarea>
+          <div style="font-size:10.5px; color:var(--txt-2); margin-top:4px;">
+            Hasta 10 URLs. El sistema intenta descargar y procesar cada una como contexto adicional.
+          </div>
+
           <button type="submit" id="btn-minero-gen"
                   style="width:100%; margin-top:16px; padding:12px; background:linear-gradient(90deg, var(--accent), var(--accent-2)); color:var(--bg-0); border:none; border-radius:6px; font-weight:700; font-size:13px; letter-spacing:.5px; cursor:pointer; text-transform:uppercase;">
             ⛏️ Generar reporte PDF semanal
@@ -2161,12 +2179,17 @@ python -m http.server 8080 --directory output
       const status = document.getElementById('status-minero');
       const fd = new FormData(formMinero);
       const departamentos = fd.getAll('dep');
+      // Procesar URLs (una por línea, filtrar vacías y truncar a 10)
+      const urlsRaw = (fd.get('urls_adjuntas') || '').split('\\n')
+        .map(u => u.trim()).filter(u => u.length > 0).slice(0, 10);
       const payload = {{
         empresa: fd.get('empresa') || 'Sector Minero Peruano',
         departamentos: departamentos.length ? departamentos : null,
         alcance: fd.get('alcance'),
         periodo_dias: parseInt(fd.get('periodo_dias') || '7'),
         solicitante: fd.get('solicitante') || 'Cliente piloto',
+        hipotesis: (fd.get('hipotesis') || '').trim(),
+        urls_adjuntas: urlsRaw,
       }};
       btn.disabled = true;
       btn.textContent = '⏳ Generando…';
