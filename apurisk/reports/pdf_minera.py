@@ -356,8 +356,12 @@ def _tabla_contenidos(styles):
         ("8. Inteligencia regional específica", 10),
         ("9. Stakeholders relevantes mapeados", 11),
         ("10. Sentimiento mediático", 12),
-        ("11. Escenarios prospectivos", 13),
-        ("12. Recomendaciones operativas", 14),
+        ("11.B Minería ilegal y crimen organizado transnacional", 13),
+        ("12.B Presión internacional · Estados Unidos", 14),
+        ("13. Capital Markets y sentimiento inversor", 15),
+        ("14. Corrupción sectorial y captura institucional", 16),
+        ("15. Escenarios prospectivos", 17),
+        ("16. Recomendaciones operativas", 18),
     ]
     data = [[Paragraph(t, styles["body"]), Paragraph(str(p), styles["body"])]
             for t, p in secciones]
@@ -599,6 +603,123 @@ def _seccion_11(analisis, styles):
     return items
 
 
+def _seccion_11b_mineria_ilegal(analisis, styles):
+    """Sección avanzada: Minería ilegal y Crimen Organizado Transnacional."""
+    s = analisis.get("seccion_11_mineria_ilegal_crimen", {})
+    if not s:
+        return []
+    items = [
+        Paragraph("11.B Minería Ilegal y Crimen Organizado Transnacional", styles["h1"]),
+        Paragraph(s.get("diagnostico", ""), styles["callout"]),
+        Paragraph(
+            f"<b>Items minería ilegal:</b> {s.get('n_items_ilegal', 0)} · "
+            f"<b>Narco-minería:</b> {s.get('n_items_narco_mineria', 0)} · "
+            f"<b>Crimen clasificado:</b> {len(s.get('crimen_organizado_clasificado', []))}",
+            styles["body"]
+        ),
+        Spacer(1, 0.3 * cm),
+    ]
+    if s.get("items_mineria_ilegal"):
+        items.append(Paragraph("Minería ilegal y artesanal informal", styles["h2"]))
+        items.extend(_bullet_list(s["items_mineria_ilegal"], styles, max_n=8))
+    if s.get("items_narco_mineria"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Narco-minería, lavado de oro y crimen transnacional", styles["h2"]))
+        items.extend(_bullet_list(s["items_narco_mineria"], styles, max_n=8))
+    if s.get("departamentos_criticos"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Departamentos críticos identificados", styles["h2"]))
+        items.append(Paragraph(", ".join(s["departamentos_criticos"]), styles["body"]))
+    if s.get("actores_relevantes"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Actores institucionales de control y cooperación", styles["h2"]))
+        for actor in s["actores_relevantes"]:
+            items.append(Paragraph(f"• {actor}", styles["body_small"]))
+    return items
+
+
+def _seccion_12b_presion_eeuu(analisis, styles):
+    """Sección avanzada: Presión internacional EEUU."""
+    s = analisis.get("seccion_12_presion_eeuu", {})
+    if not s:
+        return []
+    items = [
+        Paragraph("12.B Presión Internacional · Estados Unidos", styles["h1"]),
+        Paragraph(s.get("diagnostico", ""), styles["callout"]),
+        Paragraph(f"<b>Items detectados:</b> {s.get('n_items', 0)}", styles["body"]),
+        Spacer(1, 0.3 * cm),
+    ]
+    if s.get("items_presion_eeuu"):
+        items.append(Paragraph("Cobertura de presión bilateral / sanciones", styles["h2"]))
+        items.extend(_bullet_list(s["items_presion_eeuu"], styles, max_n=10))
+    if s.get("mecanismos_clave"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Mecanismos de EEUU a monitorear", styles["h2"]))
+        for m in s["mecanismos_clave"]:
+            items.append(Paragraph(f"• {m}", styles["body_small"]))
+    if s.get("impacto_potencial_minero"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Impacto potencial sobre minería formal peruana", styles["h2"]))
+        for imp in s["impacto_potencial_minero"]:
+            items.append(Paragraph(f"• {imp}", styles["body_small"]))
+    return items
+
+
+def _seccion_13_capital_markets(analisis, styles):
+    """Sección avanzada: Capital Markets y sentimiento inversor."""
+    s = analisis.get("seccion_13_capital_markets", {})
+    if not s:
+        return []
+    items = [
+        Paragraph("13. Capital Markets y Sentimiento Inversor", styles["h1"]),
+        Paragraph(s.get("diagnostico", ""), styles["callout"]),
+        Paragraph(
+            f"<b>Sentimiento neto:</b> {s.get('sentimiento_label', 'NEUTRAL')} · "
+            f"<b>Items negativos:</b> {s.get('sentimiento_neg', 0)} · "
+            f"<b>Items positivos:</b> {s.get('sentimiento_pos', 0)} · "
+            f"<b>Total cobertura:</b> {s.get('n_items', 0)}",
+            styles["body"]
+        ),
+        Spacer(1, 0.3 * cm),
+    ]
+    if s.get("items_capital_mercado"):
+        items.append(Paragraph("Cobertura de mercados y capital", styles["h2"]))
+        items.extend(_bullet_list(s["items_capital_mercado"], styles, max_n=10))
+    if s.get("indicadores_a_monitorear"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Indicadores clave a monitorear", styles["h2"]))
+        for ind in s["indicadores_a_monitorear"]:
+            items.append(Paragraph(f"• {ind}", styles["body_small"]))
+    return items
+
+
+def _seccion_14_corrupcion(analisis, styles):
+    """Sección avanzada: Corrupción sectorial y captura institucional."""
+    s = analisis.get("seccion_14_corrupcion", {})
+    if not s:
+        return []
+    items = [
+        Paragraph("14. Corrupción Sectorial y Captura Institucional", styles["h1"]),
+        Paragraph(s.get("diagnostico", ""), styles["callout"]),
+        Paragraph(f"<b>Items detectados:</b> {s.get('n_items', 0)}", styles["body"]),
+        Spacer(1, 0.3 * cm),
+    ]
+    if s.get("items_corrupcion"):
+        items.append(Paragraph("Cobertura de corrupción sectorial", styles["h2"]))
+        items.extend(_bullet_list(s["items_corrupcion"], styles, max_n=10))
+    if s.get("indices_referencia"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Índices internacionales de referencia", styles["h2"]))
+        for ind in s["indices_referencia"]:
+            items.append(Paragraph(f"• {ind}", styles["body_small"]))
+    if s.get("instituciones_clave"):
+        items.append(Spacer(1, 0.3 * cm))
+        items.append(Paragraph("Instituciones de control y anticorrupción", styles["h2"]))
+        for inst in s["instituciones_clave"]:
+            items.append(Paragraph(f"• {inst}", styles["body_small"]))
+    return items
+
+
 def _seccion_12(analisis, styles):
     s = analisis["seccion_12_recomendaciones"]
     items = [
@@ -663,14 +784,22 @@ def generar_reporte_minera_pdf(output_path: str, analisis: dict) -> str:
     story.extend(_tabla_contenidos(styles))
     story.append(PageBreak())
 
-    # SECCIONES 1-12
-    for n, fn in enumerate([
+    # SECCIONES (16 totales: 10 originales + 4 avanzadas + escenarios + recomendaciones)
+    secuencia = [
         _seccion_1, _seccion_2, _seccion_3, _seccion_4,
         _seccion_5, _seccion_6, _seccion_7, _seccion_8,
-        _seccion_9, _seccion_10, _seccion_11, _seccion_12,
-    ], start=1):
+        _seccion_9, _seccion_10,
+        # Secciones avanzadas agregadas (mayo 2026)
+        _seccion_11b_mineria_ilegal,
+        _seccion_12b_presion_eeuu,
+        _seccion_13_capital_markets,
+        _seccion_14_corrupcion,
+        # Cierre
+        _seccion_11, _seccion_12,  # Escenarios y recomendaciones (mantienen IDs originales)
+    ]
+    for n, fn in enumerate(secuencia, start=1):
         story.extend(fn(analisis, styles))
-        if n < 12:
+        if n < len(secuencia):
             story.append(PageBreak())
 
     # Generar con header/footer por página

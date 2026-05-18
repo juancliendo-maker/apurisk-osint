@@ -100,6 +100,107 @@ FACTORES_MINEROS = {
         "keywords_media": ["elecciones", "candidato", "campaña", "balotaje",
                             "segunda vuelta", "presidente electo"],
     },
+    # ===== NUEVOS FACTORES AVANZADOS (mayo 2026) =====
+    "mineria_ilegal_artesanal": {
+        "nombre": "Minería ilegal y artesanal informal",
+        "descripcion": "La Pampa, dragado ilegal, oro ilegal, REINFO, minería informal aurífera",
+        "keywords_alta": ["minería ilegal", "mineria ilegal", "mineros ilegales",
+                          "dragado ilegal", "extracción ilegal de oro",
+                          "operativo mercurio", "interdicción minera",
+                          "la pampa madre de dios", "balsa ilegal",
+                          "deforestación minería ilegal",
+                          "asesinato defensor ambiental",
+                          "mineros informales protestan",
+                          "minería ilegal supera narcotráfico"],
+        "keywords_media": ["minería informal", "mineria informal", "reinfo",
+                            "registro integral formalización minera",
+                            "madre de dios", "puerto maldonado",
+                            "balsa de extracción", "concesión informal",
+                            "amazonía minería"],
+    },
+    "crimen_organizado_transnacional": {
+        "nombre": "Crimen organizado transnacional y narco-minería",
+        "descripcion": "Cárteles, lavado de activos, rutas oro Bolivia/Colombia/Brasil, narco-minería",
+        "keywords_alta": ["narco-minería", "narcominería",
+                          "lavado de activos minería", "lavado oro",
+                          "cártel oro", "ruta del oro ilegal",
+                          "frontera bolivia oro", "frontera colombia oro",
+                          "tren de aragua oro",
+                          "extorsión minera por bandas",
+                          "sicariato minería ilegal",
+                          "primer comando capital", "pcc oro",
+                          "minería ilegal supera narcotráfico",
+                          "carteles colombianos oro perú",
+                          "comando vermelho",
+                          "crimen organizado oro"],
+        "keywords_media": ["lavado de activos", "operación oro",
+                            "incauta oro ilegal", "decomisa oro",
+                            "rutas ilícitas", "interdicción aurífera",
+                            "santa rosa", "iñapari frontera"],
+    },
+    "presion_internacional_eeuu": {
+        "nombre": "Presión internacional / EEUU y sanciones",
+        "descripcion": "OFAC, FinCEN, Magnitsky, DEA, SOUTHCOM, política bilateral Perú-EEUU sobre lavado y narco",
+        "keywords_alta": ["sanciones ofac", "ofac sanciona",
+                          "treasury sanctions peru",
+                          "magnitsky perú", "magnitsky peru",
+                          "fincen perú", "fincen peru",
+                          "lista clinton peru", "lista negra eeuu",
+                          "dea operativo peru", "southcom peru",
+                          "us state department peru",
+                          "ambassador peru sanctions",
+                          "department of treasury peru",
+                          "embajada eeuu sanciones",
+                          "designación criminal eeuu"],
+        "keywords_media": ["estados unidos", "departamento de estado",
+                            "embajada estadounidense", "kennedy peru",
+                            "ayuda bilateral", "cooperación dea",
+                            "narcotráfico transfronterizo",
+                            "tier 3 trafficking", "drug certification"],
+    },
+    "corrupcion_sectorial": {
+        "nombre": "Corrupción sectorial y captura institucional",
+        "descripcion": "Sobornos, conflictos de interés, captura del MINEM/OEFA/ANA, transparencia",
+        "keywords_alta": ["soborno minería", "coima minería",
+                          "captura institucional minería",
+                          "exministro investigado",
+                          "conflicto de interés ministro",
+                          "puerta giratoria minería",
+                          "transparency peru mining",
+                          "transparency international perú minería",
+                          "lava jato minería", "odebrecht minería",
+                          "operación car wash perú",
+                          "denuncia constitucional ministro minero",
+                          "fiscalía investiga minera",
+                          "lobby ilegal minería"],
+        "keywords_media": ["corrupción", "transparencia",
+                            "denuncia anticorrupción",
+                            "comisión ad hoc", "fiscalía especial",
+                            "procurador anticorrupción",
+                            "compliance minero", "due diligence sectorial",
+                            "integridad pública"],
+    },
+    "riesgo_capital_mercado": {
+        "nombre": "Riesgo de capital, mercados e inversión",
+        "descripcion": "Sentimiento inversor, riesgo país, downgrade, retiro de capital, mining capital allocation",
+        "keywords_alta": ["inversores nerviosos minería",
+                          "mining investors jittery",
+                          "retiro inversión minera", "ralentización inversión minera",
+                          "cae inversión minera",
+                          "downgrade calificación perú",
+                          "fitch rebaja perú", "s&p rebaja peru",
+                          "moody's rebaja peru",
+                          "riesgo país perú sube",
+                          "fuga de capitales",
+                          "mining capital allocation peru",
+                          "embi+ perú", "cds perú",
+                          "mineras suspenden inversión"],
+        "keywords_media": ["inversión privada", "ciec minero", "cartera minera",
+                            "proyectos en pausa", "stand-by",
+                            "presupuesto exploración", "capex minero",
+                            "calificadora", "rating soberano",
+                            "sentimiento de mercado", "expectativas empresariales"],
+    },
 }
 
 
@@ -266,12 +367,34 @@ def analizar_riesgo_minera(
             arts_mineros, snapshot_actual
         ),
 
-        # SECCIÓN 11: ESCENARIOS PROSPECTIVOS
-        "seccion_11_escenarios": _generar_escenarios(
+        # SECCIÓN 11: MINERÍA ILEGAL Y CRIMEN ORGANIZADO TRANSNACIONAL
+        "seccion_11_mineria_ilegal_crimen": _analizar_mineria_ilegal_crimen(
+            arts_ventana, crimen_ventana
+        ),
+
+        # SECCIÓN 12: PRESIÓN INTERNACIONAL EEUU
+        "seccion_12_presion_eeuu": _analizar_presion_eeuu(arts_ventana),
+
+        # SECCIÓN 13: CAPITAL MARKETS Y SENTIMIENTO INVERSOR
+        "seccion_13_capital_markets": _analizar_capital_markets(arts_ventana),
+
+        # SECCIÓN 14: CORRUPCIÓN SECTORIAL
+        "seccion_14_corrupcion": _analizar_corrupcion_sectorial(arts_ventana),
+
+        # SECCIÓN 15: ESCENARIOS PROSPECTIVOS (renombrada de 11)
+        "seccion_15_escenarios": _generar_escenarios(
             factores_pxi, alertas_mineras, conf_mineros
         ),
 
-        # SECCIÓN 12: RECOMENDACIONES OPERATIVAS
+        # SECCIÓN 16: RECOMENDACIONES OPERATIVAS (renombrada de 12)
+        "seccion_16_recomendaciones": _generar_recomendaciones(
+            factores_pxi, nivel, alertas_mineras
+        ),
+
+        # Aliases hacia atrás para compatibilidad con el PDF actual
+        "seccion_11_escenarios": _generar_escenarios(
+            factores_pxi, alertas_mineras, conf_mineros
+        ),
         "seccion_12_recomendaciones": _generar_recomendaciones(
             factores_pxi, nivel, alertas_mineras
         ),
@@ -421,7 +544,7 @@ def _calcular_factores_mineros(articulos) -> list[dict]:
         prob_raw = (n_alta * 3 + n_media * 1) * 8
         probabilidad = min(95, max(15, prob_raw))
 
-        # Impacto: pesos sectoriales propietarios
+        # Impacto: pesos sectoriales propietarios (calibrados por experiencia)
         impactos_base = {
             "licencia_social_comunitaria": 85,
             "bloqueo_corredor": 92,
@@ -431,6 +554,12 @@ def _calcular_factores_mineros(articulos) -> list[dict]:
             "riesgo_seguridad_operativa": 80,
             "riesgo_imagen_mediatica": 65,
             "riesgo_electoral_cambio_politica": 70,
+            # Nuevos factores avanzados
+            "mineria_ilegal_artesanal": 82,        # alto - distorsiona mercado y reputación país
+            "crimen_organizado_transnacional": 90, # crítico - amenaza directa de violencia
+            "presion_internacional_eeuu": 86,      # crítico - sanciones afectan financiamiento
+            "corrupcion_sectorial": 79,             # alto - afecta legitimidad y due diligence
+            "riesgo_capital_mercado": 84,           # alto - afecta CAPEX y exploración
         }
         impacto = impactos_base.get(factor_id, 70)
 
@@ -904,3 +1033,296 @@ def _generar_recomendaciones(factores, nivel_global, alertas):
         "horizonte_recomendado_revision": "7 días",
         "comite_responsable_sugerido": "Comité de Gestión de Crisis + Asuntos Corporativos",
     }
+
+
+# =====================================================================
+# SECCIONES AVANZADAS (mayo 2026)
+# =====================================================================
+
+def _analizar_mineria_ilegal_crimen(arts, crimen_items):
+    """Sección 11: minería ilegal, artesanal informal, crimen organizado transnacional."""
+    KW_MINERIA_ILEGAL = [
+        "minería ilegal", "mineria ilegal", "minero ilegal", "mineros ilegales",
+        "dragado ilegal", "extracción ilegal de oro",
+        "la pampa", "reinfo", "operativo mercurio",
+        "balsa ilegal", "deforestación minería", "interdicción minera",
+        "asesinato defensor ambiental", "minería informal",
+    ]
+    KW_NARCO_MINERIA = [
+        "narco-minería", "narcominería", "lavado oro", "lavado de activos minería",
+        "ruta del oro", "cártel oro", "tren de aragua oro",
+        "frontera bolivia oro", "frontera colombia oro",
+        "minería ilegal supera narcotráfico",
+        "carteles colombianos oro", "comando vermelho", "pcc oro",
+        "sicariato minería", "extorsión minera",
+    ]
+    items_ilegal = []
+    items_narco = []
+    for a in arts[:500]:
+        texto = _texto(a).lower()
+        for kw in KW_MINERIA_ILEGAL:
+            if kw in texto:
+                items_ilegal.append({
+                    "titulo": getattr(a, "title", None) or a.get("title", ""),
+                    "url": getattr(a, "url", None) or a.get("url", ""),
+                    "fuente": getattr(a, "source_name", None) or a.get("source_name", ""),
+                    "match": kw,
+                })
+                break
+        for kw in KW_NARCO_MINERIA:
+            if kw in texto:
+                items_narco.append({
+                    "titulo": getattr(a, "title", None) or a.get("title", ""),
+                    "url": getattr(a, "url", None) or a.get("url", ""),
+                    "fuente": getattr(a, "source_name", None) or a.get("source_name", ""),
+                    "match": kw,
+                })
+                break
+
+    # Items del clasificador crimen_organizado relevantes
+    crimen_relevante = []
+    for c in crimen_items[:80]:
+        raw = c.raw if not isinstance(c, dict) else c
+        tipologia = (raw.get("tipologia") if isinstance(raw, dict) else "") or ""
+        if tipologia in ("mineria_ilegal", "narcotrafico", "extorsion_sicariato"):
+            crimen_relevante.append({
+                "tipologia": tipologia,
+                "titulo": c.title if not isinstance(c, dict) else c.get("title", ""),
+                "url": c.url if not isinstance(c, dict) else c.get("url", ""),
+                "region": (c.region if not isinstance(c, dict) else c.get("region", "")) or "—",
+            })
+
+    diagnostico = _diagnostico_ilegal_crimen(len(items_ilegal), len(items_narco))
+    return {
+        "items_mineria_ilegal": items_ilegal[:15],
+        "items_narco_mineria": items_narco[:15],
+        "crimen_organizado_clasificado": crimen_relevante[:20],
+        "n_items_ilegal": len(items_ilegal),
+        "n_items_narco_mineria": len(items_narco),
+        "diagnostico": diagnostico,
+        "departamentos_criticos": ["Madre de Dios (La Pampa)",
+                                     "Puno (frontera Bolivia)",
+                                     "Loreto (Amazonía)",
+                                     "Ucayali", "Amazonas",
+                                     "Apurímac (corredor minero)"],
+        "actores_relevantes": [
+            "FF.AA. (Comando Especial Madre de Dios)",
+            "PNP DIROES / DIRANDRO",
+            "SUNAT Aduanas",
+            "Fiscalía Especializada Crimen Organizado (FECOR)",
+            "OEFA / SERFOR",
+            "Embajada EEUU (cooperación bilateral)",
+        ],
+    }
+
+
+def _diagnostico_ilegal_crimen(n_ilegal, n_narco):
+    total = n_ilegal + n_narco
+    if total >= 10:
+        return ("ALTA EXPOSICIÓN: actividad intensa de minería ilegal y crimen organizado "
+                "reportada en la semana. El sector minero formal enfrenta riesgo reputacional "
+                "indirecto (todo lo aurífero peruano queda bajo sospecha internacional) y "
+                "riesgo competitivo directo (oro ilegal compite con formal en costos).")
+    if total >= 5:
+        return ("MEDIA-ALTA: actividad relevante de minería ilegal en territorio nacional. "
+                "Monitorear de cerca cualquier vinculación de la operación formal con actores "
+                "informales (proveedores, contratistas, transportistas).")
+    if total >= 1:
+        return ("MEDIA-BAJA: actividad esporádica reportada. Mantener due diligence reforzada "
+                "en cadena de suministro y compliance KYC.")
+    return ("BAJA: sin actividad relevante detectada en la semana. Mantener monitoreo "
+            "rutinario, especialmente en departamentos de alta exposición (Madre de Dios, Puno).")
+
+
+def _analizar_presion_eeuu(arts):
+    """Sección 12: presión internacional EEUU, OFAC, FinCEN, Magnitsky, DEA."""
+    KW_EEUU = [
+        "ofac", "treasury sanctions", "magnitsky", "fincen",
+        "lista clinton", "lista negra eeuu", "lista negra estados unidos",
+        "dea operativo", "southcom", "us state department",
+        "department of treasury", "embajada estados unidos sanciones",
+        "designación criminal eeuu", "us sanctions peru",
+        "drug certification peru", "trafficking in persons report",
+        "rule of law peru", "tier 3", "tier 2 watch list",
+    ]
+    items = []
+    for a in arts[:500]:
+        texto = _texto(a).lower()
+        for kw in KW_EEUU:
+            if kw in texto:
+                items.append({
+                    "titulo": getattr(a, "title", None) or a.get("title", ""),
+                    "url": getattr(a, "url", None) or a.get("url", ""),
+                    "fuente": getattr(a, "source_name", None) or a.get("source_name", ""),
+                    "match": kw,
+                })
+                break
+
+    return {
+        "items_presion_eeuu": items[:15],
+        "n_items": len(items),
+        "diagnostico": _diagnostico_eeuu(len(items)),
+        "mecanismos_clave": [
+            "OFAC SDN List (Specially Designated Nationals) — bloqueo activos en USD",
+            "Magnitsky Act — sanciones individuales por corrupción/DDHH",
+            "FinCEN — alertas a sistema financiero global",
+            "Drug Certification anual (Casa Blanca) — afecta ayuda bilateral",
+            "TIP Report (Trafficking in Persons) — afecta cooperación",
+            "INSCR / Money Laundering Report — observa rutas de oro ilegal",
+            "DEA — cooperación operativa en VRAEM y fronteras",
+        ],
+        "impacto_potencial_minero": [
+            "Restricción de financiamiento USD para mineras peruanas en bancos correspondientes",
+            "Mayor due diligence de compradores internacionales de oro/cobre",
+            "Designación a operadores informales reduce reputación país",
+            "Acuerdos comerciales (Tratado de Libre Comercio) bajo revisión",
+        ],
+    }
+
+
+def _diagnostico_eeuu(n):
+    if n >= 5:
+        return ("ALTA: actividad significativa de organismos de EEUU sobre Perú esta semana. "
+                "Monitorear designaciones potenciales y revisar exposición de la operación "
+                "a entidades en listas restrictivas.")
+    if n >= 2:
+        return ("MEDIA: cobertura de presión bilateral relevante. Mantener línea con asesores "
+                "de compliance y verificar contrapartes en SDN/Magnitsky List.")
+    if n >= 1:
+        return ("BAJA-MEDIA: actividad esporádica. Vigilancia rutinaria.")
+    return ("ESTABLE: sin alertas significativas de presión EEUU sobre Perú en la semana.")
+
+
+def _analizar_capital_markets(arts):
+    """Sección 13: sentimiento inversor, riesgo país, capital allocation, calificadoras."""
+    KW_MERCADO = [
+        "inversores nerviosos", "mining investors jittery",
+        "retiro inversión", "ralentización inversión",
+        "cae inversión minera",
+        "downgrade peru", "fitch peru", "s&p peru", "moody's peru",
+        "rebaja calificación", "riesgo país peru sube",
+        "fuga de capitales", "capital flight",
+        "mining capital allocation", "capex minero",
+        "embi peru", "cds peru", "spread soberano",
+        "expectativas empresariales", "ipe peru",
+        "bcrp encuesta", "indicador económico", "tipo de cambio peru",
+        "cae bolsa lima", "bvl cae", "acciones minera caen",
+        "buenaventura cae", "southern copper", "freeport",
+    ]
+    items = []
+    sentimiento_neg = 0
+    sentimiento_pos = 0
+    for a in arts[:500]:
+        texto = _texto(a).lower()
+        for kw in KW_MERCADO:
+            if kw in texto:
+                items.append({
+                    "titulo": getattr(a, "title", None) or a.get("title", ""),
+                    "url": getattr(a, "url", None) or a.get("url", ""),
+                    "fuente": getattr(a, "source_name", None) or a.get("source_name", ""),
+                    "match": kw,
+                })
+                # Heurística sentimiento
+                if any(w in texto for w in ["cae", "rebaja", "downgrade", "fuga",
+                                              "nerviosos", "retiro", "pierde"]):
+                    sentimiento_neg += 1
+                elif any(w in texto for w in ["sube", "recupera", "alza", "confianza",
+                                                "reactiva", "inversión nueva"]):
+                    sentimiento_pos += 1
+                break
+
+    if sentimiento_neg > sentimiento_pos * 1.5:
+        sentimiento_label = "BAJISTA"
+    elif sentimiento_pos > sentimiento_neg * 1.5:
+        sentimiento_label = "ALCISTA"
+    else:
+        sentimiento_label = "NEUTRAL"
+
+    return {
+        "items_capital_mercado": items[:15],
+        "n_items": len(items),
+        "sentimiento_label": sentimiento_label,
+        "sentimiento_neg": sentimiento_neg,
+        "sentimiento_pos": sentimiento_pos,
+        "diagnostico": _diagnostico_capital(len(items), sentimiento_label),
+        "indicadores_a_monitorear": [
+            "EMBI+ Perú (spread vs Tesoro EEUU)",
+            "Calificación soberana (Fitch / S&P / Moody's)",
+            "Tipo de cambio sol/dólar",
+            "Reservas internacionales BCRP",
+            "Índice General BVL (S&P/BVL Peru General)",
+            "Acciones mineras: BVN, SCCO, FCX, NEM en NYSE",
+            "Curva de proyectos en stand-by (MINEM cartera)",
+        ],
+    }
+
+
+def _diagnostico_capital(n, sentimiento):
+    base = f"Sentimiento de mercado: {sentimiento}."
+    if n >= 8:
+        return (f"{base} Cobertura intensa sobre riesgo país y capital allocation. "
+                "Si el sentimiento es BAJISTA, considerar comunicación reactiva con "
+                "stakeholders financieros internacionales.")
+    if n >= 3:
+        return f"{base} Actividad moderada del mercado sobre el sector minero peruano."
+    return f"{base} Cobertura limitada de capital markets esta semana."
+
+
+def _analizar_corrupcion_sectorial(arts):
+    """Sección 14: corrupción sectorial y captura institucional minera."""
+    KW_CORRUPCION = [
+        "soborno minería", "coima minería", "captura institucional minería",
+        "exministro investigado", "conflicto de interés ministro",
+        "puerta giratoria", "transparency peru mining",
+        "transparency international perú minería",
+        "lava jato minería", "odebrecht minería",
+        "operación car wash", "operation car wash",
+        "denuncia constitucional ministro",
+        "fiscalía investiga minera",
+        "lobby ilegal minería",
+        "corrupción minera", "integridad pública minería",
+    ]
+    items = []
+    for a in arts[:500]:
+        texto = _texto(a).lower()
+        for kw in KW_CORRUPCION:
+            if kw in texto:
+                items.append({
+                    "titulo": getattr(a, "title", None) or a.get("title", ""),
+                    "url": getattr(a, "url", None) or a.get("url", ""),
+                    "fuente": getattr(a, "source_name", None) or a.get("source_name", ""),
+                    "match": kw,
+                })
+                break
+
+    return {
+        "items_corrupcion": items[:15],
+        "n_items": len(items),
+        "diagnostico": _diagnostico_corrupcion(len(items)),
+        "indices_referencia": [
+            "CPI Transparency International (Perú típicamente 35-40/100)",
+            "Resource Governance Index NRGI",
+            "GAN Integrity Country Profile Perú",
+            "World Bank Doing Business / Governance Indicators",
+            "Banco Mundial Peru Mining Sector Diagnostic (2021)",
+        ],
+        "instituciones_clave": [
+            "Contraloría General de la República",
+            "Procuraduría Pública Especializada Anticorrupción",
+            "Fiscalía Provincial Especializada en Delitos de Corrupción",
+            "Comisión de Alto Nivel Anticorrupción",
+            "OEFA (fiscalización ambiental)",
+            "SUNAT (control tributario sectorial)",
+        ],
+    }
+
+
+def _diagnostico_corrupcion(n):
+    if n >= 5:
+        return ("ALTA: denuncias o investigaciones de corrupción sectorial relevantes esta semana. "
+                "Revisar exposure a contrapartes en investigación.")
+    if n >= 2:
+        return ("MEDIA: actividad anticorrupción reportada. Mantener compliance reforzada.")
+    if n >= 1:
+        return ("BAJA-MEDIA: hechos puntuales detectados. Monitoreo rutinario.")
+    return ("ESTABLE: sin denuncias de corrupción sectorial significativas esta semana.")

@@ -359,6 +359,66 @@ medios_rss:
     categoria: redes
     url_referencia: "https://www.latina.pe/punto-final"
 
+  # === FUENTES ESPECIALIZADAS RIESGO POLÍTICO MINERO ===
+  # Fuentes internacionales/especializadas que analizan riesgo minería Perú
+  # desde perspectiva: corrupción, capital markets, crimen organizado,
+  # diagnósticos institucionales, política bilateral EEUU-Perú.
+  - id: mining_minero
+    nombre: "⛏️ Mining.com - Perú minero (Google News)"
+    url: "https://news.google.com/rss/search?q=site:mining.com+Peru&hl=en-US&gl=US&ceid=US:en"
+    categoria: minero
+    url_referencia: "https://www.mining.com/region/latin-america/"
+  - id: bnamericas_minero
+    nombre: "⛏️ BNAmericas - Minería Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:bnamericas.com+Peru+mining+OR+mineria&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: minero
+    url_referencia: "https://www.bnamericas.com"
+  - id: discovery_alert
+    nombre: "⛏️ Discovery Alert - Capital allocation mineria (Google News)"
+    url: "https://news.google.com/rss/search?q=site:discoveryalert.com.au+Peru+OR+mining+political&hl=en-US&gl=US&ceid=US:en"
+    categoria: minero
+    url_referencia: "https://discoveryalert.com.au"
+  - id: transparency_minero
+    nombre: "🏛️ Transparency Int. - Corrupción minera Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:transparency.org+Peru+mining+OR+mineria+corrupcion&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://transparency.org.au/publications/peru-corruption-risks-in-the-mining-sector/"
+  - id: gan_integrity
+    nombre: "🏛️ GAN Integrity - Country Risk Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=site:ganintegrity.com+Peru+OR+%22country+profile%22+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.ganintegrity.com/country-profiles/peru/"
+  - id: bm_mining_diagnostic
+    nombre: "🏛️ Banco Mundial - Mining Sector Diagnostic Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=%22World+Bank%22+Peru+mining+OR+%22Banco+Mundial%22+Peru+mineria+diagnostic&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://documents.worldbank.org/curated/en/448141632473923087/pdf/Peru-Mining-Sector-Diagnostic.pdf"
+  - id: snmpe_minero
+    nombre: "⛏️ SNMPE - Sociedad Nacional Minería (Google News)"
+    url: "https://news.google.com/rss/search?q=SNMPE+OR+%22Sociedad+Nacional+Mineria+Petroleo+Energia%22+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: minero
+    url_referencia: "https://www.snmpe.org.pe"
+  # Fuentes que analizan presión EEUU vs crimen organizado y su impacto Perú
+  - id: ofac_treasury_peru
+    nombre: "🇺🇸 OFAC/Treasury - Sanciones Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=OFAC+OR+%22Treasury+sanctions%22+OR+Magnitsky+Peru&hl=en-US&gl=US&ceid=US:en"
+    categoria: internacional
+    url_referencia: "https://ofac.treasury.gov"
+  - id: dea_southcom_peru
+    nombre: "🇺🇸 DEA/SOUTHCOM - Lucha narcotrafico Peru (Google News)"
+    url: "https://news.google.com/rss/search?q=DEA+OR+SOUTHCOM+OR+%22State+Department%22+Peru+narcotrafico+OR+drug+trafficking&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: internacional
+    url_referencia: "https://www.dea.gov"
+  # Minería ilegal y narco-minería específico
+  - id: mineria_ilegal_peru
+    nombre: "⚠️ Minería ilegal Perú agregador (Google News)"
+    url: "https://news.google.com/rss/search?q=%22mineria+ilegal%22+Peru+OR+%22illegal+mining%22+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: minero
+  - id: narco_mineria_peru
+    nombre: "⚠️ Narco-minería / lavado oro Perú (Google News)"
+    url: "https://news.google.com/rss/search?q=Peru+%22narco-mineria%22+OR+%22oro+ilegal%22+OR+%22lavado+oro%22&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: minero
+
   # === ENCUESTADORAS Y OPINIÓN PÚBLICA ===
   - id: iep_encuestas
     nombre: "IEP - Instituto de Estudios Peruanos"
