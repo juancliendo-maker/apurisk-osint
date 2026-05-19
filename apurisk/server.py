@@ -35,7 +35,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -669,24 +669,99 @@ REPORTES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @app.post("/api/riesgo-minera/generar")
-async def generar_riesgo_minera(payload: dict = Body(default={})):
+async def generar_riesgo_minera(request: Request):
     """Genera un reporte semanal de Riesgo Político Minero ad-hoc.
 
-    Body JSON (todos opcionales):
-      {
-        "empresa": "Sector Minero Peruano",
-        "departamentos": ["Apurímac", "Cusco", "Cajamarca"],
-        "alcance": "nacional",
-        "solicitante": "Cliente piloto",
-        "periodo_dias": 7,
-        "hipotesis": "La operación enfrenta riesgo creciente de...",
-        "urls_adjuntas": ["https://transparency.org/...", "https://..."]
-      }
+    Soporta dos formatos de body:
 
-    Si no se provee body, genera reporte genérico nacional 7 días.
+    1) **JSON** (sin archivos):
+       {
+         "empresa": "Sector Minero Peruano",
+         "departamentos": ["Apurímac", "Cusco"],
+         "alcance": "nacional",
+         "periodo_dias": 7,
+         "hipotesis": "...",
+         "urls_adjuntas": ["https://...", "..."]
+       }
+
+    2) **multipart/form-data** (con archivos PDF/DOCX/TXT/MD):
+       - Mismos campos como form fields
+       - Campo "documentos" con uno o más archivos
+       - Los documentos se procesan y su texto se inyecta al motor analítico
+
     Devuelve el PDF directamente y archiva en SQLite.
     """
-    parametros = payload or {}
+    parametros = {}
+    documentos_procesados = []
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        # === MODO MULTIPART (con archivos) ===
+        try:
+            from .utils.document_extractor import extract_document
+        except ImportError:
+            from apurisk.utils.document_extractor import extract_document
+
+        form = await request.form()
+
+        # Extraer campos de texto
+        parametros["empresa"] = form.get("empresa") or "Sector Minero Peruano"
+        # departamentos puede venir como JSON string o como múltiples campos
+        deps_raw = form.get("departamentos") or ""
+        if deps_raw:
+            try:
+                deps_parsed = json.loads(deps_raw)
+                if isinstance(deps_parsed, list):
+                    parametros["departamentos"] = deps_parsed
+                else:
+                    parametros["departamentos"] = None
+            except json.JSONDecodeError:
+                # CSV simple: "Apurimac,Cusco"
+                parametros["departamentos"] = [d.strip() for d in deps_raw.split(",") if d.strip()]
+        parametros["alcance"] = form.get("alcance") or "nacional"
+        try:
+            parametros["periodo_dias"] = int(form.get("periodo_dias") or 7)
+        except (TypeError, ValueError):
+            parametros["periodo_dias"] = 7
+        parametros["solicitante"] = form.get("solicitante") or "Cliente piloto"
+        parametros["hipotesis"] = form.get("hipotesis") or ""
+
+        # URLs: aceptar como JSON o como texto multilínea
+        urls_raw = form.get("urls_adjuntas") or ""
+        urls_list = []
+        if urls_raw:
+            try:
+                p = json.loads(urls_raw)
+                if isinstance(p, list):
+                    urls_list = [u.strip() for u in p if u and u.strip()]
+            except json.JSONDecodeError:
+                urls_list = [u.strip() for u in urls_raw.split("\n") if u.strip()]
+        parametros["urls_adjuntas"] = urls_list
+
+        # Procesar archivos adjuntos
+        # FastAPI form() devuelve UploadFile o str; iteramos sobre items con key="documentos"
+        files = form.getlist("documentos") if hasattr(form, "getlist") else []
+        for upload in files:
+            if hasattr(upload, "filename") and hasattr(upload, "read"):
+                try:
+                    file_bytes = await upload.read()
+                    ct = getattr(upload, "content_type", "") or ""
+                    doc = extract_document(upload.filename, ct, file_bytes)
+                    documentos_procesados.append(doc)
+                    print(f"  [riesgo-minera] documento: {doc['nombre']} "
+                          f"({doc['tipo']}, {doc['caracteres']} chars)"
+                          + (f" — ERROR: {doc['error']}" if doc.get("error") else ""))
+                except Exception as e:
+                    print(f"  [warn] error procesando archivo: {e}")
+        parametros["documentos_adjuntos"] = documentos_procesados
+
+    else:
+        # === MODO JSON (sin archivos) ===
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        parametros = payload or {}
     # Cargar snapshot actual
     snap = None
     snap_path = _ultimo_snapshot_path()

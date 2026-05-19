@@ -1768,6 +1768,23 @@ def generar_dashboard_html(
             Hasta 10 URLs. El sistema intenta descargar y procesar cada una como contexto adicional.
           </div>
 
+          <label style="display:block; margin-top:14px; font-size:12px; color:var(--txt-1); font-weight:600;">
+            📎 Documentos adjuntos <small style="color:var(--txt-2); font-weight:normal;">(PDF, DOCX, TXT, MD — múltiples)</small>
+          </label>
+          <div id="drop-zone-minero" style="border:2px dashed var(--bg-3); border-radius:8px; padding:14px; text-align:center; margin-top:4px; cursor:pointer; transition:all .15s; background:var(--bg-2);">
+            <input type="file" name="documentos" id="documentos-input" multiple
+                   accept=".pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+                   style="display:none;" />
+            <div style="font-size:24px; margin-bottom:4px;">📄</div>
+            <div style="font-size:12.5px; color:var(--txt-1); font-weight:600;">
+              Haz click o arrastra archivos aquí
+            </div>
+            <div style="font-size:10.5px; color:var(--txt-2); margin-top:4px;">
+              PDF · DOCX · TXT · MD · Máx 20 MB por archivo · 50K caracteres procesados
+            </div>
+          </div>
+          <div id="docs-list" style="margin-top:8px; display:none; font-size:11.5px; color:var(--txt-1);"></div>
+
           <button type="submit" id="btn-minero-gen"
                   style="width:100%; margin-top:16px; padding:12px; background:linear-gradient(90deg, var(--accent), var(--accent-2)); color:var(--bg-0); border:none; border-radius:6px; font-weight:700; font-size:13px; letter-spacing:.5px; cursor:pointer; text-transform:uppercase;">
             ⛏️ Generar reporte PDF semanal
@@ -2173,6 +2190,58 @@ python -m http.server 8080 --directory output
   // ====== Pestaña RIESGO MINERO: formulario de generación on-demand =====
   const formMinero = document.getElementById('form-riesgo-minero');
   if (formMinero) {{
+    // Drag & drop zone para documentos
+    const dropZone = document.getElementById('drop-zone-minero');
+    const docsInput = document.getElementById('documentos-input');
+    const docsList = document.getElementById('docs-list');
+    if (dropZone && docsInput) {{
+      dropZone.addEventListener('click', () => docsInput.click());
+      ['dragover', 'dragenter'].forEach(evt => {{
+        dropZone.addEventListener(evt, (e) => {{
+          e.preventDefault(); e.stopPropagation();
+          dropZone.style.borderColor = 'var(--accent)';
+          dropZone.style.background = 'rgba(56,189,248,0.1)';
+        }});
+      }});
+      ['dragleave', 'drop'].forEach(evt => {{
+        dropZone.addEventListener(evt, (e) => {{
+          e.preventDefault(); e.stopPropagation();
+          dropZone.style.borderColor = 'var(--bg-3)';
+          dropZone.style.background = 'var(--bg-2)';
+        }});
+      }});
+      dropZone.addEventListener('drop', (e) => {{
+        e.preventDefault();
+        if (e.dataTransfer.files && e.dataTransfer.files.length) {{
+          docsInput.files = e.dataTransfer.files;
+          renderDocsList();
+        }}
+      }});
+      docsInput.addEventListener('change', renderDocsList);
+    }}
+    function renderDocsList() {{
+      if (!docsInput.files || docsInput.files.length === 0) {{
+        docsList.style.display = 'none';
+        docsList.innerHTML = '';
+        return;
+      }}
+      let html = '<div style="color:var(--accent); font-weight:600; margin-bottom:4px;">📎 ' + docsInput.files.length + ' documento(s) seleccionado(s):</div>';
+      for (let i = 0; i < docsInput.files.length; i++) {{
+        const f = docsInput.files[i];
+        const sizeKB = (f.size / 1024).toFixed(1);
+        const sizeMB = (f.size / (1024 * 1024)).toFixed(2);
+        const sizeStr = f.size > 1024 * 1024 ? sizeMB + ' MB' : sizeKB + ' KB';
+        const tooLarge = f.size > 20 * 1024 * 1024;
+        const color = tooLarge ? 'var(--critico)' : 'var(--txt-1)';
+        html += '<div style="color:' + color + '; padding:3px 0; border-bottom:1px solid var(--bg-3);">'
+              + '• ' + f.name + ' <span style="color:var(--txt-2)">(' + sizeStr + ')</span>'
+              + (tooLarge ? ' ⚠️ EXCEDE 20MB' : '')
+              + '</div>';
+      }}
+      docsList.innerHTML = html;
+      docsList.style.display = 'block';
+    }}
+
     formMinero.addEventListener('submit', async (ev) => {{
       ev.preventDefault();
       const btn = document.getElementById('btn-minero-gen');
@@ -2182,28 +2251,54 @@ python -m http.server 8080 --directory output
       // Procesar URLs (una por línea, filtrar vacías y truncar a 10)
       const urlsRaw = (fd.get('urls_adjuntas') || '').split('\\n')
         .map(u => u.trim()).filter(u => u.length > 0).slice(0, 10);
-      const payload = {{
-        empresa: fd.get('empresa') || 'Sector Minero Peruano',
-        departamentos: departamentos.length ? departamentos : null,
-        alcance: fd.get('alcance'),
-        periodo_dias: parseInt(fd.get('periodo_dias') || '7'),
-        solicitante: fd.get('solicitante') || 'Cliente piloto',
-        hipotesis: (fd.get('hipotesis') || '').trim(),
-        urls_adjuntas: urlsRaw,
-      }};
+      const tieneArchivos = docsInput && docsInput.files && docsInput.files.length > 0;
+
       btn.disabled = true;
       btn.textContent = '⏳ Generando…';
       status.style.display = 'block';
       status.style.background = 'rgba(56,189,248,0.1)';
       status.style.color = 'var(--accent)';
       status.style.borderLeft = '3px solid var(--accent)';
-      status.textContent = 'Procesando análisis OSINT, factores P×I, escenarios, PDF…';
+      status.textContent = tieneArchivos
+        ? 'Subiendo documentos, extrayendo texto, procesando análisis OSINT y generando PDF...'
+        : 'Procesando análisis OSINT, factores P×I, escenarios y generando PDF...';
+
       try {{
-        const resp = await fetch('/api/riesgo-minera/generar', {{
-          method: 'POST',
-          headers: {{'Content-Type': 'application/json'}},
-          body: JSON.stringify(payload),
-        }});
+        let resp;
+        if (tieneArchivos) {{
+          // === MODO MULTIPART con archivos ===
+          const formData = new FormData();
+          formData.append('empresa', fd.get('empresa') || 'Sector Minero Peruano');
+          formData.append('departamentos', JSON.stringify(departamentos));
+          formData.append('alcance', fd.get('alcance') || 'nacional');
+          formData.append('periodo_dias', fd.get('periodo_dias') || '7');
+          formData.append('solicitante', fd.get('solicitante') || 'Cliente piloto');
+          formData.append('hipotesis', (fd.get('hipotesis') || '').trim());
+          formData.append('urls_adjuntas', JSON.stringify(urlsRaw));
+          for (let i = 0; i < docsInput.files.length; i++) {{
+            formData.append('documentos', docsInput.files[i]);
+          }}
+          resp = await fetch('/api/riesgo-minera/generar', {{
+            method: 'POST',
+            body: formData,  // sin Content-Type, el browser lo setea automáticamente con boundary
+          }});
+        }} else {{
+          // === MODO JSON sin archivos ===
+          const payload = {{
+            empresa: fd.get('empresa') || 'Sector Minero Peruano',
+            departamentos: departamentos.length ? departamentos : null,
+            alcance: fd.get('alcance'),
+            periodo_dias: parseInt(fd.get('periodo_dias') || '7'),
+            solicitante: fd.get('solicitante') || 'Cliente piloto',
+            hipotesis: (fd.get('hipotesis') || '').trim(),
+            urls_adjuntas: urlsRaw,
+          }};
+          resp = await fetch('/api/riesgo-minera/generar', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify(payload),
+          }});
+        }}
         if (!resp.ok) {{
           const err = await resp.json().catch(() => ({{detail: resp.statusText}}));
           throw new Error(err.detail || 'Error desconocido');
@@ -2220,7 +2315,9 @@ python -m http.server 8080 --directory output
         status.style.background = 'rgba(34,197,94,0.1)';
         status.style.color = 'var(--bajo)';
         status.style.borderLeft = '3px solid var(--bajo)';
-        status.textContent = '✓ Reporte generado, descargado y archivado. Refrescando lista…';
+        status.textContent = '✓ Reporte generado, descargado y archivado'
+          + (tieneArchivos ? ' (con ' + docsInput.files.length + ' documento(s) procesado(s))' : '')
+          + '. Refrescando lista…';
         setTimeout(cargarReportesMineros, 600);
       }} catch (e) {{
         status.style.background = 'rgba(239,68,68,0.1)';
