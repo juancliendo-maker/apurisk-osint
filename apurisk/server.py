@@ -260,6 +260,47 @@ async def refresh():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/limpiar-archivos")
+async def limpiar_archivos(
+    retencion_snapshots: int = Query(5, ge=1, le=100),
+    retencion_dashboards: int = Query(3, ge=1, le=50),
+    retencion_reportes_dias: int = Query(30, ge=1, le=365),
+):
+    """Limpia archivos automáticos antiguos del disco.
+
+    Parámetros (todos opcionales):
+      - retencion_snapshots: mantener N snapshots JSON más recientes (default 5)
+      - retencion_dashboards: mantener N dashboards HTML más recientes (default 3)
+      - retencion_reportes_dias: conservar reportes bajo demanda hasta N días (default 30)
+
+    PRESERVADOS siempre: dashboard.html, apurisk_archive.db, reportes_caso/
+    """
+    try:
+        from .main import _limpiar_archivos_viejos
+    except ImportError:
+        from apurisk.main import _limpiar_archivos_viejos
+    try:
+        eliminados = _limpiar_archivos_viejos(
+            OUTPUT_DIR,
+            retencion_snapshots=retencion_snapshots,
+            retencion_dashboards=retencion_dashboards,
+            retencion_reportes_dias=retencion_reportes_dias,
+        )
+        # Calcular espacio liberado aproximado
+        return {
+            "status": "ok",
+            "archivos_eliminados": eliminados,
+            "retencion": {
+                "snapshots": retencion_snapshots,
+                "dashboards": retencion_dashboards,
+                "reportes_dias": retencion_reportes_dias,
+            },
+            "nota": "Reportes en /reportes_caso/ (riesgo minero) se preservan siempre.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en limpieza: {e}")
+
+
 @app.get("/api/buscar")
 async def buscar(
     keyword: Optional[str] = Query(None, description="Palabra clave"),

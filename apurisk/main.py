@@ -253,12 +253,95 @@ def analizar(data: dict, config: dict) -> dict:
             "matriz": matriz, "alertas": alertas, "twitter_stats": twitter_stats}
 
 
+def _limpiar_archivos_viejos(out_dir: Path, retencion_snapshots: int = 5,
+                                retencion_dashboards: int = 3,
+                                retencion_reportes_dias: int = 30) -> int:
+    """Limpieza retentiva: mantiene solo lo esencial.
+
+    - apurisk_snapshot_*.json: últimos N (default 5)
+    - apurisk_dashboard_*.html: últimos N (default 3)
+    - Reportes bajo demanda (24h, alertas, ejecutivo, diario, semanal):
+      conserva solo los de los últimos N días (default 30)
+    - PRESERVADOS siempre: dashboard.html, apurisk_archive.db, reportes_caso/
+
+    Returns: número de archivos eliminados.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    eliminados = 0
+
+    # Snapshots JSON: mantener últimos N
+    snapshots = sorted(out_dir.glob("apurisk_snapshot_*.json"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+    for f in snapshots[retencion_snapshots:]:
+        try:
+            f.unlink()
+            eliminados += 1
+        except Exception:
+            pass
+
+    # Dashboards HTML: mantener últimos N (sin contar dashboard.html canónico)
+    dashboards = sorted(out_dir.glob("apurisk_dashboard_*.html"),
+                         key=lambda p: p.stat().st_mtime, reverse=True)
+    for f in dashboards[retencion_dashboards:]:
+        try:
+            f.unlink()
+            eliminados += 1
+        except Exception:
+            pass
+
+    # Reportes bajo demanda con más de N días: eliminar
+    limite = _dt.now().timestamp() - retencion_reportes_dias * 86400
+    patrones = [
+        "apurisk_reporte_24h_*.html", "apurisk_reporte_24h_*.docx",
+        "apurisk_alertas_*.html", "apurisk_alertas_*.docx",
+        "apurisk_ejecutivo_*.docx",
+        "apurisk_diario_*.pdf", "apurisk_semanal_*.pdf",
+        "apurisk_ejecutivo_diario_*.docx", "apurisk_ejecutivo_diario_*.pdf",
+        # reportes legacy generados antes del cambio (también los limpiamos)
+        "reporte_24h_*.html", "reporte_24h_*.docx",
+        "reporte_alertas_*.html", "reporte_alertas_*.docx",
+        "reporte_ejecutivo_*.docx", "reporte_ejecutivo_*.pdf",
+        "reporte_diario_*.pdf", "reporte_semanal_*.pdf",
+    ]
+    for patron in patrones:
+        for f in out_dir.glob(patron):
+            try:
+                if f.stat().st_mtime < limite:
+                    f.unlink()
+                    eliminados += 1
+            except Exception:
+                pass
+
+    if eliminados > 0:
+        print(f"  · LIMPIEZA: {eliminados} archivos antiguos eliminados del disco")
+    return eliminados
+
+
 def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int = 1800) -> dict:
+    """Generación MINIMALISTA por ciclo del scheduler.
+
+    Solo genera lo estrictamente necesario para servir el dashboard:
+      - apurisk_snapshot_{ts}.json (alimenta el archive SQLite y endpoints)
+      - apurisk_dashboard_{ts}.html (el HTML que sirve /dashboard)
+      - dashboard.html (copia canónica)
+      - apurisk_archive.db (SQLite con histórico)
+
+    Los reportes 24h, alertas, ejecutivo, diario, semanal NO se generan
+    automáticamente — se crean solo cuando el usuario los pide vía
+    endpoints `/api/reporte/{tipo}/{formato}` o botones del dashboard.
+
+    Esto reduce el uso de disco de ~140 MB/día → ~30 MB/día y libera
+    significativa memoria por ciclo.
+    """
     import gc
-    gc.collect()  # liberar memoria antes de generar PDFs/DOCX/HTML pesados
-    print("\n[3/3] Generando reportes…")
+    gc.collect()
+    print("\n[3/3] Generando reportes (modo minimalista: solo dashboard + snapshot)…")
     out_dir = Path(__file__).resolve().parent.parent / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Limpieza retentiva ANTES de generar (libera espacio para nuevos archivos)
+    _limpiar_archivos_viejos(out_dir)
+
     ts = now_pe().strftime("%Y%m%d_%H%M")
     paths = {}
 
@@ -315,86 +398,12 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
     paths["dashboard_html"] = str(dash_path)
     print(f"  · DASHBOARD: {dash_path.name}")
 
-    # 2) Reporte 24h (HTML + DOCX)
-    r24_html = out_dir / f"apurisk_reporte_24h_{ts}.html"
-    generar_reporte_24h_html(str(r24_html), art_24, conf_24, alertas_24, an["riesgo"], an["matriz"], modo)
-    paths["reporte_24h_html"] = str(r24_html)
-    print(f"  · REPORTE 24h HTML: {r24_html.name}")
-
-    r24_docx = out_dir / f"apurisk_reporte_24h_{ts}.docx"
-    generar_reporte_24h_docx(str(r24_docx), art_24, conf_24, alertas_24, an["riesgo"], an["matriz"], modo)
-    paths["reporte_24h_docx"] = str(r24_docx)
-    print(f"  · REPORTE 24h DOCX: {r24_docx.name}")
-
-    # 3) Alertas inmediatas (HTML + DOCX)
-    alert_html = out_dir / f"apurisk_alertas_{ts}.html"
-    generar_alertas_html(str(alert_html), an["alertas"], modo)
-    paths["alertas_html"] = str(alert_html)
-    print(f"  · ALERTAS HTML: {alert_html.name}")
-
-    alert_docx = out_dir / f"apurisk_alertas_{ts}.docx"
-    generar_alertas_docx(str(alert_docx), an["alertas"], modo)
-    paths["alertas_docx"] = str(alert_docx)
-    print(f"  · ALERTAS DOCX: {alert_docx.name}")
-
-    # 4) Reporte ejecutivo completo (DOCX clásico)
-    docx_path = out_dir / f"apurisk_ejecutivo_{ts}.docx"
-    generar_reporte_docx(
-        str(docx_path),
-        data["medios"] + data["gdelt"], data["conflictos"], data["proyectos"],
-        an["entidades"], an["temas"], an["riesgo"], modo=modo, ventana=24,
-    )
-    paths["ejecutivo_docx"] = str(docx_path)
-    print(f"  · EJECUTIVO DOCX: {docx_path.name}")
-
-    # 5) Reporte diario PDF
-    try:
-        pdf_diario = out_dir / f"apurisk_diario_{ts}.pdf"
-        # construye snapshot dict equivalente al JSON para el PDF
-        snap_for_pdf = {
-            "generado": now_pe_iso(),
-            "modo": modo,
-            "n_articulos": len(data["todos"]),
-            "n_articulos_24h": len(art_24),
-            "n_conflictos": len(data["conflictos"]),
-            "n_proyectos": len(data["proyectos"]),
-            "n_tweets": len(tweets),
-            "riesgo": an["riesgo"],
-            "matriz_riesgo": an["matriz"],
-            "alertas": an["alertas"],
-            "articulos": [a.to_dict() for a in data["todos"]],
-            "conflictos": [c.to_dict() for c in data["conflictos"]],
-        }
-        generar_reporte_diario_pdf(str(pdf_diario), snap_for_pdf)
-        paths["diario_pdf"] = str(pdf_diario)
-        print(f"  · DIARIO PDF: {pdf_diario.name}")
-    except Exception as e:
-        print(f"  [warn] PDF diario falló: {e}")
-
-    # 6) Reporte semanal PDF
-    try:
-        pdf_semanal = out_dir / f"apurisk_semanal_{ts}.pdf"
-        generar_reporte_semanal_pdf(str(pdf_semanal), str(out_dir))
-        paths["semanal_pdf"] = str(pdf_semanal)
-        print(f"  · SEMANAL PDF: {pdf_semanal.name}")
-    except Exception as e:
-        print(f"  [warn] PDF semanal falló: {e}")
-
-    # 7) REPORTE EJECUTIVO DIARIO (visualmente atractivo, ≤3 páginas, foco tendencias)
-    try:
-        ejec_docx = out_dir / f"apurisk_ejecutivo_diario_{ts}.docx"
-        generar_ejecutivo_docx(str(ejec_docx), snap_for_pdf, str(out_dir))
-        paths["ejecutivo_diario_docx"] = str(ejec_docx)
-        print(f"  · EJECUTIVO DIARIO DOCX: {ejec_docx.name}")
-    except Exception as e:
-        print(f"  [warn] Ejecutivo diario DOCX falló: {e}")
-    try:
-        ejec_pdf = out_dir / f"apurisk_ejecutivo_diario_{ts}.pdf"
-        generar_ejecutivo_pdf(str(ejec_pdf), snap_for_pdf, str(out_dir))
-        paths["ejecutivo_diario_pdf"] = str(ejec_pdf)
-        print(f"  · EJECUTIVO DIARIO PDF: {ejec_pdf.name}")
-    except Exception as e:
-        print(f"  [warn] Ejecutivo diario PDF falló: {e}")
+    # === SECCIONES 2-7 DESACTIVADAS (mayo 2026) ===
+    # Los reportes 24h, alertas, ejecutivo, diario, semanal NO se generan
+    # automáticamente para reducir uso de disco y memoria.
+    # Se crean BAJO DEMANDA via endpoints /api/reporte/{tipo}/{formato}
+    # cuando el usuario pulsa "Generar AHORA" en la pestaña Descargas.
+    # Esto reduce uso de disco de ~140 MB/día a ~30 MB/día.
 
     # 4.5) Archivar snapshot en SQLite (base de datos OSINT histórica)
     try:

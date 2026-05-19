@@ -1831,12 +1831,36 @@ def generar_dashboard_html(
     <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
       <h3 style="margin-bottom: 6px;">📥 Centro de descargas <span class="badge">{total_descargas} archivos</span></h3>
       <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
-        Reportes generados automáticamente en cada ciclo de monitoreo (cada {refresh_minutos} min en modo live).
-        Disponibles en formato <strong>PDF</strong> (diario y semanal), <strong>DOCX</strong> (Word imprimible),
-        <strong>HTML</strong> (versión web) y <strong>JSON</strong> (datos crudos para BI).
-        Click en cualquier archivo para descargarlo.
+        📌 <strong>Reportes bajo demanda</strong>: usa los botones "Generar AHORA" para crear
+        cualquier reporte (24h, Alertas, Ejecutivo, Diario, Semanal) en el formato que necesites.
+        Los archivos generados quedan acá para descarga rápida.
+        <br><br>
+        💾 <strong>Optimización de disco</strong>: el sistema solo guarda el dashboard.html
+        actual y los últimos snapshots para el archivo histórico SQLite. Los reportes
+        descargables se crean únicamente cuando los pides — sin acumulación automática.
+        <br><br>
+        🧹 <a href="#" onclick="limpiarArchivos(); return false;" style="color:var(--accent);">
+          Limpiar archivos antiguos del disco
+        </a> · Conserva los snapshots más recientes y los reportes &lt;30 días.
       </div>
     </div>
+    <script>
+      async function limpiarArchivos() {{
+        if (!confirm('¿Limpiar archivos antiguos del disco? Conserva los 5 snapshots más recientes, 3 dashboards y reportes <30 días.')) return;
+        try {{
+          const r = await fetch('/api/limpiar-archivos', {{method: 'POST'}});
+          const d = await r.json();
+          if (r.ok) {{
+            alert('Limpieza completada. ' + d.archivos_eliminados + ' archivos eliminados.');
+            location.reload();
+          }} else {{
+            alert('Error: ' + (d.detail || 'desconocido'));
+          }}
+        }} catch (e) {{
+          alert('Error: ' + e.message);
+        }}
+      }}
+    </script>
 
     <div class="grid grid-12">
       <div class="span-12">
