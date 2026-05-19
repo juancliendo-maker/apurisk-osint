@@ -121,6 +121,10 @@ def _coerce(v):
 
 
 def recolectar(config: dict, demo: bool = True) -> dict:
+    # Garbage collection agresivo al inicio del ciclo para liberar memoria
+    # del ciclo anterior (especialmente importante en plan Render Starter de 512MB)
+    import gc
+    gc.collect()
     print("\n[1/3] Recolección de datos OSINT…")
     medios_articulos = []
     feeds = config.get("medios_rss", [])
@@ -206,6 +210,8 @@ def recolectar(config: dict, demo: bool = True) -> dict:
 
 
 def analizar(data: dict, config: dict) -> dict:
+    import gc
+    gc.collect()  # liberar memoria de recolección antes de análisis pesado
     print("\n[2/3] Análisis…")
     art = data["todos"]
     entidades = extraer_entidades(art)
@@ -248,6 +254,8 @@ def analizar(data: dict, config: dict) -> dict:
 
 
 def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int = 1800) -> dict:
+    import gc
+    gc.collect()  # liberar memoria antes de generar PDFs/DOCX/HTML pesados
     print("\n[3/3] Generando reportes…")
     out_dir = Path(__file__).resolve().parent.parent / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
