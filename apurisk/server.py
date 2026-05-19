@@ -133,80 +133,28 @@ async def _scheduler_loop():
         await asyncio.sleep(REFRESH_SECONDS)
 
 
-async def _scheduler_semanal_minera():
-    """Loop que ejecuta cada lunes 06:00 AM Lima:
-    - Genera reporte semanal de Riesgo Minero genérico nacional
-    - Lo archiva en SQLite
-
-    Adicionalmente, el primer lunes de cada mes consolida los 4 reportes
-    del mes previo en un único reporte mensual (TODO Fase futura).
-    """
-    from datetime import timedelta as _td
-    print("[scheduler-minera] iniciado · proxima corrida: proximo lunes 06:00 PET")
-    while True:
-        try:
-            ahora = now_pe()
-            # Calcular próximo lunes 06:00 PET
-            # weekday(): lunes=0, ..., domingo=6
-            dias_hasta_lunes = (7 - ahora.weekday()) % 7
-            if dias_hasta_lunes == 0 and ahora.hour >= 6:
-                # Ya pasó la hora hoy lunes — programar para el próximo lunes
-                dias_hasta_lunes = 7
-            proximo = ahora.replace(hour=6, minute=0, second=0, microsecond=0) \
-                            + _td(days=dias_hasta_lunes)
-            espera_seg = (proximo - ahora).total_seconds()
-            print(f"[scheduler-minera] próximo reporte: {proximo.isoformat()} "
-                  f"(en {int(espera_seg/3600)}h {int((espera_seg%3600)/60)}m)")
-            await asyncio.sleep(max(60, espera_seg))
-
-            # Generar reporte minero genérico nacional
-            print(f"[scheduler-minera] generando reporte semanal a las {now_pe_iso()}")
-            payload = {
-                "empresa": "Sector Minero Peruano (reporte semanal automático)",
-                "alcance": "nacional",
-                "periodo_dias": 7,
-                "solicitante": "Generación automática lunes 6am",
-            }
-            # Llamar al pipeline interno (sin pasar por HTTP)
-            snap = None
-            snap_path = _ultimo_snapshot_path()
-            if snap_path:
-                with open(snap_path, encoding="utf-8") as f:
-                    snap = json.load(f)
-            archive = None
-            db_path = OUTPUT_DIR / "apurisk_archive.db"
-            if db_path.exists():
-                archive = ApuriskArchive(str(db_path))
-            try:
-                analisis = analizar_riesgo_minera(
-                    payload, archive=archive, snapshot_actual=snap,
-                )
-                meta = analisis["metadata"]
-                ts = now_pe().strftime("%Y%m%d_%H%M%S")
-                filename = (f"riesgo_minera_semanal_W{meta['semana_iso']}_"
-                            f"{meta['año']}_{ts}.pdf")
-                pdf_path = REPORTES_DIR / filename
-                generar_reporte_minera_pdf(str(pdf_path), analisis)
-                if archive:
-                    archive.archivar_reporte_caso(
-                        reporte_meta=meta,
-                        pdf_path=str(pdf_path),
-                        json_resumen=analisis["seccion_1_resumen_ejecutivo"],
-                        parametros=payload,
-                    )
-                print(f"[scheduler-minera] OK reporte generado: {filename}")
-            except Exception as e:
-                print(f"[scheduler-minera] ERROR generando reporte: {e}")
-        except Exception as e:
-            print(f"[scheduler-minera] ERROR ciclo: {e}")
-            await asyncio.sleep(3600)  # espera 1h en caso de error grave
+# =============================================================
+# SCHEDULER SEMANAL MINERO — DESACTIVADO (mayo 2026)
+# =============================================================
+# Decisión del cliente: solo se archivan los reportes generados manualmente
+# desde el formulario del dashboard. El scheduler automático que generaba
+# un reporte cada lunes 06:00 AM PET y lo archivaba en SQLite + disco
+# ha sido desactivado para mantener el archivo histórico curado por el
+# analista (no contaminado con reportes genéricos automáticos).
+#
+# Si en el futuro se requiere reactivar (ej: reporte automático de
+# referencia para clientes piloto), descomentar la función
+# _scheduler_semanal_minera y la línea asyncio.create_task() en _startup.
+# =============================================================
 
 
 @app.on_event("startup")
 async def _startup():
-    # Lanzar los schedulers como tareas background
+    # Lanzar el scheduler OSINT principal (recolección RSS cada 30 min)
     asyncio.create_task(_scheduler_loop())
-    asyncio.create_task(_scheduler_semanal_minera())
+    # NOTA: scheduler semanal minero DESACTIVADO. Solo reportes manuales
+    # generados desde el formulario se archivan.
+    # asyncio.create_task(_scheduler_semanal_minera())
 
 
 # ======================================================================

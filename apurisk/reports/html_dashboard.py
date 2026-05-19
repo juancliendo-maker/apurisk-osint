@@ -1684,14 +1684,16 @@ def generar_dashboard_html(
   <!-- TAB: RIESGO MINERO — formulario + reportes archivados -->
   <section class="tab-panel" id="tab-riesgo_minero">
     <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
-      <h3 style="margin-bottom: 6px;">⛏️ Riesgo Político Minero · Reportes Semanales</h3>
+      <h3 style="margin-bottom: 6px;">⛏️ Riesgo Político Minero · Reportes Bajo Demanda</h3>
       <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
-        Producto comercial APURISK: reporte ejecutivo de 12 secciones (~15 páginas PDF) con análisis
-        OSINT estructurado del sector minero peruano. Incluye 8 factores P×I propietarios, mapeo de
-        stakeholders, escenarios prospectivos y recomendaciones operativas accionables.
+        Producto comercial APURISK: reporte ejecutivo de hasta 23 páginas con 13 factores P×I
+        propietarios mineros, matriz visual, datos contundentes del sector, mapeo de stakeholders
+        ampliados (formales + ilícitos + sociales + ONGs + internacionales), alertas tempranas
+        semaforizadas, escenarios prospectivos y recomendaciones operativas por plazo (0-7d / 8-30d / 31-90d).
         <br><br>
-        🗓️ <strong>Generación automática:</strong> cada lunes 06:00 AM Lima (PET).
-        Los reportes se almacenan en disco persistente y quedan disponibles para descarga histórica.
+        📥 <strong>Generación bajo demanda:</strong> los reportes se generan cuando el analista
+        completa el formulario y se almacenan en disco persistente para descarga posterior.
+        Cada reporte queda registrado en el archivo histórico con su hipótesis, URLs y documentos adjuntos.
       </div>
     </div>
 
@@ -1802,12 +1804,13 @@ def generar_dashboard_html(
 
         <h3 style="margin-top:20px;">⚙️ Configuración del producto</h3>
         <div style="margin-top:10px; font-size:12.5px; color:var(--txt-1); line-height:1.6;">
-          • <strong>Plantilla:</strong> Genérica nacional<br>
-          • <strong>Factores propietarios:</strong> 8 dimensiones P×I mineros<br>
-          • <strong>Secciones del reporte:</strong> 12 (~15 páginas PDF)<br>
-          • <strong>Frecuencia automática:</strong> Lunes 06:00 AM PET<br>
-          • <strong>Storage:</strong> Disco persistente Render<br>
-          • <strong>Consolidación mensual:</strong> En desarrollo (Fase 8)
+          • <strong>Plantilla:</strong> Genérica nacional configurable<br>
+          • <strong>Factores propietarios:</strong> 13 dimensiones P×I mineras avanzadas<br>
+          • <strong>Secciones del reporte:</strong> 17 (~23 páginas PDF)<br>
+          • <strong>Inputs del analista:</strong> hipótesis + URLs + documentos PDF/DOCX<br>
+          • <strong>Generación:</strong> Bajo demanda (solo manual)<br>
+          • <strong>Storage:</strong> Disco persistente Render (5GB)<br>
+          • <strong>Archivo histórico:</strong> Solo reportes generados manualmente
         </div>
       </div>
     </div>
@@ -2134,10 +2137,10 @@ python -m http.server 8080 --directory output
         const ultimoFmt = ultimo !== '—' ? new Date(ultimo).toLocaleString('es-PE') : '—';
         statsBox.innerHTML = `
           • <strong>Total reportes archivados:</strong> ${{total}}<br>
-          • <strong>Reportes mineros semanales:</strong> ${{reportes.length}}<br>
+          • <strong>Reportes mineros manuales:</strong> ${{reportes.length}}<br>
           • <strong>Último reporte generado:</strong> ${{ultimoFmt}}<br>
           • <strong>Plantilla activa:</strong> riesgo_minera_semanal<br>
-          • <strong>Próximo automático:</strong> Lunes 06:00 AM PET
+          • <strong>Modo:</strong> Solo bajo demanda (manual)
         `;
       }}
 
