@@ -15,5 +15,9 @@ reportlab==4.2.5
 jinja2==3.1.4
 pyyaml==6.0.2
 
-# Extracción de texto de documentos adjuntos al análisis de caso
-pdfplumber==0.11.4
+# Extracción de texto de PDFs adjuntos al análisis de caso.
+# Usamos pypdf (sucesor moderno de PyPDF2) en lugar de pdfplumber porque:
+# - pypdf: ~3MB, ~50MB RAM en uso (suficiente para texto plano)
+# - pdfplumber: ~30MB, ~150MB RAM (arrastra Pillow + pdfminer.six,
+#   provoca OOM en plan Render Starter de 512MB)
+pypdf==5.1.0

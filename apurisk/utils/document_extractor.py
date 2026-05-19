@@ -24,27 +24,29 @@ ACCEPTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".markdown"}
 
 
 def extract_from_pdf(file_bytes: bytes) -> str:
-    """Extrae texto de un PDF usando pdfplumber.
+    """Extrae texto de un PDF usando pypdf (liviano, ~50MB RAM).
 
-    Si pdfplumber no está disponible, retorna mensaje de error y string vacío.
+    Si pypdf no está disponible, retorna string vacío (el endpoint
+    sigue funcionando con DOCX/TXT/MD).
     """
     try:
-        import pdfplumber
+        from pypdf import PdfReader
     except ImportError:
         return ""
 
     try:
+        reader = PdfReader(io.BytesIO(file_bytes))
         text_pages = []
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                if i >= 50:  # max 50 páginas para no saturar
-                    break
-                try:
-                    t = page.extract_text() or ""
-                    if t.strip():
-                        text_pages.append(t)
-                except Exception:
-                    continue
+        max_paginas = 50  # límite de seguridad
+        for i, page in enumerate(reader.pages):
+            if i >= max_paginas:
+                break
+            try:
+                t = page.extract_text() or ""
+                if t.strip():
+                    text_pages.append(t)
+            except Exception:
+                continue
         return "\n\n".join(text_pages)
     except Exception as e:
         print(f"  [warn] extract_from_pdf: {e}")
