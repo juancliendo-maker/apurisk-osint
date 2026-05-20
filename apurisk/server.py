@@ -150,6 +150,25 @@ async def _scheduler_loop():
 
 @app.on_event("startup")
 async def _startup():
+    # Limpieza AGRESIVA de archivos antiguos al iniciar el servicio.
+    # Esto elimina la basura acumulada de deploys anteriores SIN esperar
+    # al primer ciclo del scheduler (que tarda hasta 30 min en correr).
+    try:
+        try:
+            from .main import _limpiar_archivos_viejos
+        except ImportError:
+            from apurisk.main import _limpiar_archivos_viejos
+        n = _limpiar_archivos_viejos(
+            OUTPUT_DIR,
+            retencion_snapshots=5,
+            retencion_dashboards=3,
+            retencion_reportes_dias=30,
+        )
+        if n > 0:
+            print(f"[startup] {n} archivos antiguos eliminados del disco")
+    except Exception as e:
+        print(f"[startup] limpieza inicial falló: {e}")
+
     # Lanzar el scheduler OSINT principal (recolección RSS cada 30 min)
     asyncio.create_task(_scheduler_loop())
     # NOTA: scheduler semanal minero DESACTIVADO. Solo reportes manuales

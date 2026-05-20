@@ -28,11 +28,12 @@ class RSSMediaCollector(BaseCollector):
             import feedparser
             parsed = feedparser.parse(text)
             articles = []
-            # Limitar a 15 entries por feed (era 30) para reducir uso de memoria.
-            # Con 78 fuentes activas, esto reduce la huella RAM del scheduler a la
-            # mitad sin perder cobertura significativa (eventos relevantes son
-            # típicamente los más recientes que aparecen al principio del feed).
-            for e in parsed.entries[:15]:
+            # Items por feed: 25 (compromiso entre cobertura y memoria).
+            # - 30 (original): mejor cobertura pero RAM al límite (OOM)
+            # - 15 (intento previo): muy agresivo, perdió cobertura de eventos
+            #   políticos relevantes del día (sicariato, bloqueos de carretera)
+            # - 25 (actual): mantiene ~80% de cobertura con ~20% menos memoria
+            for e in parsed.entries[:25]:
                 # normalizar published a ISO 8601
                 pub_iso = self._normalize_pub(e)
                 articles.append(
@@ -137,7 +138,7 @@ class RSSMediaCollector(BaseCollector):
                     )
         except ET.ParseError:
             pass
-        return articles[:15]  # límite alineado con feedparser (memoria)
+        return articles[:25]  # alineado con feedparser (cobertura vs memoria)
 
     def _demo_articles(self) -> list[Article]:
         """Datos sintéticos realistas peruanos para modo demo."""
