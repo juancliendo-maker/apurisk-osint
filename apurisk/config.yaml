@@ -536,15 +536,15 @@ internacional:
 # Registro: https://acleddata.com/register/ (myACLED portal)
 acled_country: "Peru"
 acled_ventana_dias: 14
-# Limit reducido de 500 a 100 para minimizar memoria en plan Render Starter.
-# 100 eventos cubren 2 semanas de actividad típica en Perú con holgura.
-acled_limit: 100
+# Limit restaurado a 500 tras upgrade Render Standard (2GB RAM).
+# Cubre todo el universo de eventos georreferenciados ACLED para Perú.
+acled_limit: 500
 # acled_event_types: ["Protests", "Riots", "Violence against civilians", "Battles"]
 
 # Clasificador temático: crimen organizado, narcotráfico, minería ilegal,
 # tala ilegal, contrabando, migración irregular, extorsión/sicariato.
 crimen_ventana_dias: 14
-crimen_max_items: 50          # reducido de 100 (memoria)
+crimen_max_items: 100         # restaurado al óptimo tras upgrade Standard
 
 # Análisis - parámetros
 analisis:

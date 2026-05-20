@@ -28,12 +28,10 @@ class RSSMediaCollector(BaseCollector):
             import feedparser
             parsed = feedparser.parse(text)
             articles = []
-            # Items por feed: 25 (compromiso entre cobertura y memoria).
-            # - 30 (original): mejor cobertura pero RAM al límite (OOM)
-            # - 15 (intento previo): muy agresivo, perdió cobertura de eventos
-            #   políticos relevantes del día (sicariato, bloqueos de carretera)
-            # - 25 (actual): mantiene ~80% de cobertura con ~20% menos memoria
-            for e in parsed.entries[:25]:
+            # Items por feed: 30. Restaurado al óptimo tras upgrade Render Standard
+            # (2GB RAM, 1 CPU dedicado). Con 78 fuentes: ~2,340 items por ciclo,
+            # máxima cobertura de eventos políticos peruanos del día.
+            for e in parsed.entries[:30]:
                 # normalizar published a ISO 8601
                 pub_iso = self._normalize_pub(e)
                 articles.append(
@@ -138,7 +136,7 @@ class RSSMediaCollector(BaseCollector):
                     )
         except ET.ParseError:
             pass
-        return articles[:25]  # alineado con feedparser (cobertura vs memoria)
+        return articles[:30]  # alineado con feedparser (cobertura máxima)
 
     def _demo_articles(self) -> list[Article]:
         """Datos sintéticos realistas peruanos para modo demo."""
