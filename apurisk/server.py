@@ -279,6 +279,48 @@ async def refresh():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/intelligence/brief")
+async def intelligence_brief(dias_baseline: int = Query(28, ge=7, le=180)):
+    """Strategic Intelligence Brief — 8 outputs analíticos.
+
+    Devuelve el producto analítico completo:
+      - strategic_assessment (narrativa de analista senior)
+      - convergencias detectadas
+      - anomalías estadísticas
+      - silencios institucionales inusuales
+      - indicators_warnings (I&W de doctrina inteligencia)
+      - stakeholder_movement (quién se movió esta semana)
+      - comparative_benchmark (vs histórico propio y región andina)
+      - strategic_recommendation (acción priorizada)
+
+    Args:
+      dias_baseline: ventana histórica para baselines (default 28 días).
+    """
+    snap_path = _ultimo_snapshot_path()
+    if not snap_path:
+        raise HTTPException(status_code=503, detail="Sin snapshot disponible.")
+    with open(snap_path, encoding="utf-8") as f:
+        snap = json.load(f)
+    archive = None
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if db_path.exists():
+        try:
+            archive = ApuriskArchive(str(db_path))
+        except Exception:
+            pass
+    try:
+        try:
+            from .analyzers.intelligence_engine import generar_intelligence_brief
+        except ImportError:
+            from apurisk.analyzers.intelligence_engine import generar_intelligence_brief
+        brief = generar_intelligence_brief(snap, archive=archive,
+                                              dias_baseline=dias_baseline)
+        return brief
+    except Exception as e:
+        raise HTTPException(status_code=500,
+                              detail=f"Error generando intelligence brief: {e}")
+
+
 @app.post("/api/limpiar-archivos")
 async def limpiar_archivos(
     retencion_snapshots: int = Query(5, ge=1, le=100),

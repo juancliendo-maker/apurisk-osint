@@ -595,6 +595,209 @@ def _portada(analisis, styles):
     return items
 
 
+def _seccion_strategic_intelligence(analisis, styles):
+    """Sección PREMIUM: Strategic Intelligence Brief.
+
+    Es el corazón analítico del reporte. Se renderiza inmediatamente
+    después de la portada para máximo impacto. Diferencia este reporte
+    de un simple monitoreo OSINT.
+    """
+    brief = analisis.get("intelligence_brief")
+    if not brief:
+        return []
+
+    items = [
+        Paragraph("Strategic Intelligence Brief", styles["h1"]),
+        Paragraph(
+            "<i>Análisis interpretativo siguiendo doctrina clásica de inteligencia "
+            "estratégica. Producido por APURISK Intelligence Engine sobre histórico "
+            f"de {brief.get('ventana_baseline_dias', 28)} días.</i>",
+            styles["body_small"]
+        ),
+        Spacer(1, 0.3 * cm),
+    ]
+
+    # 1. Strategic Assessment (la narrativa principal)
+    items.append(Paragraph("Strategic Assessment", styles["h2"]))
+    items.append(Paragraph(brief.get("strategic_assessment", "—"), styles["callout"]))
+    items.append(Spacer(1, 0.3 * cm))
+
+    # 2. Convergencias detectadas
+    convergencias = brief.get("convergencias", [])
+    if convergencias:
+        items.append(Paragraph("Convergencias detectadas", styles["h2"]))
+        for c in convergencias[:2]:
+            dir_label = "📈 Al alza" if c["direccion"] == "alza" else "📉 A la baja"
+            items.append(Paragraph(
+                f"<b>{dir_label}: {c['n_factores']} factores convergentes</b> "
+                f"(delta promedio: {c['delta_promedio']:+} puntos)",
+                styles["body"]
+            ))
+            items.append(Paragraph(c["interpretacion"], styles["body_small"]))
+            # Lista de factores
+            nombres = [f"{f['nombre']} ({f['delta']:+.1f})" for f in c["factores"][:5]]
+            items.append(Paragraph(
+                f"<font size=8 color='#666'>Factores: {' · '.join(nombres)}</font>",
+                styles["body_small"]
+            ))
+            items.append(Spacer(1, 0.2 * cm))
+    else:
+        items.append(Paragraph("Convergencias detectadas", styles["h2"]))
+        items.append(Paragraph(
+            "<i>Sin convergencias significativas en la ventana de análisis. "
+            "Factores de riesgo se mueven en patrones individuales no sistémicos.</i>",
+            styles["body_small"]
+        ))
+        items.append(Spacer(1, 0.2 * cm))
+
+    # 3. Anomalías estadísticas
+    anomalias = brief.get("anomalias", [])
+    if anomalias:
+        items.append(Paragraph("Anomalías estadísticas detectadas", styles["h2"]))
+        for a in anomalias[:3]:
+            sign = "↑" if a["direccion"] == "alza" else "↓"
+            items.append(Paragraph(
+                f"<b>{sign} {a['nombre']}</b>: desviación de "
+                f"{abs(a['z_score']):.1f}σ del baseline histórico.",
+                styles["body"]
+            ))
+            items.append(Paragraph(a["interpretacion"], styles["body_small"]))
+            items.append(Spacer(1, 0.15 * cm))
+
+    # 4. Indicators & Warnings
+    iw = brief.get("indicators_warnings", {})
+    if iw:
+        items.append(Spacer(1, 0.2 * cm))
+        items.append(Paragraph("Indicators & Warnings (I&W)", styles["h2"]))
+        items.append(Paragraph(
+            "<i>Indicadores observables que predicen escenarios. Doctrina clásica "
+            "de inteligencia estratégica (CIA, MI6).</i>",
+            styles["body_small"]
+        ))
+        for eid, e in iw.items():
+            color_alerta = {"CRÍTICO": "#c53030", "ALTO": "#dd6b20",
+                            "MEDIO": "#d69e2e", "BAJO": "#38a169"}.get(
+                                e.get("nivel_alerta", "BAJO"), "#666")
+            items.append(Paragraph(
+                f"<font color='{color_alerta}'><b>● {e['nombre']}</b></font> "
+                f"— {e['n_activos']}/{e['n_total']} indicadores activos "
+                f"({e['porcentaje_activacion']:.0f}%) · Nivel: <b>{e['nivel_alerta']}</b>",
+                styles["body_small"]
+            ))
+            # Solo mostrar indicadores ACTIVOS (los importantes)
+            for ind in e.get("indicadores", []):
+                if ind["estado"] == "activo":
+                    items.append(Paragraph(
+                        f"&nbsp;&nbsp;&nbsp;✅ {ind['texto']}",
+                        styles["body_small"]
+                    ))
+        items.append(Spacer(1, 0.2 * cm))
+
+    # 5. Silencios institucionales
+    silencios = brief.get("silencios_inusuales", [])
+    if silencios:
+        items.append(Paragraph("Silencios institucionales detectados", styles["h2"]))
+        items.append(Paragraph(
+            "<i>Actores institucionales con cobertura mediática anormalmente baja. "
+            "El silencio suele preceder a reposicionamientos o anuncios.</i>",
+            styles["body_small"]
+        ))
+        for s in silencios[:5]:
+            items.append(Paragraph(
+                f"• <b>{s['actor']}</b>: {s['menciones_periodo']} menciones vs "
+                f"{s['promedio_semanal_historico']}/sem promedio histórico "
+                f"(ratio {s['ratio']:.0%})",
+                styles["body_small"]
+            ))
+        items.append(Spacer(1, 0.2 * cm))
+
+    # 6. Stakeholder movement
+    sm = brief.get("stakeholder_movement", {})
+    aumentos = sm.get("con_aumento", [])
+    descensos = sm.get("con_descenso", [])
+    if aumentos or descensos:
+        items.append(Paragraph("Stakeholders en movimiento esta semana", styles["h2"]))
+        if aumentos:
+            items.append(Paragraph("<b>↑ Incremento de actividad:</b>", styles["body_small"]))
+            for s in aumentos[:5]:
+                items.append(Paragraph(
+                    f"• <b>{s['actor']}</b>: +{s['cambio_pct']:.0f}% "
+                    f"({s['menciones_periodo']} vs {s['menciones_anterior']} previo)",
+                    styles["body_small"]
+                ))
+        if descensos:
+            items.append(Paragraph("<b>↓ Descenso de actividad:</b>", styles["body_small"]))
+            for s in descensos[:5]:
+                items.append(Paragraph(
+                    f"• <b>{s['actor']}</b>: {s['cambio_pct']:.0f}% "
+                    f"({s['menciones_periodo']} vs {s['menciones_anterior']} previo)",
+                    styles["body_small"]
+                ))
+        items.append(Spacer(1, 0.2 * cm))
+
+    # 7. Comparative Benchmark
+    bench = brief.get("comparative_benchmark", {})
+    if bench and bench.get("promedio_4_semanas") is not None:
+        items.append(Paragraph("Comparative Benchmark", styles["h2"]))
+        delta_4w = bench.get("delta_vs_4w", 0) or 0
+        delta_12w = bench.get("delta_vs_12w", 0) or 0
+        items.append(Paragraph(bench.get("interpretacion", "—"), styles["body"]))
+        rows = [
+            ["Métrica", "Valor"],
+            ["Score actual", f"{bench['score_actual']}/100 ({bench['nivel_actual']})"],
+            ["Promedio 4 semanas", f"{bench['promedio_4_semanas']:.1f}"],
+            ["Promedio 12 semanas", f"{bench.get('promedio_12_semanas', '—')}"],
+            ["Delta vs 4w", f"{delta_4w:+.1f}"],
+            ["Delta vs 12w", f"{delta_12w:+.1f}"],
+            ["Máximo 12w", f"{bench.get('max_12_semanas', '—')}"],
+            ["Posición histórica", str(bench.get('posicion_historica') or "—")],
+        ]
+        t = Table(rows, colWidths=[6 * cm, 9 * cm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), COLOR_AZUL_CORP),
+            ("TEXTCOLOR", (0, 0), (-1, 0), COLOR_BLANCO),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [COLOR_BLANCO, COLOR_GRIS_CLARO]),
+            ("BOX", (0, 0), (-1, -1), 0.5, COLOR_GRIS_BORDE),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, COLOR_GRIS_BORDE),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        items.append(t)
+        items.append(Spacer(1, 0.3 * cm))
+
+    # 8. Strategic Recommendation
+    reco = brief.get("strategic_recommendation", {})
+    if reco:
+        items.append(Paragraph("Strategic Recommendation", styles["h2"]))
+        contenido = [
+            Paragraph(f"<b>Acción priorizada:</b> {reco.get('accion_priorizada', '—')}",
+                       styles["body_small"]),
+            Paragraph(f"<b>Horizonte:</b> {reco.get('horizonte', '—')}",
+                       styles["body_small"]),
+            Paragraph(f"<b>Responsable sugerido:</b> {reco.get('responsable_sugerido', '—')}",
+                       styles["body_small"]),
+            Paragraph(f"<b>Costo de no actuar:</b> {reco.get('costo_no_actuar', '—')}",
+                       styles["body_small"]),
+            Paragraph(f"<b>Racional:</b> {reco.get('racional', '—')}",
+                       styles["body_small"]),
+        ]
+        t = Table([[c] for c in contenido], colWidths=[16 * cm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fffaf0")),
+            ("BOX", (0, 0), (-1, -1), 2, COLOR_AZUL_CORP),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        items.append(t)
+
+    return items
+
+
 def _seccion_hipotesis(analisis, styles):
     """Sección dedicada a la hipótesis del analista + URLs/docs aportados."""
     s = analisis.get("seccion_hipotesis", {})
@@ -862,9 +1065,10 @@ def _tabla_contenidos(styles):
     ]
     secciones = [
         ("Hallazgos Críticos · Portada", 1),
-        ("Hipótesis y Marco de Análisis", 3),
-        ("Datos Contundentes del Sector", 4),
-        ("Matriz P×I de Factores de Riesgo (visual)", 5),
+        ("Strategic Intelligence Brief (Premium)", 3),
+        ("Hipótesis y Marco de Análisis", 5),
+        ("Datos Contundentes del Sector", 6),
+        ("Matriz P×I de Factores de Riesgo (visual)", 7),
         ("1. Resumen ejecutivo", 7),
         ("2. Perfil de la operación monitoreada", 8),
         ("3. Pulso comunitario", 9),
@@ -1305,6 +1509,12 @@ def generar_reporte_minera_pdf(output_path: str, analisis: dict) -> str:
     story.append(PageBreak())
 
     # === NUEVAS SECCIONES PREMIUM (rediseño vendible mayo 2026) ===
+    # Strategic Intelligence Brief — el corazón analítico del reporte
+    # Se renderiza PRIMERO (post-portada) para máximo impacto ejecutivo
+    if analisis.get("intelligence_brief"):
+        story.extend(_seccion_strategic_intelligence(analisis, styles))
+        story.append(PageBreak())
+
     # Hipótesis del analista + URLs/docs aportados
     story.extend(_seccion_hipotesis(analisis, styles))
     story.append(PageBreak())

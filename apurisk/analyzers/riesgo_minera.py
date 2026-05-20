@@ -17,8 +17,10 @@ from typing import Optional
 
 try:
     from ..utils.timezone_pe import now_pe, now_pe_iso, fmt_pe, parse_to_pe
+    from .intelligence_engine import generar_intelligence_brief
 except ImportError:
     from apurisk.utils.timezone_pe import now_pe, now_pe_iso, fmt_pe, parse_to_pe
+    from apurisk.analyzers.intelligence_engine import generar_intelligence_brief
 
 
 # =====================================================================
@@ -314,6 +316,23 @@ def analizar_riesgo_minera(
     # --- Score global del sector ---
     score_global, nivel = _score_global_minera(factores_pxi, alertas_mineras, conf_mineros)
 
+    # --- INTELLIGENCE BRIEF (motor analítico de inteligencia) ---
+    # Genera 8 outputs analíticos: strategic assessment, convergencias,
+    # anomalías, silencios, I&W, stakeholder movement, benchmark, recomendación.
+    # Esto eleva el reporte de "monitoreo OSINT" a "intelligence product".
+    try:
+        # Construir snapshot ad-hoc con la matriz minera P×I propietaria
+        # (para que el motor de inteligencia opere sobre factores mineros,
+        # no los 16 generales del dashboard)
+        snap_minera = dict(snapshot_actual or {})
+        snap_minera["matriz_riesgo"] = factores_pxi
+        snap_minera["riesgo"] = {"global": score_global, "nivel": nivel}
+        intel_brief = generar_intelligence_brief(snap_minera, archive=archive,
+                                                    dias_baseline=28)
+    except Exception as e:
+        print(f"  [warn] intelligence_engine falló: {e}")
+        intel_brief = None
+
     # --- Construir el reporte estructurado completo ---
     return {
         "metadata": {
@@ -469,6 +488,11 @@ def analizar_riesgo_minera(
         "seccion_fuentes_bibliografia": _construir_bibliografia(
             arts_ventana, urls_procesadas, documentos_adjuntos
         ),
+
+        # INTELLIGENCE BRIEF — motor analítico de inteligencia
+        # 8 outputs: assessment, convergencias, anomalías, silencios, I&W,
+        # stakeholder movement, benchmark, recomendación estratégica
+        "intelligence_brief": intel_brief,
 
         # Aliases hacia atrás para compatibilidad
         "seccion_11_escenarios": _generar_escenarios(
