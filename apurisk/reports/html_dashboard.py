@@ -1473,6 +1473,9 @@ def generar_dashboard_html(
   <div class="tab active" data-tab="riesgos">Mapa de Riesgos</div>
   <div class="tab" data-tab="geo">Mapa Geográfico <span class="count">{len(map_markers)}</span></div>
   <div class="tab" data-tab="alertas">Alertas Inmediatas <span class="count">{kpi_alertas_crit}</span></div>
+  <a class="tab" href="/intelligence" target="_blank" rel="noopener" style="text-decoration:none; color:inherit; background:linear-gradient(90deg, rgba(56,189,248,0.15), rgba(167,139,250,0.10));">
+    🎯 Strategic Intelligence ↗
+  </a>
   <div class="tab" data-tab="r24h">Reporte 24h <span class="count">{kpi_articulos_24}</span></div>
   <div class="tab" data-tab="twitter">Twitter / X <span class="count">{kpi_tweets}</span></div>
   <div class="tab" data-tab="conflictos">Conflictos</div>

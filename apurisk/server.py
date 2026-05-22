@@ -279,6 +279,51 @@ async def refresh():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/intelligence", response_class=HTMLResponse)
+async def intelligence_view(dias_baseline: int = Query(28, ge=7, le=180)):
+    """Vista HTML profesional del Strategic Intelligence Brief.
+
+    Renderiza los 8 outputs analíticos como una página visual estilo
+    Bloomberg/Stratfor con diseño dark premium. Esta es la cara ejecutiva
+    del motor de inteligencia — no JSON crudo.
+
+    Para consumo programático usa /api/intelligence/brief.
+    """
+    snap_path = _ultimo_snapshot_path()
+    if not snap_path:
+        return HTMLResponse(
+            "<html><body><h1>Sin snapshot disponible</h1></body></html>",
+            status_code=503
+        )
+    with open(snap_path, encoding="utf-8") as f:
+        snap = json.load(f)
+    archive = None
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if db_path.exists():
+        try:
+            archive = ApuriskArchive(str(db_path))
+        except Exception:
+            pass
+    try:
+        try:
+            from .analyzers.intelligence_engine import generar_intelligence_brief
+            from .reports.intelligence_view import render_intelligence_html
+        except ImportError:
+            from apurisk.analyzers.intelligence_engine import generar_intelligence_brief
+            from apurisk.reports.intelligence_view import render_intelligence_html
+        brief = generar_intelligence_brief(snap, archive=archive,
+                                              dias_baseline=dias_baseline)
+        html = render_intelligence_html(brief, snap)
+        return HTMLResponse(content=html, headers={
+            "Content-Type": "text/html; charset=utf-8"
+        })
+    except Exception as e:
+        return HTMLResponse(
+            f"<html><body><h1>Error</h1><pre>{e}</pre></body></html>",
+            status_code=500
+        )
+
+
 @app.get("/api/intelligence/brief")
 async def intelligence_brief(dias_baseline: int = Query(28, ge=7, le=180)):
     """Strategic Intelligence Brief — 8 outputs analíticos.
