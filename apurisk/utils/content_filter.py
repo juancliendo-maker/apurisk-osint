@@ -202,8 +202,111 @@ def es_contenido_espectaculos(art) -> bool:
 
 
 def es_contenido_irrelevante(art) -> bool:
-    """Combina filtros de contenido no relevante para riesgo político.
+    """Combina filtros de contenido no relevante para riesgo político Perú.
 
-    Atajo conveniente: deporte OR espectáculos. Si retorna True, descartar.
+    Si retorna True, descartar:
+      - Contenido deportivo
+      - Espectáculos / farándula
+      - Eventos de otros países LATAM que NO mencionan Perú
     """
-    return es_contenido_deportivo(art) or es_contenido_espectaculos(art)
+    return (es_contenido_deportivo(art) or
+            es_contenido_espectaculos(art) or
+            es_contenido_otro_pais_latam(art))
+
+
+# =====================================================================
+# FILTRO DE PAÍS: rechazar eventos de otros países LATAM
+# =====================================================================
+#
+# Problema: las fuentes internacionales vía Google News a veces traen
+# noticias de Bolivia, Argentina, Chile, etc. que mencionan Perú
+# tangencialmente. Estas contaminan los mapas y el análisis.
+#
+# Lógica: si el título sugiere foco geográfico en otro país LATAM Y el
+# texto NO menciona "Perú" o ciudades peruanas específicas, descartar.
+
+OTROS_PAISES_LATAM = {
+    "bolivia": ["bolivia", "boliviano", "boliviana", "la paz bolivia", "santa cruz bolivia",
+                "cochabamba", "sucre bolivia", "el alto bolivia", "morales bolivia",
+                "evo morales", "luis arce", "rodríguez veltzé"],
+    "argentina": ["argentina", "argentino", "argentina ", "buenos aires", "córdoba argentina",
+                  "rosario argentina", "milei", "cristina kirchner", "macri argentina",
+                  "casa rosada"],
+    "chile": ["chile ", "chileno", "chilena", "santiago de chile", "valparaíso",
+              "valparaiso chile", "boric", "kast chile",
+              "antofagasta chile", "iquique chile",
+              "frontera con perú chile"],  # solo si es foco chileno
+    "colombia": ["colombia ", "colombiano", "colombiana", "bogotá", "bogota colombia",
+                 "medellín colombia", "petro colombia", "uribe colombia",
+                 "farc", "eln colombia"],
+    "ecuador": ["ecuador ", "ecuatoriano", "ecuatoriana", "quito ecuador", "guayaquil",
+                "noboa ecuador", "lasso ecuador", "correa ecuador"],
+    "venezuela": ["venezuela", "venezolano", "venezolana", "caracas",
+                  "maduro", "chávez", "chavez venezuela", "guaidó"],
+    "brasil": ["brasil ", "brasileño", "brasileña", "lula", "bolsonaro",
+                "rio de janeiro", "sao paulo", "brasília"],
+    "mexico": ["méxico", "mexico ", "mexicano", "mexicana", "amlo",
+                "ciudad de méxico", "ciudad de mexico", "sheinbaum"],
+    "uruguay": ["uruguay", "uruguayo", "uruguaya", "montevideo", "lacalle pou"],
+    "paraguay": ["paraguay", "paraguayo", "paraguaya", "asunción paraguay", "peña paraguay"],
+}
+
+# Marcadores fuertes de "esto SÍ es de Perú" — si aparecen, NO descartar aunque
+# se mencionen otros países. Ciudades, instituciones y figuras peruanas.
+MARCADORES_PERU_FUERTES = [
+    "perú", "peru ", "peruano", "peruana",
+    "lima ", "callao", "arequipa", "cusco", "trujillo peruano",
+    "chiclayo", "iquitos", "huancayo", "tacna", "puno peru",
+    "ica peru", "piura", "cajamarca", "ayacucho", "huaraz",
+    "apurímac", "apurimac", "huancavelica", "junín peru",
+    "vraem", "las bambas", "antamina", "yanacocha", "cerro verde",
+    "minem", "minam", "mininter", "mef peru", "bcrp", "bcr peru",
+    "congreso de la república", "congreso peruano",
+    "presidente del perú", "presidente peruano",
+    "premier peruano", "primer ministro peruano",
+    "boluarte", "balcázar", "balcazar peru",
+    "fujimori", "vizcarra", "castillo peru",
+    "snmpe", "sociedad nacional minería", "sociedad nacional mineria",
+    "onpe", "jne peru", "defensoría peru", "defensoria peru",
+    "tren de aragua peru",  # vinculado a Perú aunque criminal venezolano
+    "sol peruano", "tipo de cambio sol",
+    "el comercio peru", "la república peru", "rpp peru",
+]
+
+
+def es_contenido_otro_pais_latam(art) -> bool:
+    """Detecta si el artículo es de otro país LATAM (no Perú).
+
+    Lógica:
+      1. Si el texto contiene marcadores fuertes de Perú → False (es de Perú).
+      2. Si el título o texto tiene 2+ menciones a un país LATAM específico
+         Y NO tiene marcadores peruanos → True (descartar).
+      3. Si solo se menciona otro país de pasada → False (no descartar).
+    """
+    texto_full = _texto(art).lower()
+    url = _url(art)
+    if not texto_full.strip():
+        return False
+
+    # Capa 1: si claramente menciona Perú o algo peruano, NO descartar
+    if any(marcador in texto_full for marcador in MARCADORES_PERU_FUERTES):
+        return False
+    # URL contiene /peru/, /pe/, perú en el path → es de Perú
+    if "/peru/" in url or "/pe/" in url or "peruano" in url:
+        return False
+
+    # Capa 2: contar menciones por país
+    titulo = (art.get("title", "") if isinstance(art, dict) else getattr(art, "title", "")).lower()
+    for pais, keywords in OTROS_PAISES_LATAM.items():
+        # Cuenta cuántas keywords del país aparecen
+        # Más peso al título (foco geográfico) que al cuerpo
+        en_titulo = sum(1 for kw in keywords if kw in titulo)
+        en_texto = sum(1 for kw in keywords if kw in texto_full)
+        # Si el TÍTULO menciona el país, fuerte señal de foco geográfico
+        if en_titulo >= 1 and en_texto >= 2:
+            return True
+        # O el cuerpo lo menciona muchas veces sin mencionar Perú
+        if en_texto >= 4:
+            return True
+
+    return False

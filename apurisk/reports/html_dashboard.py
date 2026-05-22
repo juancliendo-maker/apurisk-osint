@@ -570,53 +570,95 @@ def _sanitizar_url(url: str) -> str:
 
 
 def _analizar_tendencias_semana(output_dir: str | None) -> dict:
-    """Analiza snapshots de últimos 7 días para detectar persistencia y tendencias."""
+    """Analiza últimos 7 días desde el archive SQLite (no del disco).
+
+    CAMBIO (mayo 2026): antes leía snapshots JSON sueltos del output_dir,
+    pero la limpieza retentiva mantiene solo 5 archivos en disco. Ahora
+    consulta directamente el archive SQLite que conserva el histórico
+    completo (típicamente 200+ snapshots = 4+ días de datos cada 30 min).
+    """
+    import json
+    from collections import defaultdict
     if not output_dir:
         return {"snapshots": 0, "score_serie": [], "alertas_persistentes": [], "factores_serie": {}}
-    import glob, json
-    from collections import defaultdict
-    p = Path(output_dir)
-    cutoff = now_pe() - timedelta(days=7)
-    snaps = []
-    for f in sorted(p.glob("apurisk_snapshot_*.json")):
+
+    db_path = Path(output_dir) / "apurisk_archive.db"
+    if not db_path.exists():
+        return {"snapshots": 0, "score_serie": [], "alertas_persistentes": [], "factores_serie": {}}
+
+    try:
         try:
-            with open(f, encoding="utf-8") as fh:
-                data = json.load(fh)
-            gen = data.get("generado", "")
+            from ..storage import ApuriskArchive
+        except ImportError:
+            from apurisk.storage import ApuriskArchive
+        archive = ApuriskArchive(str(db_path))
+    except Exception:
+        return {"snapshots": 0, "score_serie": [], "alertas_persistentes": [], "factores_serie": {}}
+
+    cutoff = (now_pe() - timedelta(days=7)).isoformat()
+    snaps = []  # list of (datetime, score, nivel, snap_id)
+    try:
+        with archive._conn() as c:
+            rows = c.execute("""
+                SELECT id, generado, score_global, nivel
+                FROM snapshots
+                WHERE generado >= ? AND score_global IS NOT NULL
+                ORDER BY generado ASC
+            """, (cutoff,)).fetchall()
+        for r in rows:
             try:
-                dt = parse_to_pe(gen) or datetime.fromisoformat(gen)
-                if dt >= cutoff:
-                    snaps.append((dt, data))
+                dt = parse_to_pe(r["generado"]) or datetime.fromisoformat(r["generado"])
+                snaps.append((dt, r["score_global"], r["nivel"], r["id"]))
             except Exception:
-                pass
-        except Exception:
-            continue
+                continue
+    except Exception:
+        return {"snapshots": 0, "score_serie": [], "alertas_persistentes": [], "factores_serie": {}}
 
     if not snaps:
         return {"snapshots": 0, "score_serie": [], "alertas_persistentes": [], "factores_serie": {}}
 
-    # Serie temporal del score
+    # Construir score_serie con alertas por snapshot
+    snap_ids = [s[3] for s in snaps]
+    alertas_por_snap = defaultdict(list)
+    factores_por_snap = defaultdict(list)
+    try:
+        with archive._conn() as c:
+            # Alertas
+            placeholders = ",".join("?" * len(snap_ids))
+            for row in c.execute(f"""
+                SELECT snapshot_id, nivel, categoria, regla, titulo, resumen, fuente, url
+                FROM alertas WHERE snapshot_id IN ({placeholders})
+            """, snap_ids).fetchall():
+                alertas_por_snap[row["snapshot_id"]].append(dict(row))
+            # Factores
+            for row in c.execute(f"""
+                SELECT snapshot_id, factor_id, nombre, score, probabilidad, impacto
+                FROM factores WHERE snapshot_id IN ({placeholders})
+                ORDER BY score DESC
+            """, snap_ids).fetchall():
+                factores_por_snap[row["snapshot_id"]].append(dict(row))
+    except Exception:
+        pass
+
+    # Serie temporal del score (uno por snapshot)
     score_serie = []
-    for dt, data in snaps:
+    for dt, score, nivel, sid in snaps:
+        alertas = alertas_por_snap.get(sid, [])
         score_serie.append({
             "ts": dt.isoformat(timespec="seconds"),
             "label": dt.strftime("%d %b %H:%M"),
-            "score": data.get("riesgo", {}).get("global", 0),
-            "nivel": data.get("riesgo", {}).get("nivel", "—"),
-            "alertas_criticas": len([a for a in data.get("alertas", []) if a["nivel"] == "CRÍTICA"]),
-            "alertas_total": len(data.get("alertas", [])),
+            "score": score,
+            "nivel": nivel or "—",
+            "alertas_criticas": len([a for a in alertas if a.get("nivel") == "CRÍTICA"]),
+            "alertas_total": len(alertas),
         })
 
     # Alertas persistentes — agrupadas por título normalizado
     grupos = defaultdict(list)
-    for dt, data in snaps:
-        for a in data.get("alertas", []):
-            # llave normalizada por título base
-            key = a.get("titulo", "")[:90].lower().strip()
-            grupos[key].append({
-                "ts": dt,
-                "alerta": a,
-            })
+    for dt, score, nivel, sid in snaps:
+        for a in alertas_por_snap.get(sid, []):
+            key = (a.get("titulo") or "")[:90].lower().strip()
+            grupos[key].append({"ts": dt, "alerta": a})
     persistentes = []
     for key, ocurrencias in grupos.items():
         if not key or len(ocurrencias) < 2:
@@ -630,7 +672,7 @@ def _analizar_tendencias_semana(output_dir: str | None) -> dict:
             "nivel": last.get("nivel", ""),
             "regla": last.get("regla", ""),
             "fuente": last.get("fuente", ""),
-            "url": _sanitizar_url(last.get("url", "")),  # corrige URLs Twitter ficticios legacy
+            "url": _sanitizar_url(last.get("url", "")),
             "ocurrencias": len(ocurrencias),
             "dias_activo": dias_distintos,
             "primera_vez": min(timestamps).isoformat(timespec="seconds"),
@@ -638,25 +680,26 @@ def _analizar_tendencias_semana(output_dir: str | None) -> dict:
         })
     persistentes.sort(key=lambda x: (-x["dias_activo"], -x["ocurrencias"]))
 
-    # Serie por factor (top 5 factores cómo evolucionan en el período)
+    # Serie por factor (top 8 cómo evolucionan en el período)
     factor_serie = defaultdict(list)
-    for dt, data in snaps:
-        for f in data.get("matriz_riesgo", [])[:8]:
+    for dt, score, nivel, sid in snaps:
+        for f in factores_por_snap.get(sid, [])[:8]:
             factor_serie[f["nombre"]].append({
                 "ts": dt.isoformat(timespec="seconds"),
                 "label": dt.strftime("%d %b"),
                 "score": f["score"],
-                "prob": f["probabilidad"],
-                "imp": f["impacto"],
+                "prob": f.get("probabilidad"),
+                "imp": f.get("impacto"),
             })
 
     return {
         "snapshots": len(snaps),
-        "primer_snap": snaps[0][0].isoformat(timespec="seconds") if snaps else None,
-        "ultimo_snap": snaps[-1][0].isoformat(timespec="seconds") if snaps else None,
+        "primer_snap": snaps[0][0].isoformat(timespec="seconds"),
+        "ultimo_snap": snaps[-1][0].isoformat(timespec="seconds"),
         "score_serie": score_serie,
         "alertas_persistentes": persistentes[:25],
         "factores_serie": dict(factor_serie),
+        "fuente_datos": "SQLite archive (histórico completo)",
     }
 
 
@@ -1088,6 +1131,62 @@ def generar_dashboard_html(
             "actor1": raw.get("actor1", ""),
             "actor2": raw.get("actor2", ""),
             "is_demo": is_demo_acled,
+        })
+
+    # CRIMEN ORGANIZADO markers — sicariato, narcotráfico, minería ilegal, etc.
+    # Estos items vienen del clasificador temático (crimen_organizado.py).
+    # Aplica la misma ventana temporal estricta del mapa (48h).
+    for it in (crimen_items or []):
+        try:
+            ch = it.hours_ago()
+            if ch == float("inf") or ch > MAPA_VENTANA_HORAS or ch < 0:
+                continue
+        except Exception:
+            continue
+        raw = it.raw or {}
+        # Tipología (narcotrafico, sicariato, mineria_ilegal, etc.)
+        tipologia = raw.get("tipologia", "crimen")
+        # Geocodificar por región (los items de crimen no tienen lat/lng exactos)
+        region = raw.get("region") or it.region or ""
+        coords = buscar_coords(region) if region else None
+        if not coords:
+            coords = buscar_coords(it.title + " " + (it.summary or ""))
+        if not coords:
+            continue
+        # Severidad → nivel
+        sev = raw.get("severidad", "media")
+        if tipologia in ("extorsion_sicariato", "narcotrafico", "crimen_organizado_transnacional"):
+            nivel = "CRÍTICA"
+        elif sev == "alta":
+            nivel = "ALTA"
+        elif sev == "media":
+            nivel = "MEDIA"
+        else:
+            nivel = "BAJA"
+        # Etiquetas legibles por tipología
+        etiquetas = {
+            "narcotrafico": "🚫 Narcotráfico",
+            "mineria_ilegal": "⛏️ Minería ilegal",
+            "tala_ilegal": "🪓 Tala ilegal",
+            "contrabando": "📦 Contrabando",
+            "migracion_irregular": "🌐 Migración irregular",
+            "extorsion_sicariato": "🔫 Extorsión/Sicariato",
+        }
+        categoria_label = etiquetas.get(tipologia, "Crimen organizado")
+        map_markers.append({
+            "lat": coords[0], "lng": coords[1],
+            "tipo": "crimen",
+            "tipologia": tipologia,
+            "nivel": nivel,
+            "titulo": it.title,
+            "resumen": it.summary,
+            "url": it.url,
+            "fuente": it.source_name,
+            "categoria": categoria_label,
+            "region": region,
+            "hours_ago": round(ch, 1),
+            "fecha": _fmt_datetime(it.published),
+            "fecha_iso": it.published or "",
         })
 
     # Datos para charts

@@ -256,20 +256,20 @@ medios_rss:
 
   # === INTERNACIONAL vía Google News (feeds directos rotos o sin contenido Perú) ===
   - id: reuters_latam
-    nombre: "Reuters - Latinoamérica (Google News)"
-    url: "https://news.google.com/rss/search?q=site:reuters.com+(Peru+OR+Bolivia+OR+Ecuador+OR+Chile)&hl=es-419&gl=PE&ceid=PE:es-419"
+    nombre: "Reuters - Perú (Google News, solo Peru)"
+    url: "https://news.google.com/rss/search?q=site:reuters.com+%22Peru%22&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: internacional
-    url_referencia: "https://www.reuters.com/world/americas/"
+    url_referencia: "https://www.reuters.com/world/peru/"
   - id: ap_latam
-    nombre: "AP - Latin America (Google News)"
-    url: "https://news.google.com/rss/search?q=site:apnews.com+(Peru+OR+Bolivia+OR+Ecuador)&hl=es-419&gl=PE&ceid=PE:es-419"
+    nombre: "AP - Perú (Google News, solo Peru)"
+    url: "https://news.google.com/rss/search?q=site:apnews.com+%22Peru%22&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: internacional
-    url_referencia: "https://apnews.com/hub/latin-america"
+    url_referencia: "https://apnews.com/hub/peru"
   - id: bbc_americalatina
-    nombre: "BBC Mundo - América Latina (Google News)"
-    url: "https://news.google.com/rss/search?q=site:bbc.com/mundo+(Peru+OR+Bolivia+OR+Ecuador)&hl=es-419&gl=PE&ceid=PE:es-419"
+    nombre: "BBC Mundo - Perú (Google News, solo Peru)"
+    url: "https://news.google.com/rss/search?q=site:bbc.com/mundo+%22Peru%22&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: internacional
-    url_referencia: "https://www.bbc.com/mundo/topics/c00000a7p3rt"
+    url_referencia: "https://www.bbc.com/mundo"
   - id: el_pais_peru
     nombre: "El País (España) - Perú (Google News)"
     url: "https://news.google.com/rss/search?q=site:elpais.com+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
