@@ -366,6 +366,85 @@ async def intelligence_brief(dias_baseline: int = Query(28, ge=7, le=180)):
                               detail=f"Error generando intelligence brief: {e}")
 
 
+@app.post("/api/limpiar-archive-contaminado")
+async def limpiar_archive_contaminado():
+    """Limpia del archive SQLite las alertas y artículos contaminados.
+
+    Elimina del archive histórico cualquier registro que:
+      - Sea de otro país LATAM (Bolivia, Argentina, etc.)
+      - Sea contenido deportivo o de farándula
+      - Tenga URL apuntando a dominios .ar, .bo, .cl, .br, etc.
+
+    Esto resuelve el problema de datos viejos archivados antes del fix
+    del filtro de país que siguen apareciendo en las pestañas.
+    """
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=503, detail="Sin archive.")
+
+    try:
+        try:
+            from .utils.content_filter import es_contenido_irrelevante
+        except ImportError:
+            from apurisk.utils.content_filter import es_contenido_irrelevante
+
+        archive = ApuriskArchive(str(db_path))
+        eliminados_articulos = 0
+        eliminados_alertas = 0
+
+        with archive._conn() as c:
+            # Limpiar artículos contaminados
+            articulos = c.execute("""
+                SELECT id, title, summary, url, source_id
+                FROM articulos
+            """).fetchall()
+            ids_borrar = []
+            for art in articulos:
+                faux = {
+                    "title": art["title"] or "",
+                    "summary": art["summary"] or "",
+                    "url": art["url"] or "",
+                    "source_id": art["source_id"] or "",
+                }
+                if es_contenido_irrelevante(faux):
+                    ids_borrar.append(art["id"])
+            for art_id in ids_borrar:
+                c.execute("DELETE FROM articulos WHERE id = ?", (art_id,))
+                eliminados_articulos += 1
+
+            # Limpiar alertas contaminadas
+            alertas = c.execute("""
+                SELECT id, titulo, resumen, url
+                FROM alertas
+            """).fetchall()
+            ids_borrar = []
+            for alt in alertas:
+                faux = {
+                    "title": alt["titulo"] or "",
+                    "summary": alt["resumen"] or "",
+                    "url": alt["url"] or "",
+                    "source_id": "",
+                }
+                if es_contenido_irrelevante(faux):
+                    ids_borrar.append(alt["id"])
+            for alt_id in ids_borrar:
+                c.execute("DELETE FROM alertas WHERE id = ?", (alt_id,))
+                eliminados_alertas += 1
+
+            c.commit()
+
+        return {
+            "status": "ok",
+            "articulos_eliminados": eliminados_articulos,
+            "alertas_eliminadas": eliminados_alertas,
+            "mensaje": (f"Limpieza del archive completa. {eliminados_articulos} artículos "
+                        f"y {eliminados_alertas} alertas eliminados del SQLite. "
+                        f"El próximo refresh del dashboard mostrará solo datos limpios."),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {e}")
+
+
 @app.post("/api/limpiar-archivos")
 async def limpiar_archivos(
     retencion_snapshots: int = Query(5, ge=1, le=100),

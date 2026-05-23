@@ -980,6 +980,53 @@ def _pl_card(p) -> str:
     """
 
 
+def _texto_alerta(a) -> str:
+    """Extrae texto de una alerta dict para evaluar filtro."""
+    if isinstance(a, dict):
+        return (a.get("titulo", "") + " " + a.get("resumen", "") + " " + a.get("url", "")).lower()
+    return ""
+
+
+def _filtrar_alertas_irrelevantes(alertas: list) -> list:
+    """Aplica content_filter a alertas (rechaza Bolivia/fútbol/farándula
+    incluso si vienen del archive histórico)."""
+    try:
+        from ..utils.content_filter import es_contenido_irrelevante
+    except ImportError:
+        from apurisk.utils.content_filter import es_contenido_irrelevante
+    out = []
+    for a in alertas:
+        # Convertir alerta dict a estructura similar a Article para el filtro
+        if isinstance(a, dict):
+            faux = {
+                "title": a.get("titulo", ""),
+                "summary": a.get("resumen", ""),
+                "url": a.get("url", ""),
+                "source_id": "",
+            }
+            if es_contenido_irrelevante(faux):
+                continue
+        out.append(a)
+    return out
+
+
+def _filtrar_items_irrelevantes(items: list) -> list:
+    """Aplica content_filter a lista de Article/dict (conflictos, crimen, etc.)."""
+    try:
+        from ..utils.content_filter import es_contenido_irrelevante
+    except ImportError:
+        from apurisk.utils.content_filter import es_contenido_irrelevante
+    out = []
+    for it in items:
+        try:
+            if es_contenido_irrelevante(it):
+                continue
+        except Exception:
+            pass
+        out.append(it)
+    return out
+
+
 def generar_dashboard_html(
     output_path: str,
     articulos,
@@ -999,6 +1046,16 @@ def generar_dashboard_html(
     acled_events: list = None,
     crimen_items: list = None,
 ):
+    # ===== FILTRO DEFENSIVO EN RENDER TIME =====
+    # Aplica content_filter a TODO lo que llega al dashboard.
+    # Esto protege contra datos viejos en SQLite que fueron archivados
+    # ANTES del fix del filtro de país (Bolivia/fútbol/etc.).
+    # Aunque el RSS collector ya filtra en ingesta, este es el blindaje final.
+    articulos = _filtrar_items_irrelevantes(articulos or [])
+    conflictos = _filtrar_items_irrelevantes(conflictos or [])
+    proyectos = _filtrar_items_irrelevantes(proyectos or [])
+    crimen_items = _filtrar_items_irrelevantes(crimen_items or [])
+    alertas = _filtrar_alertas_irrelevantes(alertas or [])
     tweets = tweets or []
     twitter_stats = twitter_stats or {}
     acled_events = acled_events or []
