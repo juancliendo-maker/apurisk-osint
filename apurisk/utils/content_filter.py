@@ -251,62 +251,117 @@ OTROS_PAISES_LATAM = {
     "paraguay": ["paraguay", "paraguayo", "paraguaya", "asunción paraguay", "peña paraguay"],
 }
 
-# Marcadores fuertes de "esto SÍ es de Perú" — si aparecen, NO descartar aunque
-# se mencionen otros países. Ciudades, instituciones y figuras peruanas.
+# Marcadores fuertes de "esto SÍ es de Perú" — si aparecen claramente,
+# NO descartar aunque se mencionen otros países.
+# IMPORTANTE: NO incluir "peruano" suelto (matchea con "El Peruano" diario
+# que escribe sobre Bolivia/etc.). Solo geografía y figuras inequívocas.
 MARCADORES_PERU_FUERTES = [
-    "perú", "peru ", "peruano", "peruana",
-    "lima ", "callao", "arequipa", "cusco", "trujillo peruano",
-    "chiclayo", "iquitos", "huancayo", "tacna", "puno peru",
-    "ica peru", "piura", "cajamarca", "ayacucho", "huaraz",
+    # País
+    "perú", "peru ",
+    # Departamentos / ciudades peruanas
+    "lima ", "callao", "arequipa", "cusco", "trujillo",
+    "chiclayo", "iquitos", "huancayo", "tacna ", "puno peru",
+    "ica peru", " ica.", "piura", "cajamarca", "ayacucho", "huaraz",
     "apurímac", "apurimac", "huancavelica", "junín peru",
+    "huánuco", "huanuco", "moquegua", "tumbes",
+    "loreto peru", "madre de dios", "ucayali", "lambayeque",
+    "san martín peru", "san martin peru",
+    # Sitios mineros peruanos
     "vraem", "las bambas", "antamina", "yanacocha", "cerro verde",
-    "minem", "minam", "mininter", "mef peru", "bcrp", "bcr peru",
-    "congreso de la república", "congreso peruano",
-    "presidente del perú", "presidente peruano",
-    "premier peruano", "primer ministro peruano",
-    "boluarte", "balcázar", "balcazar peru",
-    "fujimori", "vizcarra", "castillo peru",
+    "tía maría", "tia maria", "toquepala", "cuajone", "quellaveco",
+    "conga peru", "constancia peru", "cerro de pasco",
+    # Instituciones peruanas inequívocas
+    "minem", "minam ", "mininter peru", "mef peru", "bcrp",
     "snmpe", "sociedad nacional minería", "sociedad nacional mineria",
     "onpe", "jne peru", "defensoría peru", "defensoria peru",
-    "tren de aragua peru",  # vinculado a Perú aunque criminal venezolano
+    "congreso de la república", "congreso peruano",
+    "tribunal constitucional peru",
+    "ana peru", "oefa peru",
+    # Frases que vinculan inequívocamente a Perú
+    "presidente del perú", "presidente del peru",
+    "presidente peruano", "presidenta peruana",
+    "premier peruano", "primer ministro peruano",
+    "gobierno peruano", "gobierno del perú", "gobierno del peru",
+    # Figuras políticas peruanas inequívocas
+    "boluarte", "balcázar", "balcazar",
+    "fujimori", "vizcarra",
+    "rafael lópez aliaga", "rafael lopez aliaga", "lópez aliaga",
+    "pedro castillo peru", "castillo terrones",
+    "tren de aragua peru",  # criminal venezolano operando en Perú
     "sol peruano", "tipo de cambio sol",
-    "el comercio peru", "la república peru", "rpp peru",
 ]
 
 
 def es_contenido_otro_pais_latam(art) -> bool:
     """Detecta si el artículo es de otro país LATAM (no Perú).
 
-    Lógica:
-      1. Si el texto contiene marcadores fuertes de Perú → False (es de Perú).
-      2. Si el título o texto tiene 2+ menciones a un país LATAM específico
-         Y NO tiene marcadores peruanos → True (descartar).
-      3. Si solo se menciona otro país de pasada → False (no descartar).
+    Lógica ESTRICTA (mayo 2026):
+      1. Si el TÍTULO menciona explícitamente otro país LATAM Y el título NO
+         menciona Perú explícitamente → DESCARTAR (sin importar el cuerpo).
+      2. Si el cuerpo menciona OTRO país 3+ veces y NO tiene marcadores
+         peruanos fuertes → descartar.
+      3. La URL/source con "peruano" o "el peruano" NO es exención —
+         medios peruanos también cubren noticias de otros países.
+      4. La exención solo aplica si el contenido sustantivo (título o
+         cuerpo) menciona claramente Perú/instituciones peruanas.
     """
     texto_full = _texto(art).lower()
-    url = _url(art)
+    titulo = (art.get("title", "") if isinstance(art, dict)
+              else getattr(art, "title", "")).lower()
     if not texto_full.strip():
         return False
 
-    # Capa 1: si claramente menciona Perú o algo peruano, NO descartar
-    if any(marcador in texto_full for marcador in MARCADORES_PERU_FUERTES):
-        return False
-    # URL contiene /peru/, /pe/, perú en el path → es de Perú
-    if "/peru/" in url or "/pe/" in url or "peruano" in url:
+    # Detectar si título o cuerpo mencionan Perú explícitamente.
+    # IMPORTANTE: NO usar "peruano" como marcador único porque medios
+    # peruanos como "El Peruano" escriben sobre Bolivia/Venezuela/etc.
+    # Solo geografía y figuras inequívocamente peruanas.
+    PERU_EN_TITULO = [
+        # Nombre del país (no "peruano" solo)
+        "perú", "peru ", " peru.", " peru,",
+        # Departamentos / ciudades clave
+        "lima ", "callao", "arequipa", "cusco", "trujillo", "chiclayo",
+        "iquitos", "huancayo", "tacna ", "puno ", " ica ", "piura",
+        "cajamarca", "ayacucho", "apurímac", "apurimac", "huancavelica",
+        "huánuco", "huanuco", "tumbes", "moquegua", "junín peru",
+        "loreto", "madre de dios", "ucayali", "lambayeque",
+        # Sitios y zonas
+        "vraem", "las bambas", "antamina", "yanacocha", "tía maría", "tia maria",
+        "cerro verde", "toquepala", "cuajone", "quellaveco",
+        # Figuras políticas peruanas inequívocas
+        "boluarte", "balcázar", "balcazar",
+        "fujimori", "vizcarra",
+        "rafael lópez aliaga", "rafael lopez aliaga", "lópez aliaga",
+        "pedro castillo peru", "castillo terrones",
+        "roberto sánchez peru", "roberto sanchez peru",
+        # Instituciones inequívocamente peruanas
+        "minem", "minam", "mininter peru", "mininter ",
+        "bcrp", "bcr peru", "sunat ", "snmpe",
+        "onpe", "jne peru", "tribunal constitucional peru",
+        "congreso de la república", "congreso peru",
+        "defensoría peru", "defensoria peru",
+        "cgtp", "conacami",
+    ]
+    peru_en_titulo = any(m in titulo for m in PERU_EN_TITULO)
+    peru_en_cuerpo = any(m in texto_full for m in MARCADORES_PERU_FUERTES)
+
+    # REGLA 1 (estricta): si el TÍTULO menciona otro país LATAM y NO
+    # menciona Perú en título → descartar inmediatamente.
+    # Ejemplo: "Protestas masivas en Bolivia - CNN" → descartar.
+    # Ejemplo: "Gobierno de Bolivia anuncia... - El Peruano" → descartar.
+    for pais, keywords in OTROS_PAISES_LATAM.items():
+        en_titulo = sum(1 for kw in keywords if kw in titulo)
+        if en_titulo >= 1 and not peru_en_titulo:
+            return True
+
+    # REGLA 2: si menciona Perú en cualquier lado, mantener
+    # (ej: "Perú y Bolivia firman acuerdo")
+    if peru_en_titulo or peru_en_cuerpo:
         return False
 
-    # Capa 2: contar menciones por país
-    titulo = (art.get("title", "") if isinstance(art, dict) else getattr(art, "title", "")).lower()
+    # REGLA 3: cuerpo menciona país 3+ veces sin Perú → descartar
     for pais, keywords in OTROS_PAISES_LATAM.items():
-        # Cuenta cuántas keywords del país aparecen
-        # Más peso al título (foco geográfico) que al cuerpo
-        en_titulo = sum(1 for kw in keywords if kw in titulo)
         en_texto = sum(1 for kw in keywords if kw in texto_full)
-        # Si el TÍTULO menciona el país, fuerte señal de foco geográfico
-        if en_titulo >= 1 and en_texto >= 2:
-            return True
-        # O el cuerpo lo menciona muchas veces sin mencionar Perú
-        if en_texto >= 4:
+        if en_texto >= 3:
             return True
 
     return False
