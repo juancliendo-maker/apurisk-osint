@@ -57,16 +57,16 @@ medios_rss:
     url: "https://news.google.com/rss/search?q=site:infobae.com+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
     url_referencia: "https://www.infobae.com/peru/"
-  - id: infobae_peru_directo
-    nombre: "Infobae Perú (feed directo backup)"
-    url: "https://www.infobae.com/feeds/rss/peru/"
-    categoria: medios
-    url_referencia: "https://www.infobae.com/peru/"
   - id: infobae_america
     nombre: "Infobae América Latina (Google News, filtrado Perú)"
     url: "https://news.google.com/rss/search?q=site:infobae.com/america+%22Peru%22&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
     url_referencia: "https://www.infobae.com/america/"
+  - id: infobae_politica
+    nombre: "Infobae Política Perú (Google News específico)"
+    url: "https://news.google.com/rss/search?q=site:infobae.com+(Peru+politica+OR+%22politica+peruana%22)&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://www.infobae.com/peru/"
   - id: cnn_espanol
     nombre: "CNN en Español (vía Google News)"
     url: "https://news.google.com/rss/search?q=site:cnnespanol.cnn.com+peru&hl=es-419&gl=PE&ceid=PE:es-419"
