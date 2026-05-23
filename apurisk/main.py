@@ -223,7 +223,12 @@ def analizar(data: dict, config: dict) -> dict:
     })
     riesgo = calcular_riesgo_global(art, temas, data["conflictos"], pesos)
     matriz = calcular_matriz(data["medios"] + data["gdelt"] + data.get("tweets", []), data["conflictos"])
-    alertas = detectar_alertas(data["medios"] + data["gdelt"] + data.get("tweets", []), data["conflictos"], ventana_horas=72)
+    # Universo para detector de alertas: medios + GDELT + tweets + conflictos
+    # + crimen_items (para que sicariato/narcotráfico/etc generen alertas)
+    universo_alertas = (data["medios"] + data["gdelt"]
+                          + data.get("tweets", [])
+                          + data.get("crimen_items", []))
+    alertas = detectar_alertas(universo_alertas, data["conflictos"], ventana_horas=72)
     twitter_stats = analizar_twitter(data.get("tweets", []))
 
     # Reconciliar score global con la matriz de factores y alertas (más fiel al estado real)

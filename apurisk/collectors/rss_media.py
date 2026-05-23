@@ -22,6 +22,32 @@ class RSSMediaCollector(BaseCollector):
         if not text:
             print(f"  [info] {self.source_id}: sin datos en vivo → fallback demo")
             return self._demo_articles()
+        # Recolectar y aplicar filtro defensivo al final (deportes, farándula,
+        # otros países LATAM que no mencionan Perú). Esto evita que el ruido
+        # entre al pipeline desde el principio, beneficiando TODAS las pestañas.
+        articles_raw = self._collect_raw(text)
+        return self._filtrar_irrelevantes(articles_raw)
+
+    def _filtrar_irrelevantes(self, articles: list[Article]) -> list[Article]:
+        """Aplica content_filter para descartar deportes/farándula/otros países."""
+        try:
+            from ..utils.content_filter import es_contenido_irrelevante
+        except ImportError:
+            from apurisk.utils.content_filter import es_contenido_irrelevante
+        filtrados = []
+        descartados = 0
+        for art in articles:
+            if es_contenido_irrelevante(art):
+                descartados += 1
+                continue
+            filtrados.append(art)
+        if descartados > 0:
+            print(f"      [filtro] {self.source_id}: {descartados} items descartados "
+                  f"(deporte/farandula/otro pais)")
+        return filtrados
+
+    def _collect_raw(self, text: str) -> list[Article]:
+        """Recolección bruta antes de aplicar filtros."""
 
         # intentamos primero feedparser si está disponible
         try:

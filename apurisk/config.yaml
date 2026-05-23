@@ -53,10 +53,20 @@ medios_rss:
 
   # === MEDIOS vía Google News RSS (los directos dieron 404/403) ===
   - id: infobae_peru
-    nombre: "Infobae Perú (vía Google News)"
-    url: "https://news.google.com/rss/search?q=site:infobae.com/peru&hl=es-419&gl=PE&ceid=PE:es-419"
+    nombre: "Infobae Perú (vía Google News, query amplia)"
+    url: "https://news.google.com/rss/search?q=site:infobae.com+Peru&hl=es-419&gl=PE&ceid=PE:es-419"
     categoria: medios
     url_referencia: "https://www.infobae.com/peru/"
+  - id: infobae_peru_directo
+    nombre: "Infobae Perú (feed directo backup)"
+    url: "https://www.infobae.com/feeds/rss/peru/"
+    categoria: medios
+    url_referencia: "https://www.infobae.com/peru/"
+  - id: infobae_america
+    nombre: "Infobae América Latina (Google News, filtrado Perú)"
+    url: "https://news.google.com/rss/search?q=site:infobae.com/america+%22Peru%22&hl=es-419&gl=PE&ceid=PE:es-419"
+    categoria: medios
+    url_referencia: "https://www.infobae.com/america/"
   - id: cnn_espanol
     nombre: "CNN en Español (vía Google News)"
     url: "https://news.google.com/rss/search?q=site:cnnespanol.cnn.com+peru&hl=es-419&gl=PE&ceid=PE:es-419"
