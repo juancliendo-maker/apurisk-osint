@@ -294,21 +294,37 @@ def _limpiar_archivos_viejos(out_dir: Path, retencion_snapshots: int = 5,
         except Exception:
             pass
 
-    # Reportes bajo demanda con más de N días: eliminar
-    limite = _dt.now().timestamp() - retencion_reportes_dias * 86400
-    patrones = [
+    # ELIMINACIÓN INMEDIATA de archivos legacy del scheduler antiguo
+    # (mayo 2026): el scheduler ya NO genera estos archivos, así que
+    # cualquier archivo legacy que aún exista es basura del periodo
+    # antes del cambio. Lo eliminamos TODOS sin importar antigüedad.
+    patrones_legacy = [
         "apurisk_reporte_24h_*.html", "apurisk_reporte_24h_*.docx",
         "apurisk_alertas_*.html", "apurisk_alertas_*.docx",
-        "apurisk_ejecutivo_*.docx",
+        "apurisk_ejecutivo_*.docx", "apurisk_ejecutivo_*.pdf",
         "apurisk_diario_*.pdf", "apurisk_semanal_*.pdf",
         "apurisk_ejecutivo_diario_*.docx", "apurisk_ejecutivo_diario_*.pdf",
-        # reportes legacy generados antes del cambio (también los limpiamos)
+        # reportes legacy con prefijo distinto
         "reporte_24h_*.html", "reporte_24h_*.docx",
         "reporte_alertas_*.html", "reporte_alertas_*.docx",
         "reporte_ejecutivo_*.docx", "reporte_ejecutivo_*.pdf",
         "reporte_diario_*.pdf", "reporte_semanal_*.pdf",
     ]
-    for patron in patrones:
+    for patron in patrones_legacy:
+        for f in out_dir.glob(patron):
+            try:
+                f.unlink()
+                eliminados += 1
+            except Exception:
+                pass
+
+    # Reportes generados manualmente vía /api/reporte/{tipo}/{formato}
+    # con más de N días: eliminar (estos sí tienen retención, no son legacy)
+    limite = _dt.now().timestamp() - retencion_reportes_dias * 86400
+    patrones_manuales = [
+        "reporte_*_*.pdf", "reporte_*_*.docx", "reporte_*_*.html",
+    ]
+    for patron in patrones_manuales:
         for f in out_dir.glob(patron):
             try:
                 if f.stat().st_mtime < limite:

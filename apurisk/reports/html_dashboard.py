@@ -840,19 +840,26 @@ def _scan_descargas(output_dir: str | None) -> dict:
 
 
 def _render_descargas(descargas: dict) -> str:
-    """HTML del panel de descargas con dos secciones:
-       1) GENERAR AHORA — botones que disparan endpoints /api/reporte/...
-          (funcionan SIEMPRE, generan el reporte al instante con datos más frescos)
-       2) ARCHIVOS YA GENERADOS — listado de los reportes en el output/
+    """HTML del panel de descargas — versión simplificada (mayo 2026).
+
+    Cambios estructurales:
+      - ELIMINADAS las secciones que listaban archivos legacy del scheduler antiguo
+        (ejecutivo_diario, diarios, semanales, alertas, 24h en HTML/DOCX repetidos
+        cada 30 min). El scheduler ya NO genera esos archivos automáticamente.
+      - Mantiene SOLO los botones "Generar AHORA" para creación bajo demanda
+        (PDF y Word) — son los que el usuario realmente usa.
+      - La sección "🕕 Reportes Diarios Automáticos" se renderiza aparte vía
+        JS asíncrono (consulta /api/reportes-diarios).
     """
 
-    # ===== SECCIÓN 1: Botones "Generar AHORA" (SIEMPRE visibles y funcionales) =====
+    # ===== Botones "Generar AHORA" — el corazón de la pestaña =====
     instant_html = """
     <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); border: 1px solid var(--accent); margin-bottom: 18px;'>
       <h4>⚡ Generar reporte AHORA <span class='count-badge' style='background: var(--accent); color: var(--bg-0);'>al instante</span></h4>
       <div style='color: var(--txt-1); font-size: 13px; line-height: 1.6; margin-bottom: 12px;'>
-        Estos botones generan el reporte <b>en el momento</b> con los datos más recientes
-        del scheduler. El archivo se descarga inmediatamente.
+        Genera cualquier reporte <strong>al momento</strong> con los datos más recientes
+        del scheduler. El archivo se descarga inmediatamente en el formato que elijas
+        (<strong>PDF o Word/DOCX</strong>).
       </div>
       <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;'>
         <a href='/api/reporte/ejecutivo/pdf' target='_blank' class='dl-btn-instant' style='background: #DC2626;'>
@@ -883,53 +890,40 @@ def _render_descargas(descargas: dict) -> str:
     </div>
     """
 
-    def _section(titulo, icono, items, fmt, color="var(--accent)"):
-        if not items:
-            return f"""
-            <div class='download-section'>
-              <h4>{icono} {titulo} <span class='count-badge' style='background:var(--bg-3); color:var(--txt-2);'>0</span></h4>
-              <div style='color:var(--txt-2); font-size:12px; padding: 8px;'><em>El scheduler generará archivos en el siguiente ciclo (~30 min). Mientras tanto, usa los botones <b>"Generar AHORA"</b> arriba.</em></div>
-            </div>
-            """
-        rows = ""
-        for it in items[:10]:  # Top 10 más recientes
-            rows += f"""
-            <div class='download-item'>
-              <div>
-                <div class='dl-name'><a href='{_esc(it["path"])}' download title='Descargar {_esc(it["name"])}'>{_esc(it["name"])}</a></div>
-                <div class='dl-meta'>🕒 {_esc(it["mtime_str"])} · 📦 {_esc(it["size"])} · {fmt}</div>
-              </div>
-              <a href='{_esc(it["path"])}' download class='dl-btn' style='background: {color};'>⬇ Descargar</a>
-            </div>
-            """
+    # Snapshot técnico minimalista (solo último snapshot JSON y dashboard HTML
+    # para debug — sin todas las históricas que saturaban la pantalla).
+    snaps = descargas.get("snapshots", [])[:2]
+    dashes = descargas.get("dashboards", [])[:2]
+
+    def _mini_item(it, fmt, color):
         return f"""
-        <div class='download-section'>
-          <h4>{icono} {titulo} <span class='count-badge'>{len(items)}</span></h4>
-          {rows}
+        <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:var(--bg-2); border-radius:6px; margin-bottom:6px;'>
+          <div>
+            <div style='font-size:12.5px; color:var(--txt-1);'>{_esc(it["name"])}</div>
+            <div style='font-size:10.5px; color:var(--txt-2);'>🕒 {_esc(it["mtime_str"])} · {_esc(it["size"])} · {fmt}</div>
+          </div>
+          <a href='{_esc(it["path"])}' download style='background:{color}; color:var(--bg-0); padding:5px 12px; border-radius:5px; font-size:11px; text-decoration:none; font-weight:600;'>⬇ DESCARGAR</a>
         </div>
         """
 
-    archivos_html = (
-        _section("Ejecutivo Diario PDF (≤3 págs)", "📄", descargas.get("ejecutivo_diario_pdf", []), "PDF", "var(--critico)") +
-        _section("Ejecutivo Diario Word (≤3 págs)", "📝", descargas.get("ejecutivo_diario_docx", []), "DOCX", "var(--accent)") +
-        _section("Reportes Diarios PDF (detallado)", "📄", descargas["diarios_pdf"], "PDF", "var(--accent-2)") +
-        _section("Reportes Semanales PDF", "📅", descargas["semanales_pdf"], "PDF", "var(--accent-2)") +
-        _section("Reporte 24h (HTML imprimible)", "📰", descargas["diarios_html"], "HTML", "var(--accent)") +
-        _section("Reporte 24h (Word)", "📝", descargas["diarios_docx"], "DOCX") +
-        _section("Reporte ejecutivo clásico (Word)", "📋", descargas["ejecutivo_docx"], "DOCX") +
-        _section("Alertas Inmediatas (Word)", "🚨", descargas["alertas_docx"], "DOCX", "var(--critico)") +
-        _section("Alertas Inmediatas (HTML)", "🚨", descargas["alertas_html"], "HTML", "var(--alto)") +
-        _section("Snapshots de datos (JSON)", "📊", descargas["snapshots"], "JSON", "var(--bajo)") +
-        _section("Dashboards históricos (HTML)", "📈", descargas["dashboards"], "HTML")
-    )
-    return instant_html + """
-    <div class='download-section'>
-      <h4>📂 Archivos generados por el scheduler <span class='count-badge'>histórico</span></h4>
-      <div style='color: var(--txt-2); font-size: 12px; margin-bottom: 8px;'>
-        Los reportes que se han generado en ciclos anteriores del scheduler (cada 30 min). Click en cualquiera para descargarlo.
-      </div>
-    </div>
-    """ + archivos_html
+    debug_html = ""
+    if snaps or dashes:
+        items_snap = "".join(_mini_item(s, "JSON", "var(--bajo)") for s in snaps)
+        items_dash = "".join(_mini_item(d, "HTML", "var(--accent)") for d in dashes)
+        debug_html = f"""
+        <div class='download-section' style='border:1px dashed var(--bg-3); margin-top:18px; padding:14px;'>
+          <h4 style='color:var(--txt-2); font-size:13px;'>🔧 Archivos técnicos (debug)</h4>
+          <div style='color:var(--txt-2); font-size:11px; margin-bottom:10px;'>
+            Snapshot JSON y dashboard HTML más recientes (para uso técnico de auditoría).
+            Estos se regeneran cada 30 min y son los únicos archivos automáticos que el
+            sistema almacena en disco.
+          </div>
+          {items_snap}
+          {items_dash}
+        </div>
+        """
+
+    return instant_html + debug_html
 
 
 def _render_fuentes_estado(articulos, conflictos, proyectos, tweets) -> str:
@@ -2071,22 +2065,12 @@ def generar_dashboard_html(
       </div>
     </div>
 
-    <div class="card span-12" style="margin-top: 14px;">
-      <h3>📦 Cómo distribuir los reportes</h3>
-      <div style="line-height: 1.7; font-size: 13px; color: var(--txt-1);">
-        <p><strong>Reportes diarios PDF:</strong> ideal para briefing matutino del equipo. Tamaño compacto, contiene
-        score global, top 7 factores P×I, alertas críticas, análisis por dimensión y headlines con URLs clickables.</p>
-
-        <p><strong>Reportes semanales PDF:</strong> síntesis ejecutiva del período. Contiene KPIs agregados,
-        evolución diaria del score, top eventos críticos del período y factores dominantes. Genera tendencias
-        leyendo todos los snapshots JSON acumulados en <code>output/</code>.</p>
-
-        <p><strong>Distribución por email:</strong> los PDFs se pueden adjuntar a un envío automatizado
-        (configura un cron o GitHub Action que ejecute el pipeline y mande el PDF al equipo).</p>
-
-        <p><strong>Distribución web:</strong> sirve la carpeta <code>output/</code> con cualquier servidor estático
-        (<code>python -m http.server 8080 --directory output</code>) y comparte el enlace al dashboard.
-        Los stakeholders verán el dashboard live y pueden descargar cualquier reporte desde esta misma pestaña.</p>
+    <div class="card span-12" style="margin-top: 14px; background: var(--bg-2); border-left: 3px solid var(--accent);">
+      <h3 style="font-size:14px;">📦 Resumen de generación de reportes</h3>
+      <div style="line-height: 1.6; font-size: 12.5px; color: var(--txt-1);">
+        <p><strong>Reporte diario automático (PDF, 06:00 AM PET)</strong>: el sistema genera un solo PDF ejecutivo cada día con los datos consolidados. Solo formato PDF. Retención: 30 días.</p>
+        <p><strong>Reportes bajo demanda (PDF o Word)</strong>: usa los botones "Generar AHORA" arriba para crear cualquier tipo de reporte en el formato que prefieras. Los archivos se descargan al instante con los datos más recientes del scheduler.</p>
+        <p style="color:var(--txt-2); font-style:italic; font-size:11px;">El scheduler principal recolecta datos cada 30 minutos pero <strong>NO acumula archivos</strong>. Solo mantiene los snapshots JSON y dashboard.html mínimos necesarios para el funcionamiento.</p>
       </div>
     </div>
   </section>
