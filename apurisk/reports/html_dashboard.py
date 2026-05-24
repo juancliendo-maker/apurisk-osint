@@ -653,7 +653,10 @@ def _analizar_tendencias_semana(output_dir: str | None) -> dict:
             "alertas_total": len(alertas),
         })
 
-    # Alertas persistentes — agrupadas por título normalizado
+    # Alertas persistentes — agrupadas por título normalizado.
+    # Guardamos las URLs de la PRIMERA y ÚLTIMA aparición separadamente
+    # (no solo la última) para que el usuario pueda navegar a ambas
+    # apariciones desde la pestaña Casos Persistentes.
     grupos = defaultdict(list)
     for dt, score, nivel, sid in snaps:
         for a in alertas_por_snap.get(sid, []):
@@ -663,20 +666,30 @@ def _analizar_tendencias_semana(output_dir: str | None) -> dict:
     for key, ocurrencias in grupos.items():
         if not key or len(ocurrencias) < 2:
             continue
-        last = ocurrencias[-1]["alerta"]
-        timestamps = [o["ts"] for o in ocurrencias]
+        # Ordenar ocurrencias por timestamp ascendente
+        ocurrencias_ord = sorted(ocurrencias, key=lambda x: x["ts"])
+        primera = ocurrencias_ord[0]  # {"ts": dt, "alerta": {...}}
+        ultima = ocurrencias_ord[-1]
+        timestamps = [o["ts"] for o in ocurrencias_ord]
         dias_distintos = len({t.date() for t in timestamps})
+        # Tomar URL y fuente de la última aparición (más fresca y descriptiva)
+        last_alerta = ultima["alerta"]
+        first_alerta = primera["alerta"]
         persistentes.append({
-            "titulo": last.get("titulo", ""),
-            "categoria": last.get("categoria", ""),
-            "nivel": last.get("nivel", ""),
-            "regla": last.get("regla", ""),
-            "fuente": last.get("fuente", ""),
-            "url": _sanitizar_url(last.get("url", "")),
+            "titulo": last_alerta.get("titulo", ""),
+            "categoria": last_alerta.get("categoria", ""),
+            "nivel": last_alerta.get("nivel", ""),
+            "regla": last_alerta.get("regla", ""),
+            # URL + fuente de la PRIMERA aparición (cuando empezó)
+            "url_primera": _sanitizar_url(first_alerta.get("url", "")),
+            "fuente_primera": first_alerta.get("fuente", ""),
+            # URL + fuente de la ÚLTIMA aparición (más reciente)
+            "url_ultima": _sanitizar_url(last_alerta.get("url", "")),
+            "fuente_ultima": last_alerta.get("fuente", ""),
             "ocurrencias": len(ocurrencias),
             "dias_activo": dias_distintos,
-            "primera_vez": min(timestamps).isoformat(timespec="seconds"),
-            "ultima_vez": max(timestamps).isoformat(timespec="seconds"),
+            "primera_vez": primera["ts"].isoformat(timespec="seconds"),
+            "ultima_vez": ultima["ts"].isoformat(timespec="seconds"),
         })
     persistentes.sort(key=lambda x: (-x["dias_activo"], -x["ocurrencias"]))
 
@@ -723,13 +736,32 @@ def _render_tendencias(t: dict) -> str:
         </div>
         """
 
-    # Persistent alerts
+    # Persistent alerts — cada fila muestra URLs de PRIMERA y ÚLTIMA aparición
     rows_persistentes = ""
     for p in t["alertas_persistentes"]:
-        url_link = ""
-        if p.get("url"):
-            url_link = f"<a href='{_esc(p['url'])}' target='_blank' rel='noopener' title='{_esc(p['url'])}'>🔗 fuente</a>"
-        nivel_color = {"CRÍTICA": "var(--critico)", "ALTA": "var(--alto)", "MEDIA": "var(--medio)"}.get(p["nivel"], "var(--accent)")
+        # URL primera aparición (con su fecha)
+        url_primera = p.get("url_primera") or p.get("url", "")
+        url_ultima = p.get("url_ultima") or p.get("url", "")
+        fuente_primera = p.get("fuente_primera", "")
+        fuente_ultima = p.get("fuente_ultima", "")
+        link_primera = ""
+        if url_primera:
+            label = _esc(fuente_primera[:20] if fuente_primera else "fuente")
+            link_primera = (f"<a href='{_esc(url_primera)}' target='_blank' "
+                            f"rel='noopener' title='{_esc(url_primera)}' "
+                            f"style='color:var(--accent); font-size:11px;'>🔗 {label}</a>")
+        link_ultima = ""
+        if url_ultima:
+            label = _esc(fuente_ultima[:20] if fuente_ultima else "fuente")
+            # Si las dos URLs son iguales (caso degenerado), solo mostrar una vez
+            if url_ultima == url_primera:
+                link_ultima = "<span style='color:var(--txt-3); font-size:10px;'>(misma)</span>"
+            else:
+                link_ultima = (f"<a href='{_esc(url_ultima)}' target='_blank' "
+                               f"rel='noopener' title='{_esc(url_ultima)}' "
+                               f"style='color:var(--accent); font-size:11px;'>🔗 {label}</a>")
+        nivel_color = {"CRÍTICA": "var(--critico)", "ALTA": "var(--alto)",
+                        "MEDIA": "var(--medio)"}.get(p["nivel"], "var(--accent)")
         rows_persistentes += f"""
         <tr>
           <td><strong style='color:{nivel_color};'>{_esc(p['nivel'])}</strong></td>
@@ -737,14 +769,22 @@ def _render_tendencias(t: dict) -> str:
               <span style='color:var(--txt-2); font-size:11px;'>{_esc(p['categoria'])} · regla {_esc(p['regla'])}</span></td>
           <td style='text-align:center;'><strong>{p['dias_activo']}</strong> días<br>
               <span style='color:var(--txt-2); font-size:10px;'>{p['ocurrencias']} apariciones</span></td>
-          <td style='font-size:11px; color:var(--txt-2);'>
-              📅 {_fmt_datetime(p['primera_vez'])}<br>
-              🕒 {_fmt_datetime(p['ultima_vez'])}</td>
-          <td>{url_link}</td>
+          <td style='font-size:11px;'>
+              <div style='margin-bottom:6px;'>
+                <span style='color:var(--txt-3); font-size:10px;'>PRIMERA:</span><br>
+                <span style='color:var(--txt-2);'>📅 {_fmt_datetime(p['primera_vez'])}</span><br>
+                {link_primera}
+              </div>
+              <div>
+                <span style='color:var(--txt-3); font-size:10px;'>ÚLTIMA:</span><br>
+                <span style='color:var(--txt-2);'>🕒 {_fmt_datetime(p['ultima_vez'])}</span><br>
+                {link_ultima}
+              </div>
+          </td>
         </tr>
         """
     if not rows_persistentes:
-        rows_persistentes = "<tr><td colspan='5' style='text-align:center; color:var(--txt-2); padding:14px;'><em>Aún no hay alertas que se hayan repetido. Cuando se acumulen más snapshots aparecerán acá.</em></td></tr>"
+        rows_persistentes = "<tr><td colspan='4' style='text-align:center; color:var(--txt-2); padding:14px;'><em>Aún no hay alertas que se hayan repetido. Cuando se acumulen más snapshots aparecerán acá.</em></td></tr>"
 
     return f"""
     <div class='card span-12' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;'>
@@ -768,14 +808,17 @@ def _render_tendencias(t: dict) -> str:
 
     <div class='card span-12'>
       <h3>♻️ Casos persistentes · alertas que se siguen presentando <span class='badge'>{len(t['alertas_persistentes'])} casos</span></h3>
+      <div style='font-size:11px; color:var(--txt-2); margin-bottom:8px;'>
+        Cada caso muestra el enlace a la fuente de su PRIMERA aparición (cuando empezó a aparecer)
+        y la ÚLTIMA (más reciente) para validar la persistencia del evento.
+      </div>
       <table>
         <thead>
           <tr>
             <th>Nivel</th>
             <th>Caso / Categoría</th>
             <th style='text-align:center;'>Persistencia</th>
-            <th>Primera y última aparición</th>
-            <th>Fuente</th>
+            <th>Primera y última aparición (con fuentes)</th>
           </tr>
         </thead>
         <tbody>{rows_persistentes}</tbody>
