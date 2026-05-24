@@ -654,42 +654,100 @@ def _analizar_tendencias_semana(output_dir: str | None) -> dict:
         })
 
     # Alertas persistentes — agrupadas por título normalizado.
-    # Guardamos las URLs de la PRIMERA y ÚLTIMA aparición separadamente
-    # (no solo la última) para que el usuario pueda navegar a ambas
-    # apariciones desde la pestaña Casos Persistentes.
+    #
+    # CAMBIO mayo 2026: usamos la fecha REAL del artículo (alerta.timestamp,
+    # que es el campo `published` del RSS), NO la fecha del snapshot. Antes
+    # mostrábamos cuándo el sistema vio la alerta por primera vez; ahora
+    # mostramos cuándo se publicó realmente la noticia. Si el grupo contiene
+    # múltiples artículos con el mismo título (réplicas o reediciones),
+    # mostramos la versión más antigua y la más reciente con sus URLs propias
+    # y sus fechas reales, para que el enlace SIEMPRE coincida con la fecha.
+
+    def _parse_alert_ts(alerta_dict, snapshot_dt):
+        """Devuelve la fecha real de publicación del artículo.
+        Cae al snapshot timestamp si el campo `timestamp` está vacío o roto.
+        """
+        raw = (alerta_dict.get("timestamp") or "").strip()
+        if raw:
+            try:
+                parsed = parse_to_pe(raw)
+                if parsed:
+                    return parsed
+            except Exception:
+                pass
+            try:
+                return datetime.fromisoformat(raw)
+            except Exception:
+                pass
+        return snapshot_dt
+
     grupos = defaultdict(list)
     for dt, score, nivel, sid in snaps:
         for a in alertas_por_snap.get(sid, []):
             key = (a.get("titulo") or "")[:90].lower().strip()
-            grupos[key].append({"ts": dt, "alerta": a})
+            published_dt = _parse_alert_ts(a, dt)
+            grupos[key].append({
+                "ts_snapshot": dt,
+                "ts_publicado": published_dt,
+                "alerta": a,
+            })
     persistentes = []
     for key, ocurrencias in grupos.items():
         if not key or len(ocurrencias) < 2:
             continue
-        # Ordenar ocurrencias por timestamp ascendente
-        ocurrencias_ord = sorted(ocurrencias, key=lambda x: x["ts"])
-        primera = ocurrencias_ord[0]  # {"ts": dt, "alerta": {...}}
-        ultima = ocurrencias_ord[-1]
-        timestamps = [o["ts"] for o in ocurrencias_ord]
-        dias_distintos = len({t.date() for t in timestamps})
-        # Tomar URL y fuente de la última aparición (más fresca y descriptiva)
-        last_alerta = ultima["alerta"]
-        first_alerta = primera["alerta"]
+        # Sub-agrupamos por URL para no mezclar artículos distintos con el
+        # mismo título. Cada URL única tiene su propia fecha de publicación.
+        por_url = defaultdict(list)
+        for o in ocurrencias:
+            url_norm = (o["alerta"].get("url") or "").strip()
+            por_url[url_norm].append(o)
+
+        # Para cada URL única, tomamos su fecha real (la del artículo).
+        # Si una URL aparece en varios snapshots, usamos la más antigua
+        # como "publicado" y la fuente del registro original.
+        urls_unicas = []
+        for url, lista in por_url.items():
+            lista_ord = sorted(lista, key=lambda x: x["ts_publicado"])
+            origen = lista_ord[0]
+            urls_unicas.append({
+                "url": _sanitizar_url(url),
+                "fuente": origen["alerta"].get("fuente", ""),
+                "titulo": origen["alerta"].get("titulo", ""),
+                "publicado": origen["ts_publicado"],
+                "ultimo_visto_snapshot": max(o["ts_snapshot"] for o in lista),
+                "veces_vista": len(lista),
+            })
+        # Orden cronológico por fecha real del artículo
+        urls_unicas.sort(key=lambda x: x["publicado"])
+        articulo_primero = urls_unicas[0]
+        articulo_ultimo = urls_unicas[-1]
+
+        # Días distintos = días en que el sistema VIO esta noticia (cualquier URL)
+        snapshots_dts = [o["ts_snapshot"] for o in ocurrencias]
+        dias_distintos = len({t.date() for t in snapshots_dts})
+        ultima_vez_visto = max(snapshots_dts)
+
+        # Tomamos metadata (categoria/regla/nivel) del registro más reciente
+        ult_alerta = sorted(ocurrencias, key=lambda x: x["ts_snapshot"])[-1]["alerta"]
+
         persistentes.append({
-            "titulo": last_alerta.get("titulo", ""),
-            "categoria": last_alerta.get("categoria", ""),
-            "nivel": last_alerta.get("nivel", ""),
-            "regla": last_alerta.get("regla", ""),
-            # URL + fuente de la PRIMERA aparición (cuando empezó)
-            "url_primera": _sanitizar_url(first_alerta.get("url", "")),
-            "fuente_primera": first_alerta.get("fuente", ""),
-            # URL + fuente de la ÚLTIMA aparición (más reciente)
-            "url_ultima": _sanitizar_url(last_alerta.get("url", "")),
-            "fuente_ultima": last_alerta.get("fuente", ""),
+            "titulo": articulo_ultimo["titulo"] or ult_alerta.get("titulo", ""),
+            "categoria": ult_alerta.get("categoria", ""),
+            "nivel": ult_alerta.get("nivel", ""),
+            "regla": ult_alerta.get("regla", ""),
+            # Bloque PRIMERA: artículo MÁS ANTIGUO en cuanto a publicación real
+            "url_primera": articulo_primero["url"],
+            "fuente_primera": articulo_primero["fuente"],
+            "publicado_primera": articulo_primero["publicado"].isoformat(timespec="seconds"),
+            # Bloque ÚLTIMA: artículo MÁS RECIENTE en cuanto a publicación real
+            "url_ultima": articulo_ultimo["url"],
+            "fuente_ultima": articulo_ultimo["fuente"],
+            "publicado_ultima": articulo_ultimo["publicado"].isoformat(timespec="seconds"),
+            # Métricas de persistencia
             "ocurrencias": len(ocurrencias),
+            "urls_distintas": len(urls_unicas),
             "dias_activo": dias_distintos,
-            "primera_vez": primera["ts"].isoformat(timespec="seconds"),
-            "ultima_vez": ultima["ts"].isoformat(timespec="seconds"),
+            "ultimo_avistamiento": ultima_vez_visto.isoformat(timespec="seconds"),
         })
     persistentes.sort(key=lambda x: (-x["dias_activo"], -x["ocurrencias"]))
 
@@ -736,30 +794,41 @@ def _render_tendencias(t: dict) -> str:
         </div>
         """
 
-    # Persistent alerts — cada fila muestra URLs de PRIMERA y ÚLTIMA aparición
+    # Persistent alerts — cada fila muestra DOS bloques cronológicos:
+    #  • ARTÍCULO MÁS ANTIGUO publicado sobre el caso (con su URL y fecha real)
+    #  • ARTÍCULO MÁS RECIENTE publicado sobre el caso (con su URL y fecha real)
+    # Si solo existe UNA URL distinta (réplica del mismo artículo en muchos
+    # snapshots), ambos bloques apuntan al mismo enlace pero el segundo se
+    # marca como "(misma nota — sin nuevos artículos)" para que sea claro.
     rows_persistentes = ""
     for p in t["alertas_persistentes"]:
-        # URL primera aparición (con su fecha)
-        url_primera = p.get("url_primera") or p.get("url", "")
-        url_ultima = p.get("url_ultima") or p.get("url", "")
+        url_primera = p.get("url_primera", "")
+        url_ultima = p.get("url_ultima", "")
         fuente_primera = p.get("fuente_primera", "")
         fuente_ultima = p.get("fuente_ultima", "")
-        link_primera = ""
-        if url_primera:
-            label = _esc(fuente_primera[:20] if fuente_primera else "fuente")
-            link_primera = (f"<a href='{_esc(url_primera)}' target='_blank' "
-                            f"rel='noopener' title='{_esc(url_primera)}' "
-                            f"style='color:var(--accent); font-size:11px;'>🔗 {label}</a>")
-        link_ultima = ""
-        if url_ultima:
-            label = _esc(fuente_ultima[:20] if fuente_ultima else "fuente")
-            # Si las dos URLs son iguales (caso degenerado), solo mostrar una vez
-            if url_ultima == url_primera:
-                link_ultima = "<span style='color:var(--txt-3); font-size:10px;'>(misma)</span>"
-            else:
-                link_ultima = (f"<a href='{_esc(url_ultima)}' target='_blank' "
-                               f"rel='noopener' title='{_esc(url_ultima)}' "
-                               f"style='color:var(--accent); font-size:11px;'>🔗 {label}</a>")
+        urls_distintas = p.get("urls_distintas", 1)
+
+        def _mk_link(url, fuente):
+            if not url:
+                return ("<span style='color:var(--txt-3); font-size:10px;'>"
+                        "sin enlace disponible</span>")
+            label = _esc((fuente or "abrir nota")[:28])
+            return (f"<a href='{_esc(url)}' target='_blank' rel='noopener' "
+                    f"title='{_esc(url)}' "
+                    f"style='color:var(--accent); font-size:11px; "
+                    f"text-decoration:underline;'>🔗 {label}</a>")
+
+        link_primera = _mk_link(url_primera, fuente_primera)
+        link_ultima = _mk_link(url_ultima, fuente_ultima)
+
+        # Hint cuando solo hay 1 URL distinta (misma nota replicada)
+        replica_hint = ""
+        if urls_distintas <= 1 and url_primera:
+            replica_hint = ("<div style='color:var(--txt-3); font-size:10px; "
+                            "font-style:italic; margin-top:4px;'>"
+                            "(misma nota — sin artículos nuevos sobre el caso)"
+                            "</div>")
+
         nivel_color = {"CRÍTICA": "var(--critico)", "ALTA": "var(--alto)",
                         "MEDIA": "var(--medio)"}.get(p["nivel"], "var(--accent)")
         rows_persistentes += f"""
@@ -768,17 +837,18 @@ def _render_tendencias(t: dict) -> str:
           <td><strong>{_esc(p['titulo'])}</strong><br>
               <span style='color:var(--txt-2); font-size:11px;'>{_esc(p['categoria'])} · regla {_esc(p['regla'])}</span></td>
           <td style='text-align:center;'><strong>{p['dias_activo']}</strong> días<br>
-              <span style='color:var(--txt-2); font-size:10px;'>{p['ocurrencias']} apariciones</span></td>
+              <span style='color:var(--txt-2); font-size:10px;'>{p['ocurrencias']} apariciones · {urls_distintas} URL{'s' if urls_distintas > 1 else ''}</span></td>
           <td style='font-size:11px;'>
-              <div style='margin-bottom:6px;'>
-                <span style='color:var(--txt-3); font-size:10px;'>PRIMERA:</span><br>
-                <span style='color:var(--txt-2);'>📅 {_fmt_datetime(p['primera_vez'])}</span><br>
+              <div style='margin-bottom:8px; padding-bottom:6px; border-bottom:1px dashed var(--bg-3);'>
+                <span style='color:var(--txt-3); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;'>📰 Primer artículo (publicado)</span><br>
+                <span style='color:var(--txt-2);'>📅 {_fmt_datetime(p['publicado_primera'])}</span><br>
                 {link_primera}
               </div>
               <div>
-                <span style='color:var(--txt-3); font-size:10px;'>ÚLTIMA:</span><br>
-                <span style='color:var(--txt-2);'>🕒 {_fmt_datetime(p['ultima_vez'])}</span><br>
+                <span style='color:var(--txt-3); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;'>📰 Último artículo (publicado)</span><br>
+                <span style='color:var(--txt-2);'>🕒 {_fmt_datetime(p['publicado_ultima'])}</span><br>
                 {link_ultima}
+                {replica_hint}
               </div>
           </td>
         </tr>
@@ -808,9 +878,12 @@ def _render_tendencias(t: dict) -> str:
 
     <div class='card span-12'>
       <h3>♻️ Casos persistentes · alertas que se siguen presentando <span class='badge'>{len(t['alertas_persistentes'])} casos</span></h3>
-      <div style='font-size:11px; color:var(--txt-2); margin-bottom:8px;'>
-        Cada caso muestra el enlace a la fuente de su PRIMERA aparición (cuando empezó a aparecer)
-        y la ÚLTIMA (más reciente) para validar la persistencia del evento.
+      <div style='font-size:11px; color:var(--txt-2); margin-bottom:8px; line-height:1.5;'>
+        Para cada caso se muestran <strong>dos artículos</strong>: el <strong>más antiguo</strong>
+        y el <strong>más reciente</strong> publicados sobre el evento (con fecha real de
+        publicación del medio, no fecha en que el sistema lo detectó). Cada enlace abre
+        la nota original. Si solo existe una URL distinta, significa que la misma nota se
+        viene replicando y no hay artículos nuevos sobre el caso.
       </div>
       <table>
         <thead>
@@ -818,7 +891,7 @@ def _render_tendencias(t: dict) -> str:
             <th>Nivel</th>
             <th>Caso / Categoría</th>
             <th style='text-align:center;'>Persistencia</th>
-            <th>Primera y última aparición (con fuentes)</th>
+            <th>Primer y último artículo publicado (con enlaces a la fuente)</th>
           </tr>
         </thead>
         <tbody>{rows_persistentes}</tbody>
