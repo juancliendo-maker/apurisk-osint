@@ -1988,20 +1988,64 @@ def generar_dashboard_html(
   <!-- TAB: DESCARGAS -->
   <section class="tab-panel" id="tab-descargas">
     <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
-      <h3 style="margin-bottom: 6px;">📥 Centro de descargas <span class="badge">{total_descargas} archivos</span></h3>
+      <h3 style="margin-bottom: 6px;">📥 Centro de descargas</h3>
       <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
-        📌 <strong>Reportes bajo demanda</strong>: usa los botones "Generar AHORA" para crear
-        cualquier reporte (24h, Alertas, Ejecutivo, Diario, Semanal) en el formato que necesites.
-        Los archivos generados quedan acá para descarga rápida.
+        🕕 <strong>Reportes diarios automáticos</strong>: el sistema genera un único PDF ejecutivo
+        cada día a las <strong>06:00 AM Lima (PET)</strong>. Solo formato PDF. Retención: 30 días.
         <br><br>
-        💾 <strong>Optimización de disco</strong>: el sistema solo guarda el dashboard.html
-        actual y los últimos snapshots para el archivo histórico SQLite. Los reportes
-        descargables se crean únicamente cuando los pides — sin acumulación automática.
+        📌 <strong>Reportes bajo demanda</strong>: usa los botones "Generar AHORA" para crear
+        cualquier reporte (24h, Alertas, Ejecutivo, Diario, Semanal) en formato <strong>PDF o Word (DOCX)</strong>.
         <br><br>
         🧹 <a href="#" onclick="limpiarArchivos(); return false;" style="color:var(--accent);">
           Limpiar archivos antiguos del disco
         </a> · Conserva los snapshots más recientes y los reportes &lt;30 días.
       </div>
+    </div>
+
+    <!-- Sección: Reportes Diarios Automáticos (06:00 AM PET) -->
+    <div class="card span-12" style="margin-bottom: 14px;">
+      <h3 style="margin-bottom: 10px;">🕕 Reportes Diarios Automáticos (PDF · 06:00 AM PET)</h3>
+      <div id="reportes-diarios-list" style="color:var(--txt-1); font-size:13px;">
+        <div style="color:var(--txt-2); font-style:italic; padding:14px;">Cargando reportes diarios…</div>
+      </div>
+      <script>
+        async function cargarReportesDiarios() {{
+          const list = document.getElementById('reportes-diarios-list');
+          try {{
+            const r = await fetch('/api/reportes-diarios');
+            const d = await r.json();
+            if (!d.reportes || d.reportes.length === 0) {{
+              list.innerHTML = '<div style="color:var(--txt-2); font-style:italic; padding:14px;">Aún no hay reportes diarios generados. El primer reporte se generará a las 06:00 AM Lima.</div>';
+              return;
+            }}
+            let html = '<div style="display:grid; gap:8px;">';
+            d.reportes.forEach(rep => {{
+              const fecha = new Date(rep.fecha_generacion).toLocaleString('es-PE');
+              html += `<div style="background:var(--bg-2); border-left:4px solid var(--accent); border-radius:6px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:14px;">
+                <div style="flex:1;">
+                  <div style="font-weight:600; color:var(--txt-0); font-size:13px;">${{rep.nombre}}</div>
+                  <div style="font-size:11px; color:var(--txt-2); margin-top:3px;">📅 ${{fecha}} · 📏 ${{rep.tamaño_kb}} KB</div>
+                </div>
+                <a href="${{rep.url_descarga}}" target="_blank" rel="noopener" style="background:var(--accent); color:var(--bg-0); padding:8px 14px; border-radius:6px; font-size:12px; font-weight:600; text-decoration:none; white-space:nowrap;">📥 PDF</a>
+              </div>`;
+            }});
+            html += '</div>';
+            list.innerHTML = html;
+          }} catch (e) {{
+            list.innerHTML = '<div style="color:var(--critico); padding:14px;">Error: ' + e.message + '</div>';
+          }}
+        }}
+        // Cargar al abrir la pestaña Descargas
+        document.querySelectorAll('.tab').forEach(t => {{
+          t.addEventListener('click', () => {{
+            if (t.dataset.tab === 'descargas') {{
+              setTimeout(cargarReportesDiarios, 100);
+            }}
+          }});
+        }});
+        // También al cargar la página por si abre en Descargas directamente
+        cargarReportesDiarios();
+      </script>
     </div>
     <script>
       async function limpiarArchivos() {{

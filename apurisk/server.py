@@ -148,6 +148,90 @@ async def _scheduler_loop():
 # =============================================================
 
 
+# =============================================================
+# SCHEDULER DIARIO EJECUTIVO — 06:00 AM Lima (PET)
+# =============================================================
+# Genera UN único reporte ejecutivo PDF cada día a las 06:00 AM Lima.
+# Contiene datos consolidados hasta esa hora del día.
+# Se almacena en /output/reportes_diarios/.
+# Limpieza retentiva: mantiene últimos 30 días.
+#
+# Los reportes manuales (generados desde el dashboard) siguen
+# disponibles en formato PDF y DOCX vía endpoints REST.
+# =============================================================
+
+REPORTES_DIARIOS_DIR = OUTPUT_DIR / "reportes_diarios"
+REPORTES_DIARIOS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _limpiar_reportes_diarios_viejos(retencion_dias: int = 30) -> int:
+    """Elimina reportes diarios con más de N días de antigüedad."""
+    from datetime import datetime as _dt
+    eliminados = 0
+    limite = _dt.now().timestamp() - retencion_dias * 86400
+    for f in REPORTES_DIARIOS_DIR.glob("apurisk_reporte_diario_*.pdf"):
+        try:
+            if f.stat().st_mtime < limite:
+                f.unlink()
+                eliminados += 1
+        except Exception:
+            pass
+    return eliminados
+
+
+async def _scheduler_diario_pdf():
+    """Loop infinito que cada día a las 06:00 AM Lima genera 1 PDF ejecutivo.
+
+    El PDF consolida los datos hasta las 06:00 AM y se guarda en
+    /output/reportes_diarios/. NO genera DOCX/HTML/JSON adicionales.
+    Los reportes manuales (vía dashboard) siguen con PDF+DOCX disponibles.
+    """
+    from datetime import timedelta as _td
+    print("[scheduler-diario-pdf] iniciado · proxima corrida: hoy/manana 06:00 PET")
+    while True:
+        try:
+            ahora = now_pe()
+            # Calcular próximo 06:00 AM PET
+            proximo = ahora.replace(hour=6, minute=0, second=0, microsecond=0)
+            if ahora >= proximo:
+                # Ya pasaron las 06:00 hoy, programar para mañana
+                proximo += _td(days=1)
+            espera_seg = (proximo - ahora).total_seconds()
+            print(f"[scheduler-diario-pdf] próximo reporte diario: "
+                  f"{proximo.isoformat()} (en {int(espera_seg/3600)}h "
+                  f"{int((espera_seg%3600)/60)}m)")
+            await asyncio.sleep(max(60, espera_seg))
+
+            # Generar el PDF ejecutivo diario
+            print(f"[scheduler-diario-pdf] generando reporte diario a las {now_pe_iso()}")
+            try:
+                snap_path = _ultimo_snapshot_path()
+                if not snap_path:
+                    print("[scheduler-diario-pdf] sin snapshot disponible, saltando")
+                    continue
+                with open(snap_path, encoding="utf-8") as f:
+                    snap = json.load(f)
+
+                # Limpieza retentiva ANTES de generar nuevo
+                n_limpios = _limpiar_reportes_diarios_viejos(retencion_dias=30)
+                if n_limpios > 0:
+                    print(f"[scheduler-diario-pdf] {n_limpios} reportes >30d eliminados")
+
+                # Nombre claro con fecha
+                fecha = now_pe().strftime("%Y%m%d")
+                filename = f"apurisk_reporte_diario_{fecha}_06h.pdf"
+                pdf_path = REPORTES_DIARIOS_DIR / filename
+
+                # Generar el PDF ejecutivo (formato compacto ≤3 páginas)
+                generar_ejecutivo_pdf(str(pdf_path), snap, str(OUTPUT_DIR))
+                print(f"[scheduler-diario-pdf] OK: {filename}")
+            except Exception as e:
+                print(f"[scheduler-diario-pdf] ERROR generando: {e}")
+        except Exception as e:
+            print(f"[scheduler-diario-pdf] ERROR ciclo: {e}")
+            await asyncio.sleep(3600)  # espera 1h en error grave
+
+
 @app.on_event("startup")
 async def _startup():
     # Limpieza AGRESIVA de archivos antiguos al iniciar el servicio.
@@ -166,13 +250,19 @@ async def _startup():
         )
         if n > 0:
             print(f"[startup] {n} archivos antiguos eliminados del disco")
+        # También limpiar reportes diarios viejos (>30 días)
+        n_diarios = _limpiar_reportes_diarios_viejos(retencion_dias=30)
+        if n_diarios > 0:
+            print(f"[startup] {n_diarios} reportes diarios >30d eliminados")
     except Exception as e:
         print(f"[startup] limpieza inicial falló: {e}")
 
-    # Lanzar el scheduler OSINT principal (recolección RSS cada 30 min)
+    # Schedulers activos:
+    # 1) Principal OSINT (cada 30 min): recolecta RSS y actualiza dashboard.html
     asyncio.create_task(_scheduler_loop())
-    # NOTA: scheduler semanal minero DESACTIVADO. Solo reportes manuales
-    # generados desde el formulario se archivan.
+    # 2) Diario PDF (06:00 AM Lima): genera 1 PDF ejecutivo diario
+    asyncio.create_task(_scheduler_diario_pdf())
+    # NOTA: scheduler semanal minero DESACTIVADO.
     # asyncio.create_task(_scheduler_semanal_minera())
 
 
@@ -364,6 +454,50 @@ async def intelligence_brief(dias_baseline: int = Query(28, ge=7, le=180)):
     except Exception as e:
         raise HTTPException(status_code=500,
                               detail=f"Error generando intelligence brief: {e}")
+
+
+@app.get("/api/reportes-diarios")
+async def listar_reportes_diarios():
+    """Lista los PDFs ejecutivos diarios generados automáticamente a las 06:00 AM.
+
+    Cada PDF contiene la consolidación del día. Retención automática: 30 días.
+    """
+    archivos = []
+    for f in sorted(REPORTES_DIARIOS_DIR.glob("apurisk_reporte_diario_*.pdf"),
+                     key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            stat = f.stat()
+            archivos.append({
+                "nombre": f.name,
+                "tamaño_kb": round(stat.st_size / 1024, 1),
+                "fecha_generacion": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                "url_descarga": f"/api/reportes-diarios/{f.name}",
+            })
+        except Exception:
+            continue
+    return {
+        "count": len(archivos),
+        "retencion_dias": 30,
+        "siguiente_generacion": "Diaria a las 06:00 AM Lima (PET)",
+        "formato": "PDF únicamente",
+        "reportes": archivos,
+    }
+
+
+@app.get("/api/reportes-diarios/{filename}")
+async def descargar_reporte_diario(filename: str):
+    """Descarga un PDF de reporte diario por nombre."""
+    # Sanity check: solo PDFs y solo dentro del directorio
+    if not filename.endswith(".pdf") or "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nombre inválido")
+    pdf_path = REPORTES_DIARIOS_DIR / filename
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=filename,
+    )
 
 
 @app.post("/api/limpiar-archive-contaminado")
