@@ -730,6 +730,25 @@ def _analizar_tendencias_semana(output_dir: str | None) -> dict:
         # Tomamos metadata (categoria/regla/nivel) del registro más reciente
         ult_alerta = sorted(ocurrencias, key=lambda x: x["ts_snapshot"])[-1]["alerta"]
 
+        # Número de MEDIOS distintos (no URLs) — métrica de cobertura real
+        medios_distintos = len({
+            (u["fuente"] or "").strip().lower()
+            for u in urls_unicas
+            if (u["fuente"] or "").strip()
+        })
+
+        # Lista serializable de todas las URLs únicas (para la vista expandida)
+        urls_serializadas = [
+            {
+                "url": u["url"],
+                "fuente": u["fuente"],
+                "titulo": u["titulo"],
+                "publicado": u["publicado"].isoformat(timespec="seconds"),
+                "veces_vista": u["veces_vista"],
+            }
+            for u in urls_unicas
+        ]
+
         persistentes.append({
             "titulo": articulo_ultimo["titulo"] or ult_alerta.get("titulo", ""),
             "categoria": ult_alerta.get("categoria", ""),
@@ -746,8 +765,10 @@ def _analizar_tendencias_semana(output_dir: str | None) -> dict:
             # Métricas de persistencia
             "ocurrencias": len(ocurrencias),
             "urls_distintas": len(urls_unicas),
+            "medios_distintos": medios_distintos,
             "dias_activo": dias_distintos,
             "ultimo_avistamiento": ultima_vez_visto.isoformat(timespec="seconds"),
+            "urls_serializadas": urls_serializadas,
         })
     persistentes.sort(key=lambda x: (-x["dias_activo"], -x["ocurrencias"]))
 
@@ -794,68 +815,97 @@ def _render_tendencias(t: dict) -> str:
         </div>
         """
 
-    # Persistent alerts — cada fila muestra DOS bloques cronológicos:
-    #  • ARTÍCULO MÁS ANTIGUO publicado sobre el caso (con su URL y fecha real)
-    #  • ARTÍCULO MÁS RECIENTE publicado sobre el caso (con su URL y fecha real)
-    # Si solo existe UNA URL distinta (réplica del mismo artículo en muchos
-    # snapshots), ambos bloques apuntan al mismo enlace pero el segundo se
-    # marca como "(misma nota — sin nuevos artículos)" para que sea claro.
-    rows_persistentes = ""
-    for p in t["alertas_persistentes"]:
-        url_primera = p.get("url_primera", "")
-        url_ultima = p.get("url_ultima", "")
-        fuente_primera = p.get("fuente_primera", "")
-        fuente_ultima = p.get("fuente_ultima", "")
-        urls_distintas = p.get("urls_distintas", 1)
+    # Persistent alerts — se separan en DOS bloques con semántica distinta:
+    #
+    #  🔥 COBERTURA ACTIVA: el caso tiene 2+ URLs distintas. Significa que
+    #     varios medios publicaron artículos NUEVOS sobre el mismo asunto.
+    #     Esto es señal real de un caso vivo y caliente.
+    #
+    #  🔁 NOTAS EN REPLAY: el caso tiene 1 sola URL apareciendo en muchos
+    #     snapshots. Es la misma nota siendo re-indexada por Google News o
+    #     replicada en feeds. No hay artículos nuevos — es ruido informativo,
+    #     útil solo para confirmar que el asunto sigue circulando.
 
-        def _mk_link(url, fuente):
-            if not url:
-                return ("<span style='color:var(--txt-3); font-size:10px;'>"
-                        "sin enlace disponible</span>")
-            label = _esc((fuente or "abrir nota")[:28])
-            return (f"<a href='{_esc(url)}' target='_blank' rel='noopener' "
-                    f"title='{_esc(url)}' "
-                    f"style='color:var(--accent); font-size:11px; "
-                    f"text-decoration:underline;'>🔗 {label}</a>")
+    def _mk_link(url, fuente, max_label=28):
+        if not url:
+            return ("<span style='color:var(--txt-3); font-size:10px;'>"
+                    "sin enlace</span>")
+        label = _esc((fuente or "abrir nota")[:max_label])
+        return (f"<a href='{_esc(url)}' target='_blank' rel='noopener' "
+                f"title='{_esc(url)}' "
+                f"style='color:var(--accent); font-size:11px; "
+                f"text-decoration:underline;'>🔗 {label}</a>")
 
-        link_primera = _mk_link(url_primera, fuente_primera)
-        link_ultima = _mk_link(url_ultima, fuente_ultima)
+    def _nivel_color(nivel):
+        return {"CRÍTICA": "var(--critico)", "ALTA": "var(--alto)",
+                "MEDIA": "var(--medio)"}.get(nivel, "var(--accent)")
 
-        # Hint cuando solo hay 1 URL distinta (misma nota replicada)
-        replica_hint = ""
-        if urls_distintas <= 1 and url_primera:
-            replica_hint = ("<div style='color:var(--txt-3); font-size:10px; "
-                            "font-style:italic; margin-top:4px;'>"
-                            "(misma nota — sin artículos nuevos sobre el caso)"
-                            "</div>")
+    casos_activos = [p for p in t["alertas_persistentes"]
+                     if p.get("urls_distintas", 1) >= 2]
+    casos_replay = [p for p in t["alertas_persistentes"]
+                    if p.get("urls_distintas", 1) <= 1]
 
-        nivel_color = {"CRÍTICA": "var(--critico)", "ALTA": "var(--alto)",
-                        "MEDIA": "var(--medio)"}.get(p["nivel"], "var(--accent)")
-        rows_persistentes += f"""
+    # ---- Render: 🔥 Cobertura activa ----
+    rows_activos = ""
+    for p in casos_activos:
+        urls_list = p.get("urls_serializadas", [])
+        urls_html = ""
+        for idx, u in enumerate(urls_list):
+            es_primero = (idx == 0)
+            es_ultimo = (idx == len(urls_list) - 1)
+            marcador = ""
+            if es_primero:
+                marcador = "<span style='color:var(--accent); font-size:9px; font-weight:700;'>PRIMERO</span> "
+            elif es_ultimo:
+                marcador = "<span style='color:var(--critico); font-size:9px; font-weight:700;'>ÚLTIMO</span> "
+            urls_html += (
+                f"<div style='margin-bottom:6px; padding-left:6px; border-left:2px solid var(--bg-3);'>"
+                f"{marcador}"
+                f"<span style='color:var(--txt-2); font-size:10px;'>📅 {_fmt_datetime(u['publicado'])}</span> · "
+                f"{_mk_link(u['url'], u['fuente'], max_label=35)}"
+                f"</div>"
+            )
+        rows_activos += f"""
         <tr>
-          <td><strong style='color:{nivel_color};'>{_esc(p['nivel'])}</strong></td>
+          <td><strong style='color:{_nivel_color(p['nivel'])};'>{_esc(p['nivel'])}</strong></td>
           <td><strong>{_esc(p['titulo'])}</strong><br>
               <span style='color:var(--txt-2); font-size:11px;'>{_esc(p['categoria'])} · regla {_esc(p['regla'])}</span></td>
-          <td style='text-align:center;'><strong>{p['dias_activo']}</strong> días<br>
-              <span style='color:var(--txt-2); font-size:10px;'>{p['ocurrencias']} apariciones · {urls_distintas} URL{'s' if urls_distintas > 1 else ''}</span></td>
+          <td style='text-align:center;'>
+              <strong style='font-size:14px;'>{p.get('medios_distintos', 0)}</strong> medios<br>
+              <span style='color:var(--txt-2); font-size:10px;'>{p.get('urls_distintas', 0)} artículos · {p['dias_activo']} días</span>
+          </td>
+          <td style='font-size:11px;'>{urls_html}</td>
+        </tr>
+        """
+    if not rows_activos:
+        rows_activos = (
+            "<tr><td colspan='4' style='text-align:center; color:var(--txt-2); "
+            "padding:14px;'><em>No hay casos con cobertura múltiple aún. "
+            "Cuando varios medios publiquen sobre el mismo asunto aparecerán acá.</em></td></tr>"
+        )
+
+    # ---- Render: 🔁 Notas en replay ----
+    rows_replay = ""
+    for p in casos_replay:
+        url_unica = p.get("url_primera", "")
+        fuente_unica = p.get("fuente_primera", "")
+        rows_replay += f"""
+        <tr>
+          <td><strong style='color:{_nivel_color(p['nivel'])};'>{_esc(p['nivel'])}</strong></td>
+          <td><strong>{_esc(p['titulo'])}</strong><br>
+              <span style='color:var(--txt-2); font-size:11px;'>{_esc(p['categoria'])} · regla {_esc(p['regla'])}</span></td>
+          <td style='text-align:center;'>
+              <strong>{p['dias_activo']}</strong> días<br>
+              <span style='color:var(--txt-2); font-size:10px;'>{p['ocurrencias']} re-indexaciones</span>
+          </td>
           <td style='font-size:11px;'>
-              <div style='margin-bottom:8px; padding-bottom:6px; border-bottom:1px dashed var(--bg-3);'>
-                <span style='color:var(--txt-3); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;'>📰 Primer artículo (publicado)</span><br>
-                <span style='color:var(--txt-2);'>📅 {_fmt_datetime(p['publicado_primera'])}</span><br>
-                {link_primera}
+              <div style='color:var(--txt-2); margin-bottom:4px;'>
+                📅 Publicado: <strong>{_fmt_datetime(p['publicado_primera'])}</strong>
               </div>
-              <div>
-                <span style='color:var(--txt-3); font-size:10px; text-transform:uppercase; letter-spacing:0.5px;'>📰 Último artículo (publicado)</span><br>
-                <span style='color:var(--txt-2);'>🕒 {_fmt_datetime(p['publicado_ultima'])}</span><br>
-                {link_ultima}
-                {replica_hint}
-              </div>
+              <div>{_mk_link(url_unica, fuente_unica, max_label=40)}</div>
           </td>
         </tr>
         """
-    if not rows_persistentes:
-        rows_persistentes = "<tr><td colspan='4' style='text-align:center; color:var(--txt-2); padding:14px;'><em>Aún no hay alertas que se hayan repetido. Cuando se acumulen más snapshots aparecerán acá.</em></td></tr>"
-
     return f"""
     <div class='card span-12' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;'>
       <h3>📈 Análisis semanal de tendencias <span class='badge'>{t['snapshots']} snapshots · período: {_fmt_datetime(t['primer_snap'])} → {_fmt_datetime(t['ultimo_snap'])}</span></h3>
@@ -876,25 +926,48 @@ def _render_tendencias(t: dict) -> str:
       <div style='height: 280px;'><canvas id='alertasSerieChart'></canvas></div>
     </div>
 
-    <div class='card span-12'>
-      <h3>♻️ Casos persistentes · alertas que se siguen presentando <span class='badge'>{len(t['alertas_persistentes'])} casos</span></h3>
-      <div style='font-size:11px; color:var(--txt-2); margin-bottom:8px; line-height:1.5;'>
-        Para cada caso se muestran <strong>dos artículos</strong>: el <strong>más antiguo</strong>
-        y el <strong>más reciente</strong> publicados sobre el evento (con fecha real de
-        publicación del medio, no fecha en que el sistema lo detectó). Cada enlace abre
-        la nota original. Si solo existe una URL distinta, significa que la misma nota se
-        viene replicando y no hay artículos nuevos sobre el caso.
+    <div class='card span-12' style='background:linear-gradient(135deg, rgba(220,38,38,0.06), transparent); border-left: 4px solid var(--critico);'>
+      <h3>🔥 Cobertura activa · varios medios publicaron artículos NUEVOS sobre el caso <span class='badge'>{len(casos_activos)} casos</span></h3>
+      <div style='font-size:12px; color:var(--txt-1); margin-bottom:10px; line-height:1.6;'>
+        Estos son los casos con <strong>cobertura mediática real</strong>: 2 o más artículos
+        distintos publicados por uno o varios medios. Cada fila lista <strong>todos los artículos
+        publicados</strong> sobre el caso, ordenados por fecha real de publicación (primero el
+        más antiguo, al final el más reciente). El primero está marcado con <strong style='color:var(--accent);'>PRIMERO</strong>
+        y el último con <strong style='color:var(--critico);'>ÚLTIMO</strong>. Esta es la métrica
+        accionable: cuántos <strong>medios distintos</strong> han escrito sobre el evento.
       </div>
       <table>
         <thead>
           <tr>
             <th>Nivel</th>
             <th>Caso / Categoría</th>
-            <th style='text-align:center;'>Persistencia</th>
-            <th>Primer y último artículo publicado (con enlaces a la fuente)</th>
+            <th style='text-align:center;'>Cobertura</th>
+            <th>Todos los artículos publicados (orden cronológico)</th>
           </tr>
         </thead>
-        <tbody>{rows_persistentes}</tbody>
+        <tbody>{rows_activos}</tbody>
+      </table>
+    </div>
+
+    <div class='card span-12' style='background:linear-gradient(135deg, rgba(100,116,139,0.06), transparent); border-left: 4px solid var(--bg-3);'>
+      <h3>🔁 Notas en replay · una misma nota indexándose en feeds <span class='badge'>{len(casos_replay)} casos</span></h3>
+      <div style='font-size:12px; color:var(--txt-1); margin-bottom:10px; line-height:1.6;'>
+        Estos casos tienen <strong>una sola URL</strong> apareciendo repetidamente en
+        los snapshots. Significa que el mismo artículo sigue siendo indexado por Google
+        News o aparece en feeds, pero <strong>no hay nuevos artículos sobre el caso</strong>.
+        Es ruido informativo — útil solo para confirmar que un asunto sigue circulando,
+        pero no es señal de cobertura mediática nueva.
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Nivel</th>
+            <th>Nota / Categoría</th>
+            <th style='text-align:center;'>Repetición</th>
+            <th>Artículo original</th>
+          </tr>
+        </thead>
+        <tbody>{rows_replay}</tbody>
       </table>
     </div>
 
