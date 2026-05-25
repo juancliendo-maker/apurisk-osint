@@ -1,4 +1,11 @@
-"""APURISK Executive Synthesis Engine.
+"""APURISK Executive Synthesis Engine — versión defensiva.
+
+Tolera estructuras de datos parciales o malformadas en el snapshot
+(campos que vienen como string en lugar de dict, claves faltantes,
+listas vacías). Cada bloque del brief está aislado en try/except
+para que un fallo en uno no rompa los demás.
+
+
 
 Destila la salida cruda del pipeline OSINT + Intelligence Engine en un
 brief ejecutivo C-level de 7 bloques:
@@ -29,6 +36,41 @@ from ..utils.llm_client import redactar_narrativa, redactar_insight, llm_disponi
 from ..utils.timezone_pe import now_pe, now_pe_iso
 
 log = logging.getLogger("apurisk.executive")
+
+
+# =====================================================================
+# HELPERS DEFENSIVOS — toleran datos malformados sin romperse
+# =====================================================================
+
+def _safe_dict(x, default=None) -> dict:
+    """Devuelve x si es dict, si no devuelve default (o {})."""
+    if default is None:
+        default = {}
+    return x if isinstance(x, dict) else default
+
+
+def _safe_list(x, default=None) -> list:
+    """Devuelve x si es lista, si no devuelve default (o [])."""
+    if default is None:
+        default = []
+    return x if isinstance(x, list) else default
+
+
+def _safe_get(obj, key, default=None):
+    """Como obj.get(key, default) pero tolera obj que no sea dict."""
+    if not isinstance(obj, dict):
+        return default
+    return obj.get(key, default)
+
+
+def _safe_num(x, default=0):
+    """Devuelve x si es número, si no devuelve default."""
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return x
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return default
 
 
 # =====================================================================
@@ -86,25 +128,36 @@ def _etiqueta_nivel(score: float) -> tuple[str, str]:
 
 def _status_nacional(snapshot: dict, intelligence_brief: dict) -> dict:
     """5 métricas ejecutivas con delta semanal."""
-    matriz = snapshot.get("matriz_riesgo", []) or []
-    score_global = snapshot.get("riesgo", {}).get("score_global", 0) or 0
+    matriz = [f for f in _safe_list(_safe_get(snapshot, "matriz_riesgo", []))
+              if isinstance(f, dict)]
+
+    # score_global puede venir como número directo, o dentro de "riesgo" como dict
+    riesgo_obj = _safe_get(snapshot, "riesgo", {})
+    if isinstance(riesgo_obj, dict):
+        score_global = _safe_num(riesgo_obj.get("score_global", 0))
+    else:
+        # algunos snapshots tienen score_global en raíz
+        score_global = _safe_num(_safe_get(snapshot, "score_global", 0))
 
     # Riesgo Minero: media de scores de factores mineros
-    scores_mineros = [f["score"] for f in matriz if f.get("id") in FACTORES_MINEROS]
+    scores_mineros = [_safe_num(f.get("score", 0)) for f in matriz
+                       if _safe_get(f, "id") in FACTORES_MINEROS]
     riesgo_minero = round(sum(scores_mineros) / len(scores_mineros), 1) if scores_mineros else 0
 
     # Riesgo Corredor Sur: factor extractivo específicamente
-    f_corredor = next((f for f in matriz if f.get("id") == "conflictos_extractivos"), {})
-    riesgo_corredor = f_corredor.get("score", 0) if f_corredor else 0
+    f_corredor = next((f for f in matriz
+                        if _safe_get(f, "id") == "conflictos_extractivos"), {})
+    f_corredor = _safe_dict(f_corredor)
+    riesgo_corredor = _safe_num(f_corredor.get("score", 0))
 
     # Riesgo Criminal: media de scores criminales
-    scores_criminales = [f["score"] for f in matriz if f.get("id") in FACTORES_CRIMINALES]
+    scores_criminales = [_safe_num(f.get("score", 0)) for f in matriz
+                          if _safe_get(f, "id") in FACTORES_CRIMINALES]
     riesgo_criminal = round(sum(scores_criminales) / len(scores_criminales), 1) if scores_criminales else 0
 
     # Delta semanal: comparar con baseline si está disponible
-    baseline = intelligence_brief.get("baseline", {}) or {}
-    benchmark = intelligence_brief.get("comparative_benchmark", {}) or {}
-    delta_score_global = benchmark.get("delta_vs_4w_media", 0) or 0
+    benchmark = _safe_dict(_safe_get(intelligence_brief, "comparative_benchmark"))
+    delta_score_global = _safe_num(benchmark.get("delta_vs_4w_media", 0))
 
     # Tendencia país derivada del delta
     if delta_score_global >= 5:
@@ -121,7 +174,7 @@ def _status_nacional(snapshot: dict, intelligence_brief: dict) -> dict:
         etiqueta, color = _etiqueta_nivel(score)
         return {
             "nombre": nombre,
-            "score": round(score, 1),
+            "score": round(_safe_num(score), 1),
             "etiqueta": etiqueta,
             "color": color,
             "sublabel": sublabel,
@@ -133,7 +186,7 @@ def _status_nacional(snapshot: dict, intelligence_brief: dict) -> dict:
         "minero": _construir("Riesgo Sector Minero", riesgo_minero,
                               f"{len(scores_mineros)} factores agregados"),
         "corredor_sur": _construir("Riesgo Corredor Sur", riesgo_corredor,
-                                    f_corredor.get("tendencia", "→") + " tendencia"),
+                                    str(_safe_get(f_corredor, "tendencia", "→")) + " tendencia"),
         "criminal": _construir("Riesgo Criminal / Seguridad", riesgo_criminal,
                                 f"{len(scores_criminales)} indicadores"),
         "tendencia_pais": {
@@ -154,65 +207,73 @@ def _status_nacional(snapshot: dict, intelligence_brief: dict) -> dict:
 def _priorizar_amenazas(snapshot: dict, intelligence_brief: dict,
                          top_n: int = 5) -> list[dict]:
     """Top N amenazas filtradas por relevancia operacional + narrativa LLM."""
-    matriz = snapshot.get("matriz_riesgo", []) or []
+    matriz = [f for f in _safe_list(_safe_get(snapshot, "matriz_riesgo", []))
+              if isinstance(f, dict)]
     if not matriz:
         return []
 
-    # Sort por score descendente; el matriz_riesgo ya viene así pero garantizamos
-    matriz_ord = sorted(matriz, key=lambda x: -x.get("score", 0))
+    # Sort por score descendente
+    matriz_ord = sorted(matriz, key=lambda x: -_safe_num(_safe_get(x, "score", 0)))
 
     # Filtrar: priorizar los que tienen implicancias operacionales mapeadas
     candidatos = []
     for f in matriz_ord:
-        fid = f.get("id")
+        fid = _safe_get(f, "id")
         implicancias = IMPLICANCIAS_POR_FACTOR.get(fid, [])
-        # Bonus de relevancia si afecta logística, continuidad o fuerza laboral
         relevancia_op = sum(1 for x in implicancias
                              if x in {"logistica", "continuidad", "fuerza_laboral"})
         candidatos.append((f, relevancia_op))
-    # Re-ordenar: primero por relevancia operacional, después por score
-    candidatos.sort(key=lambda x: (-x[1], -x[0].get("score", 0)))
+    candidatos.sort(key=lambda x: (-x[1], -_safe_num(_safe_get(x[0], "score", 0))))
 
     top = [c[0] for c in candidatos[:top_n]]
 
     # Anclar convergencias relevantes del Intelligence Engine
-    convergencias = intelligence_brief.get("convergencias", []) or []
+    convergencias = _safe_list(_safe_get(intelligence_brief, "convergencias", []))
     conv_ids = set()
     for c in convergencias:
-        for f in c.get("factores", []):
-            conv_ids.add(f.get("id"))
+        c_dict = _safe_dict(c)
+        for f in _safe_list(c_dict.get("factores", [])):
+            f_dict = _safe_dict(f)
+            fid = f_dict.get("id")
+            if fid:
+                conv_ids.add(fid)
 
     out = []
     for f in top:
-        narrativa = _narrativa_amenaza(f, snapshot, en_convergencia=(f.get("id") in conv_ids))
+        fid = _safe_get(f, "id")
+        narrativa = _narrativa_amenaza(f, snapshot, en_convergencia=(fid in conv_ids))
         out.append({
-            "id": f.get("id"),
-            "nombre": f.get("nombre"),
-            "categoria": f.get("categoria"),
-            "score": f.get("score"),
-            "nivel": f.get("nivel"),
-            "probabilidad": f.get("probabilidad"),
-            "impacto": f.get("impacto"),
-            "tendencia": f.get("tendencia"),
+            "id": fid,
+            "nombre": _safe_get(f, "nombre"),
+            "categoria": _safe_get(f, "categoria"),
+            "score": _safe_get(f, "score"),
+            "nivel": _safe_get(f, "nivel"),
+            "probabilidad": _safe_get(f, "probabilidad"),
+            "impacto": _safe_get(f, "impacto"),
+            "tendencia": _safe_get(f, "tendencia"),
             "narrativa": narrativa,
-            "en_convergencia": f.get("id") in conv_ids,
-            "implicancias_categorias": IMPLICANCIAS_POR_FACTOR.get(f.get("id"), []),
+            "en_convergencia": fid in conv_ids,
+            "implicancias_categorias": IMPLICANCIAS_POR_FACTOR.get(fid, []),
         })
     return out
 
 
 def _narrativa_amenaza(factor: dict, snapshot: dict, en_convergencia: bool) -> str:
     """Genera narrativa de 2-3 líneas. LLM si disponible, fallback si no."""
-    fid = factor.get("id", "")
-    nombre = factor.get("nombre", "")
-    score = factor.get("score", 0)
-    nivel = factor.get("nivel", "")
-    tendencia = factor.get("tendencia", "→")
-    evidencias = factor.get("evidencias", [])[:3]
+    factor = _safe_dict(factor)
+    fid = str(_safe_get(factor, "id", ""))
+    nombre = str(_safe_get(factor, "nombre", ""))
+    score = _safe_num(_safe_get(factor, "score", 0))
+    nivel = str(_safe_get(factor, "nivel", ""))
+    tendencia = str(_safe_get(factor, "tendencia", "→"))
+    evidencias = [e for e in _safe_list(_safe_get(factor, "evidencias", []))
+                   if isinstance(e, dict)][:3]
 
     # Construir contexto para el LLM
-    ev_titulos = "\n".join(f"  - {e.get('title', '')[:120]} ({e.get('source', '?')})"
-                            for e in evidencias)
+    ev_titulos = "\n".join(
+        f"  - {str(e.get('title', ''))[:120]} ({str(e.get('source', '?'))})"
+        for e in evidencias
+    )
     contexto = (
         f"Factor: {nombre}\n"
         f"Categoría: {factor.get('categoria', '')}\n"
@@ -240,8 +301,9 @@ def _narrativa_amenaza(factor: dict, snapshot: dict, en_convergencia: bool) -> s
     arrow = {"↑": "al alza", "↓": "a la baja", "→": "estable"}.get(tendencia, "estable")
     conv = " Convergente con otros factores correlacionados." if en_convergencia else ""
     if evidencias:
+        ev0_title = str(evidencias[0].get('title', ''))[:100]
         return (f"{nombre} en nivel {nivel} (score {score}) con tendencia {arrow}.{conv} "
-                f"Última evidencia: {evidencias[0].get('title', '')[:100]}.")
+                f"Última evidencia: {ev0_title}.")
     return (f"{nombre} en nivel {nivel} (score {score}) con tendencia {arrow}.{conv} "
             f"Sin evidencia reciente — riesgo estructural latente del factor.")
 
@@ -260,33 +322,35 @@ ALERT_CATEGORIAS_OPERACIONALES = {
 
 def _filtrar_alerts_ejecutivas(snapshot: dict, max_n: int = 8) -> list[dict]:
     """Solo alertas CRÍTICAS o ALTAS operacionales, max N."""
-    alertas = snapshot.get("alertas", []) or []
+    alertas = [a for a in _safe_list(_safe_get(snapshot, "alertas", []))
+               if isinstance(a, dict)]
     if not alertas:
         return []
 
     filtradas = []
     for a in alertas:
-        nivel = a.get("nivel", "")
-        cat = a.get("categoria", "")
+        nivel = str(_safe_get(a, "nivel", ""))
+        cat = str(_safe_get(a, "categoria", ""))
         if nivel not in ("CRÍTICA", "ALTA"):
             continue
         if cat not in ALERT_CATEGORIAS_OPERACIONALES:
             continue
+        titulo = str(_safe_get(a, "titulo", ""))
         filtradas.append({
             "nivel": nivel,
-            "titulo": a.get("titulo", ""),
+            "titulo": titulo,
             "categoria": cat,
-            "regla": a.get("regla", ""),
-            "fuente": a.get("fuente", ""),
-            "url": a.get("url", ""),
-            "hours_ago": a.get("hours_ago"),
-            "que_paso": a.get("titulo", "")[:120],
+            "regla": str(_safe_get(a, "regla", "")),
+            "fuente": str(_safe_get(a, "fuente", "")),
+            "url": str(_safe_get(a, "url", "")),
+            "hours_ago": _safe_get(a, "hours_ago"),
+            "que_paso": titulo[:120],
             "por_que_importa": _por_que_importa(a),
         })
 
     # Sort: CRÍTICAS primero, después por antigüedad
     filtradas.sort(key=lambda x: (0 if x["nivel"] == "CRÍTICA" else 1,
-                                    x.get("hours_ago") or 999))
+                                    _safe_num(x.get("hours_ago"), default=999)))
     return filtradas[:max_n]
 
 
@@ -315,10 +379,15 @@ def _por_que_importa(alerta: dict) -> str:
 
 def _clasificar_hotspots(snapshot: dict) -> list[dict]:
     """Agrupa eventos georreferenciados por tipo de riesgo."""
-    eventos = snapshot.get("eventos_geo", []) or []
+    eventos = _safe_list(_safe_get(snapshot, "eventos_geo", []))
     if not eventos:
-        # Intentar otra fuente típica
-        eventos = snapshot.get("mapa", {}).get("eventos", []) or []
+        # Intentar otra fuente típica — mapa puede ser dict O string (HTML)
+        mapa = _safe_get(snapshot, "mapa")
+        if isinstance(mapa, dict):
+            eventos = _safe_list(mapa.get("eventos", []))
+        else:
+            eventos = []
+    eventos = [e for e in eventos if isinstance(e, dict)]
 
     tipos = {
         "corredor_logistico": {"label": "Corredores logísticos", "color": "naranja",
@@ -342,14 +411,16 @@ def _clasificar_hotspots(snapshot: dict) -> list[dict]:
     for tipo_id, cfg in tipos.items():
         matches = []
         for ev in eventos:
-            text = (ev.get("titulo", "") + " " + ev.get("descripcion", "")).lower()
+            titulo_ev = str(_safe_get(ev, "titulo", ""))
+            desc_ev = str(_safe_get(ev, "descripcion", ""))
+            text = (titulo_ev + " " + desc_ev).lower()
             if any(kw in text for kw in cfg["keywords"]):
                 matches.append({
-                    "titulo": ev.get("titulo", "")[:120],
-                    "lugar": ev.get("region", "") or ev.get("lugar", ""),
-                    "lat": ev.get("lat"),
-                    "lon": ev.get("lon"),
-                    "fuente": ev.get("fuente", ""),
+                    "titulo": titulo_ev[:120],
+                    "lugar": str(_safe_get(ev, "region", "")) or str(_safe_get(ev, "lugar", "")),
+                    "lat": _safe_get(ev, "lat"),
+                    "lon": _safe_get(ev, "lon"),
+                    "fuente": str(_safe_get(ev, "fuente", "")),
                 })
         if matches:
             out.append({
@@ -448,12 +519,17 @@ def _derivar_implicancias(amenazas: list[dict], snapshot: dict) -> dict:
 
 def _generar_outlook_30d(snapshot: dict, intelligence_brief: dict) -> dict:
     """3 escenarios cualitativos derivados de Intelligence Engine."""
-    convergencias = intelligence_brief.get("convergencias", []) or []
-    iw = intelligence_brief.get("indicators_warnings", {}) or {}
-    benchmark = intelligence_brief.get("comparative_benchmark", {}) or {}
-    matriz = snapshot.get("matriz_riesgo", []) or []
-    score_global = snapshot.get("riesgo", {}).get("score_global", 0) or 0
-    delta_4w = benchmark.get("delta_vs_4w_media", 0) or 0
+    convergencias = _safe_list(_safe_get(intelligence_brief, "convergencias", []))
+    iw = _safe_dict(_safe_get(intelligence_brief, "indicators_warnings", {}))
+    benchmark = _safe_dict(_safe_get(intelligence_brief, "comparative_benchmark", {}))
+    matriz = [f for f in _safe_list(_safe_get(snapshot, "matriz_riesgo", []))
+              if isinstance(f, dict)]
+    riesgo_obj = _safe_get(snapshot, "riesgo", {})
+    if isinstance(riesgo_obj, dict):
+        score_global = _safe_num(riesgo_obj.get("score_global", 0))
+    else:
+        score_global = _safe_num(_safe_get(snapshot, "score_global", 0))
+    delta_4w = _safe_num(benchmark.get("delta_vs_4w_media", 0))
 
     # Contar I&W activos (de cualquier escenario)
     n_iw_activos = sum(1 for e_id, e_data in iw.items()
@@ -461,7 +537,7 @@ def _generar_outlook_30d(snapshot: dict, intelligence_brief: dict) -> dict:
                            e_data.get("nivel_alerta") in ("ALTO", "CRÍTICO"))
 
     # Factor estructural más caliente
-    factores_calientes = [f for f in matriz if f.get("score", 0) >= 60]
+    factores_calientes = [f for f in matriz if _safe_num(f.get("score", 0)) >= 60]
 
     # --- ESCENARIO BASE ---
     if delta_4w >= 3:
@@ -502,8 +578,9 @@ def _generar_outlook_30d(snapshot: dict, intelligence_brief: dict) -> dict:
     )
     deterioro_indicadores = []
     for c in convergencias[:2]:
+        c_dict = _safe_dict(c)
         deterioro_indicadores.append(
-            f"Convergencia '{c.get('tema', '?')}' se consolida con ≥4 factores"
+            f"Convergencia '{c_dict.get('tema', '?')}' se consolida con ≥4 factores"
         )
     deterioro_indicadores.append("Aparición de nueva alerta CRÍTICA semanal")
     deterioro_indicadores.append("I&W activos pasan a ≥3 escenarios simultáneos")
@@ -575,26 +652,29 @@ def _generar_outlook_30d(snapshot: dict, intelligence_brief: dict) -> dict:
 
 def _extraer_insight_estrategico(snapshot: dict, intelligence_brief: dict) -> dict:
     """UN solo insight semanal con narrativa LLM (fallback determinístico)."""
-    convergencias = intelligence_brief.get("convergencias", []) or []
-    anomalias = intelligence_brief.get("anomalias", []) or []
-    silencios = intelligence_brief.get("silencios_inusuales", []) or []
-    assessment = intelligence_brief.get("strategic_assessment", {}) or {}
+    convergencias = _safe_list(_safe_get(intelligence_brief, "convergencias", []))
+    anomalias = _safe_list(_safe_get(intelligence_brief, "anomalias", []))
+    silencios = _safe_list(_safe_get(intelligence_brief, "silencios_inusuales", []))
+    assessment = _safe_dict(_safe_get(intelligence_brief, "strategic_assessment", {}))
 
     # Construir contexto rico para el LLM
     parts = []
     if convergencias:
-        top_conv = convergencias[0]
-        nombres = ", ".join(f.get("nombre", "?") for f in top_conv.get("factores", [])[:4])
+        top_conv = _safe_dict(convergencias[0])
+        factores_conv = [_safe_dict(f) for f in _safe_list(top_conv.get("factores", []))][:4]
+        nombres = ", ".join(str(f.get("nombre", "?")) for f in factores_conv)
         parts.append(f"Convergencia principal: '{top_conv.get('tema', '?')}' "
                       f"con factores: {nombres}")
     if anomalias:
-        top_anom = anomalias[0]
+        top_anom = _safe_dict(anomalias[0])
+        z = _safe_num(top_anom.get("z_score", 0))
         parts.append(f"Anomalía estadística: {top_anom.get('nombre', '?')} "
-                      f"({top_anom.get('z_score', 0):+.1f}σ del baseline)")
+                      f"({z:+.1f}σ del baseline)")
     if silencios:
-        top_sil = silencios[0]
+        top_sil = _safe_dict(silencios[0])
+        ratio = _safe_num(top_sil.get("ratio_actual", 0))
         parts.append(f"Silencio inusual: actor '{top_sil.get('actor', '?')}' con "
-                      f"cobertura {top_sil.get('ratio_actual', 0)*100:.0f}% del baseline")
+                      f"cobertura {ratio*100:.0f}% del baseline")
 
     if not parts:
         return {
@@ -607,7 +687,8 @@ def _extraer_insight_estrategico(snapshot: dict, intelligence_brief: dict) -> di
 
     contexto = "\n".join(parts)
     if assessment:
-        contexto += f"\n\nAssessment previo: {assessment.get('summary', '')[:300]}"
+        assessment_summary = str(assessment.get('summary', ''))[:300]
+        contexto += f"\n\nAssessment previo: {assessment_summary}"
 
     texto = redactar_insight(contexto, max_tokens=300)
     if texto:
@@ -632,39 +713,77 @@ def _extraer_insight_estrategico(snapshot: dict, intelligence_brief: dict) -> di
 # ORQUESTADOR PRINCIPAL
 # =====================================================================
 
+def _ejecutar_bloque(nombre: str, fn, *args, default=None):
+    """Ejecuta una función de bloque y captura cualquier error sin propagarlo.
+    Devuelve (resultado, mensaje_error). Si éxito: (resultado, None).
+    Si error: (default, "mensaje").
+    """
+    try:
+        return fn(*args), None
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc(limit=3)
+        log.error("Executive bloque '%s' falló: %s\n%s", nombre, e, tb)
+        return default, f"{type(e).__name__}: {e}"
+
+
 def sintetizar_executive_brief(snapshot_actual: dict,
                                 intelligence_brief: dict) -> dict:
     """Orquestador. Devuelve el brief ejecutivo completo en JSON.
+
+    Cada bloque se aísla en try/except para tolerancia a fallos:
+    si un bloque falla, los demás se entregan completos y el bloque fallido
+    aparece con un campo `_error` describiendo qué pasó.
 
     Args:
         snapshot_actual: salida del pipeline OSINT.
         intelligence_brief: salida de generar_intelligence_brief().
 
     Returns:
-        Dict con los 7 bloques del Executive Home + metadata.
+        Dict con los 7 bloques del Executive Home + metadata + errores parciales.
     """
+    snapshot_actual = _safe_dict(snapshot_actual)
+    intelligence_brief = _safe_dict(intelligence_brief)
+
     generado = now_pe()
     valido_hasta = generado + timedelta(hours=4)
 
     log.info("Executive Synthesis: arrancando síntesis (LLM disponible=%s)",
               llm_disponible())
 
-    # 1. Status nacional
-    status = _status_nacional(snapshot_actual, intelligence_brief)
-    # 2. Amenazas prioritarias (con narrativa LLM)
-    amenazas = _priorizar_amenazas(snapshot_actual, intelligence_brief, top_n=5)
-    # 3. Critical alerts
-    critical = _filtrar_alerts_ejecutivas(snapshot_actual, max_n=8)
-    # 4. Hotspots clasificados
-    hotspots = _clasificar_hotspots(snapshot_actual)
-    # 5. Implicancias operacionales (con narrativa LLM)
-    implicancias = _derivar_implicancias(amenazas, snapshot_actual)
-    # 6. Outlook 30 días
-    outlook = _generar_outlook_30d(snapshot_actual, intelligence_brief)
-    # 7. Executive insight (LLM)
-    insight = _extraer_insight_estrategico(snapshot_actual, intelligence_brief)
+    errores_bloque = {}
 
-    return {
+    status, err = _ejecutar_bloque("status_nacional", _status_nacional,
+                                     snapshot_actual, intelligence_brief, default={})
+    if err: errores_bloque["status_nacional"] = err
+
+    amenazas, err = _ejecutar_bloque("amenazas_prioritarias", _priorizar_amenazas,
+                                      snapshot_actual, intelligence_brief, default=[])
+    if err: errores_bloque["amenazas_prioritarias"] = err
+    amenazas = amenazas if isinstance(amenazas, list) else []
+
+    critical, err = _ejecutar_bloque("critical_alerts", _filtrar_alerts_ejecutivas,
+                                      snapshot_actual, default=[])
+    if err: errores_bloque["critical_alerts"] = err
+
+    hotspots, err = _ejecutar_bloque("hotspots", _clasificar_hotspots,
+                                      snapshot_actual, default=[])
+    if err: errores_bloque["hotspots"] = err
+
+    implicancias, err = _ejecutar_bloque("implicancias_operacionales",
+                                          _derivar_implicancias,
+                                          amenazas, snapshot_actual, default={})
+    if err: errores_bloque["implicancias_operacionales"] = err
+
+    outlook, err = _ejecutar_bloque("outlook_30d", _generar_outlook_30d,
+                                     snapshot_actual, intelligence_brief, default={})
+    if err: errores_bloque["outlook_30d"] = err
+
+    insight, err = _ejecutar_bloque("executive_insight", _extraer_insight_estrategico,
+                                     snapshot_actual, intelligence_brief, default={})
+    if err: errores_bloque["executive_insight"] = err
+
+    brief = {
         "schema_version": "executive_brief.v1",
         "generado_en": generado.isoformat(timespec="seconds"),
         "valido_hasta": valido_hasta.isoformat(timespec="seconds"),
@@ -678,3 +797,8 @@ def sintetizar_executive_brief(snapshot_actual: dict,
         "outlook_30d": outlook,
         "executive_insight": insight,
     }
+    if errores_bloque:
+        brief["_errores_bloques"] = errores_bloque
+        log.warning("Executive Synthesis: %d bloques con errores parciales",
+                    len(errores_bloque))
+    return brief

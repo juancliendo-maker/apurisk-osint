@@ -542,8 +542,17 @@ async def executive_brief(force: bool = Query(False, description="Forzar regener
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500,
-                              detail=f"Error sintetizando executive brief: {e}")
+        # Modo debug temporal — incluye traceback para localizar la causa
+        import traceback
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error_msg": str(e),
+                "traceback": tb.splitlines()[-15:],  # últimas 15 líneas
+            }
+        )
 
 
 @app.post("/api/executive/brief/regenerar")
