@@ -21,3 +21,10 @@ pyyaml==6.0.2
 # - pdfplumber: ~30MB, ~150MB RAM (arrastra Pillow + pdfminer.six,
 #   provoca OOM en plan Render Starter de 512MB)
 pypdf==5.1.0
+
+# LLM client para Executive Synthesis Engine (narrativa estratégica).
+# Modelo default: claude-haiku-4-5 (rápido y barato para narrativas cortas).
+# Se activa SOLO si ANTHROPIC_API_KEY está en env vars; si no, fallback
+# determinístico por plantillas (cero costo, narrativa más robotica pero
+# funcional). Esto preserva el deploy aunque la key esté ausente o expire.
+anthropic==0.39.0

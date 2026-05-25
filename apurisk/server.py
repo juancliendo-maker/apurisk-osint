@@ -456,6 +456,136 @@ async def intelligence_brief(dias_baseline: int = Query(28, ge=7, le=180)):
                               detail=f"Error generando intelligence brief: {e}")
 
 
+# =====================================================================
+# EXECUTIVE BRIEF — Síntesis ejecutiva C-level con cache 4h
+# =====================================================================
+
+EXECUTIVE_CACHE_FILE = OUTPUT_DIR / "executive_brief_cache.json"
+EXECUTIVE_CACHE_TTL_HORAS = 4
+
+
+def _executive_cache_es_fresca() -> bool:
+    """True si el cache existe y tiene menos de TTL horas."""
+    if not EXECUTIVE_CACHE_FILE.exists():
+        return False
+    try:
+        with open(EXECUTIVE_CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        valido_hasta = data.get("valido_hasta", "")
+        if not valido_hasta:
+            return False
+        # Comparar con ahora en PET
+        try:
+            from .utils.timezone_pe import now_pe, parse_to_pe
+        except ImportError:
+            from apurisk.utils.timezone_pe import now_pe, parse_to_pe
+        vh = parse_to_pe(valido_hasta) or datetime.fromisoformat(valido_hasta)
+        return now_pe() < vh
+    except Exception:
+        return False
+
+
+def _generar_executive_brief_fresh() -> dict:
+    """Regenera el brief ejecutivo (corrida costosa con LLM)."""
+    snap_path = _ultimo_snapshot_path()
+    if not snap_path:
+        raise HTTPException(status_code=503, detail="Sin snapshot disponible.")
+    with open(snap_path, encoding="utf-8") as f:
+        snap = json.load(f)
+
+    archive = None
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if db_path.exists():
+        try:
+            archive = ApuriskArchive(str(db_path))
+        except Exception:
+            pass
+
+    # 1. Intelligence brief (insumo)
+    try:
+        from .analyzers.intelligence_engine import generar_intelligence_brief
+    except ImportError:
+        from apurisk.analyzers.intelligence_engine import generar_intelligence_brief
+    intel = generar_intelligence_brief(snap, archive=archive, dias_baseline=28)
+
+    # 2. Executive synthesis (lo nuevo)
+    try:
+        from .analyzers.executive_synthesis import sintetizar_executive_brief
+    except ImportError:
+        from apurisk.analyzers.executive_synthesis import sintetizar_executive_brief
+    brief = sintetizar_executive_brief(snap, intel)
+
+    # 3. Persistir cache
+    try:
+        with open(EXECUTIVE_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(brief, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        # No fatal; el brief se devuelve igual aunque el cache falle
+        pass
+
+    return brief
+
+
+@app.get("/api/executive/brief")
+async def executive_brief(force: bool = Query(False, description="Forzar regeneración ignorando cache 4h")):
+    """Executive Brief — síntesis ejecutiva C-level con los 7 bloques del concepto:
+    status nacional, amenazas prioritarias, critical alerts, hotspots,
+    implicancias operacionales, outlook 30d, executive insight.
+
+    Cache de 4 horas. Pasa `?force=true` para regenerar manualmente.
+    """
+    if not force and _executive_cache_es_fresca():
+        with open(EXECUTIVE_CACHE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    try:
+        return _generar_executive_brief_fresh()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500,
+                              detail=f"Error sintetizando executive brief: {e}")
+
+
+@app.post("/api/executive/brief/regenerar")
+async def executive_brief_regenerar():
+    """Endpoint manual para forzar regeneración. Misma respuesta que GET?force=true."""
+    try:
+        brief = _generar_executive_brief_fresh()
+        return {"status": "ok", "regenerado_en": brief.get("generado_en"),
+                "valido_hasta": brief.get("valido_hasta"), "brief": brief}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/executive/status")
+async def executive_status():
+    """Estado del cache del executive brief (para debug)."""
+    estado = {
+        "cache_existe": EXECUTIVE_CACHE_FILE.exists(),
+        "cache_fresco": _executive_cache_es_fresca(),
+        "ttl_horas": EXECUTIVE_CACHE_TTL_HORAS,
+    }
+    if estado["cache_existe"]:
+        try:
+            with open(EXECUTIVE_CACHE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            estado["generado_en"] = data.get("generado_en")
+            estado["valido_hasta"] = data.get("valido_hasta")
+            estado["llm_modo"] = data.get("llm_modo")
+        except Exception:
+            pass
+    # LLM disponibilidad
+    try:
+        from .utils.llm_client import llm_disponible, estado_uso
+    except ImportError:
+        from apurisk.utils.llm_client import llm_disponible, estado_uso
+    estado["llm_api_key_presente"] = llm_disponible()
+    estado["llm_uso_runtime"] = estado_uso()
+    return estado
+
+
 @app.get("/api/reportes-diarios")
 async def listar_reportes_diarios():
     """Lista los PDFs ejecutivos diarios generados automáticamente a las 06:00 AM.
