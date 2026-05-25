@@ -390,6 +390,61 @@ def _factor_card(f: dict) -> str:
                 f"<a href='{_esc(e['url'])}' target='_blank' rel='noopener' "
                 f"title='{_esc(tooltip)}'>{_esc(e['source'])}</a>"
             )
+
+    # ----- Panel auditable de probabilidad (breakdown) -----
+    brk = f.get("breakdown_probabilidad") or {}
+    breakdown_html = ""
+    if brk:
+        detalle_rows = ""
+        for d in brk.get("detalle_pesos", [])[:6]:
+            detalle_rows += (
+                f"<tr>"
+                f"<td style='padding:2px 6px;'>{_esc(str(d.get('fuente','?'))[:24])}</td>"
+                f"<td style='padding:2px 6px; text-align:right;'>{d.get('horas_ago',0):.1f}h</td>"
+                f"<td style='padding:2px 6px; text-align:right;'>{d.get('decay',0):.2f}</td>"
+                f"<td style='padding:2px 6px; text-align:right;'>{d.get('relevancia',0):.2f}</td>"
+                f"<td style='padding:2px 6px; text-align:right;'>{d.get('calidad',0):.2f}</td>"
+                f"<td style='padding:2px 6px; text-align:right; font-weight:600;'>{d.get('peso_total',0):.2f}</td>"
+                f"</tr>"
+            )
+        detalle_tabla = ""
+        if detalle_rows:
+            detalle_tabla = f"""
+              <table style='width:100%; font-size:10px; margin-top:6px; border-collapse:collapse;'>
+                <thead>
+                  <tr style='color:var(--txt-3); border-bottom:1px solid var(--bg-3);'>
+                    <th style='text-align:left; padding:2px 6px;'>Fuente</th>
+                    <th style='text-align:right; padding:2px 6px;'>Edad</th>
+                    <th style='text-align:right; padding:2px 6px;'>Decay</th>
+                    <th style='text-align:right; padding:2px 6px;'>Relev</th>
+                    <th style='text-align:right; padding:2px 6px;'>Calid</th>
+                    <th style='text-align:right; padding:2px 6px;'>PESO</th>
+                  </tr>
+                </thead>
+                <tbody>{detalle_rows}</tbody>
+              </table>"""
+        breakdown_html = f"""
+        <details style='margin-top:8px; font-size:10px; color:var(--txt-2);'>
+          <summary style='cursor:pointer; color:var(--accent); font-weight:600;'>
+            🔍 Auditar probabilidad ({f['probabilidad']})
+          </summary>
+          <div style='margin-top:6px; padding:8px; background:var(--bg-2); border-radius:6px;'>
+            <div style='display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; margin-bottom:6px;'>
+              <span>Base estructural:</span><strong>{brk.get('prob_base', 0)}</strong>
+              <span>Evidencia (log):</span><strong>+{brk.get('delta_evidencia', 0):.1f}</strong>
+              <span>Convergencia ({brk.get('n_fuentes_distintas', 0)} fuentes):</span><strong>+{brk.get('bonus_convergencia', 0)}</strong>
+              <span>Bonus criticidad:</span><strong>+{brk.get('bonus_criticidad', 0)}</strong>
+              <span style='border-top:1px dashed var(--bg-3); padding-top:3px;'>TOTAL clippeado:</span>
+              <strong style='border-top:1px dashed var(--bg-3); padding-top:3px;'>{f['probabilidad']}</strong>
+            </div>
+            <div style='font-size:9px; color:var(--txt-3); font-style:italic;'>
+              {_esc(brk.get('formula_legible',''))}
+            </div>
+            {detalle_tabla}
+          </div>
+        </details>
+        """
+
     return f"""
     <div class="factor-card {f['nivel']}">
       <div class="factor-head">
@@ -418,6 +473,7 @@ def _factor_card(f: dict) -> str:
         <span>(prev: {f['menciones_72h']})</span>
       </div>
       <div class="factor-evidence">{evid_links}</div>
+      {breakdown_html}
     </div>
     """
 

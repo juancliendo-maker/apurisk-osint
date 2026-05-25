@@ -483,10 +483,196 @@ def _tendencia(reciente: int, previo: int) -> str:
     return "→"
 
 
+# ============================================================================
+# MOTOR DE PROBABILIDAD CONTINUA + AUDITABLE (mayo 2026)
+# ============================================================================
+#
+# Reemplaza la heurística antigua (prob = 20 + cnt_24h*12 + cnt_72h*5, con
+# piso forzado a 10 si no había evidencia) que producía probabilidades
+# agrupadas exclusivamente en 10 → 30 → 45.
+#
+# Nuevo modelo:
+#
+#   prob_final = clip(prob_base + delta_evidencia + bonus_convergencia + bonus_criticidad, 3, 95)
+#
+#   prob_base               → probabilidad estructural latente del factor en
+#                             contexto político peruano actual. Distinta por
+#                             factor (no uniforme).
+#   delta_evidencia         → 32 * ln(1 + Σ pesos_decaidos)
+#                             curva logarítmica que evita saturación rápida.
+#   peso_mencion_i          → exp(-horas_i / 36) × (relevancia_i / 100)
+#                                                 × calidad_fuente
+#                             decaimiento exponencial half-life ~25h, ponderado
+#                             por score de relevancia y por calidad del medio.
+#   bonus_convergencia      → +6 si ≥3 fuentes distintas, +4 adicional si ≥5.
+#   bonus_criticidad        → +5 si ≥1 evidencia con criticidad=alta.
+#
+# Toda la composición se expone en el campo `breakdown` para auditoría.
+# ============================================================================
+
+# Probabilidad base estructural por factor (estimación contexto Perú 2026).
+# Si un factor no está acá, cae al default de su categoría, o al global 8.
+PROB_BASE_FACTOR = {
+    "vacancia_presidencial":     22,  # mecanismo activo en el ciclo político
+    "censura_gabinete":          25,
+    "renuncia_ministro":         28,
+    "conflictos_extractivos":    32,  # corredor minero del sur estructuralmente caliente
+    "paros_regionales":          26,
+    "reforma_electoral":         30,  # año electoral
+    "regulacion_sectorial":      24,
+    "investigacion_corrupcion":  28,
+    "deterioro_seguridad":       30,  # inseguridad urbana estructural
+    "presion_economica":         20,
+    "corrupcion_sistemica":      26,
+    "intervencion_ffaa":          6,  # escenario extremo
+    "tensiones_fronterizas":     12,
+    "crisis_migratoria":         18,
+    "tensiones_diplomaticas":    14,
+    "violencia_electoral":       22,  # contexto electoral activo
+}
+
+# Fallback por categoría si no hay entry específica
+PROB_BASE_CATEGORIA = {
+    "Estabilidad gubernamental": 22,
+    "Conflictos sociales":       28,
+    "Riesgo regulatorio":        22,
+    "Corrupción":                24,
+    "Seguridad":                 28,
+    "Económico":                 20,
+    "Militar / Seguridad":        8,
+    "Seguridad nacional":        12,
+    "Social / Seguridad":        18,
+    "Diplomacia / Geopolítica":  14,
+}
+
+# Calidad de fuente (multiplicador del peso de la evidencia)
+CALIDAD_FUENTE = {
+    # Tier A — agencias internacionales + medios de récord
+    "reuters": 1.30, "ap": 1.30, "associated press": 1.30,
+    "bloomberg": 1.30, "financial times": 1.30, "ft": 1.30,
+    "el comercio": 1.20, "infobae": 1.20, "rpp": 1.20,
+    "la república": 1.20, "la republica": 1.20,
+    "gestión": 1.20, "gestion": 1.20,
+    "dw": 1.15, "deutsche welle": 1.15, "bbc": 1.20,
+    "ojo público": 1.15, "ojo publico": 1.15, "idl-reporteros": 1.20,
+    # Tier B — medios mainstream peruanos
+    "perú 21": 1.05, "peru 21": 1.05, "perú21": 1.05,
+    "expreso": 1.00, "willax": 0.95,
+    "canal n": 1.05, "canal-n": 1.05,
+    "panamericana": 1.00,
+    "andina": 1.10,  # agencia oficial Estado
+    "el peruano": 1.10,
+    # Tier C — agregadores y blogs
+    "google news": 0.85,
+}
+
+DECAY_HALF_LIFE_H = 36.0   # peso(72h) ≈ 0.25, peso(24h) ≈ 0.63, peso(6h) ≈ 0.89
+LOG_COEFICIENTE = 32.0     # multiplicador del log(1 + Σ pesos)
+
+
+def _calidad_fuente(source_name: str) -> float:
+    """Devuelve multiplicador 0.6..1.3 según la calidad del medio."""
+    if not source_name:
+        return 0.85
+    key = source_name.strip().lower()
+    if key in CALIDAD_FUENTE:
+        return CALIDAD_FUENTE[key]
+    # Match parcial (ej. "El Comercio - Política" → "el comercio")
+    for k, v in CALIDAD_FUENTE.items():
+        if k in key:
+            return v
+    return 1.00  # default neutral
+
+
+def _calcular_probabilidad_auditable(factor: dict, evidencias: list,
+                                     criticidad_max: str) -> dict:
+    """Calcula probabilidad con breakdown completo para auditoría.
+
+    Retorna un dict con todos los componentes del cálculo:
+      - prob_base, delta_evidencia, bonus_convergencia, bonus_criticidad
+      - prob_final (= suma clippeada a [3, 95])
+      - detalle_pesos: lista de cada mención y su peso individual
+      - formula_legible: string explicando cómo se llegó al número
+    """
+    fid = factor["id"]
+    categoria = factor.get("categoria", "")
+
+    # 1) Probabilidad base estructural
+    prob_base = PROB_BASE_FACTOR.get(
+        fid,
+        PROB_BASE_CATEGORIA.get(categoria, 8)
+    )
+
+    # 2) Calcular peso de cada evidencia (decay exp × relevancia × calidad)
+    detalle_pesos = []
+    suma_pesos = 0.0
+    fuentes_distintas = set()
+    for ev in evidencias:
+        horas = ev.get("hours_ago") or 0.0
+        rel_score = ev.get("score_relevancia", 0) or 0
+        peso_decay = math.exp(-horas / DECAY_HALF_LIFE_H)
+        peso_relev = min(1.5, max(0.3, rel_score / 100.0))  # clip 0.3..1.5
+        calidad = _calidad_fuente(ev.get("source", ""))
+        peso = peso_decay * peso_relev * calidad
+        suma_pesos += peso
+        if ev.get("source"):
+            fuentes_distintas.add(ev["source"].strip().lower())
+        detalle_pesos.append({
+            "fuente": ev.get("source", "?"),
+            "horas_ago": round(horas, 1),
+            "decay": round(peso_decay, 3),
+            "relevancia": round(peso_relev, 3),
+            "calidad": round(calidad, 2),
+            "peso_total": round(peso, 3),
+        })
+
+    # 3) Delta logarítmico
+    delta_evidencia = LOG_COEFICIENTE * math.log(1 + suma_pesos) if suma_pesos > 0 else 0
+    delta_evidencia = round(delta_evidencia, 1)
+
+    # 4) Bonus por convergencia de fuentes
+    n_fuentes = len(fuentes_distintas)
+    bonus_convergencia = 0
+    if n_fuentes >= 3:
+        bonus_convergencia += 6
+    if n_fuentes >= 5:
+        bonus_convergencia += 4
+
+    # 5) Bonus por criticidad alta
+    bonus_criticidad = 5 if criticidad_max == "alta" else 0
+
+    # 6) Total clippeado
+    prob_raw = prob_base + delta_evidencia + bonus_convergencia + bonus_criticidad
+    prob_final = round(max(3, min(95, prob_raw)), 1)
+
+    formula = (
+        f"P = base({prob_base}) + log_evidencia({delta_evidencia:.1f}) "
+        f"+ convergencia({bonus_convergencia}, {n_fuentes} fuentes) "
+        f"+ criticidad({bonus_criticidad}) = {prob_raw:.1f} → clippeado a {prob_final}"
+    )
+
+    return {
+        "prob_final": prob_final,
+        "breakdown": {
+            "prob_base": prob_base,
+            "delta_evidencia": delta_evidencia,
+            "bonus_convergencia": bonus_convergencia,
+            "bonus_criticidad": bonus_criticidad,
+            "suma_pesos_decaidos": round(suma_pesos, 3),
+            "n_evidencias": len(evidencias),
+            "n_fuentes_distintas": n_fuentes,
+            "formula_legible": formula,
+            "detalle_pesos": detalle_pesos[:8],  # top-8 para no inflar
+        },
+    }
+
+
 def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
     """Construye la lista de factores de riesgo con prob/impacto/evidencia.
 
     Aplica matching estricto (3 capas) y filtro temporal de 7 días.
+    Cada factor expone un `breakdown` auditable con la composición de la
+    probabilidad: base + decay logarítmico + convergencia + criticidad.
     """
     out: list[dict] = []
     todos = list(articulos) + list(conflictos)
@@ -497,13 +683,13 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
 
     for f in FACTORES:
         evidencias = []
-        cnt_reciente = 0  # < 24h
-        cnt_previo = 0    # 24-72h
+        cnt_reciente = 0  # < 24h (solo para tendencia)
+        cnt_previo = 0    # 24-72h (solo para tendencia)
         criticidad_max = "media"
 
         for a in todos_recientes:
             text = _texto(a)
-            relevante, _score_rel = _es_relevante(text, f)
+            relevante, score_rel = _es_relevante(text, f)
             if not relevante:
                 continue
 
@@ -519,7 +705,7 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
                 "source": a.source_name,
                 "hours_ago": round(hours, 1) if hours != float("inf") else None,
                 "criticidad": a.criticidad,
-                "score_relevancia": _score_rel,
+                "score_relevancia": score_rel,
             })
             if a.criticidad == "alta":
                 criticidad_max = "alta"
@@ -527,18 +713,16 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
         # Ordenar evidencias por relevancia (más relevantes primero)
         evidencias.sort(key=lambda e: -e.get("score_relevancia", 0))
 
-        # probabilidad heurística
-        prob = 20 + cnt_reciente * 12 + cnt_previo * 5
-        if criticidad_max == "alta":
-            prob += 20
-        prob = min(95, prob)
-        if cnt_reciente == 0 and cnt_previo == 0:
-            prob = 10
+        # ====== NUEVA PROBABILIDAD CONTINUA + AUDITABLE ======
+        calc = _calcular_probabilidad_auditable(f, evidencias, criticidad_max)
+        prob = calc["prob_final"]
+        breakdown = calc["breakdown"]
 
         impacto = f["impacto_base"]
         if criticidad_max == "alta":
             impacto = min(100, impacto + 5)
 
+        # Score combinado (media geométrica conserva mejor el rango bajo)
         score = round(math.sqrt(prob * impacto), 1)
         if score >= 70:
             nivel = "CRÍTICO"
@@ -562,6 +746,7 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
             "menciones_24h": cnt_reciente,
             "menciones_72h": cnt_previo,
             "evidencias": evidencias[:6],
+            "breakdown_probabilidad": breakdown,  # ← AUDITABLE
         })
 
     out.sort(key=lambda x: -x["score"])
