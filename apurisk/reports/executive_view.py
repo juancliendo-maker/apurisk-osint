@@ -361,22 +361,129 @@ def _render_critical_alerts(alerts: list) -> str:
 # =====================================================================
 # SECCIÓN 6: HOTSPOT MAP (Leaflet)
 # =====================================================================
+# Configuración geográfica estratégica del territorio peruano
+# Polígonos aproximados de zonas críticas (lat, lon)
+ZONAS_ESTRATEGICAS = [
+    {
+        "id": "corredor_sur_minero",
+        "nombre": "Corredor Sur Minero",
+        "descripcion": "Apurímac · Cusco · Espinar — Las Bambas, MMG, Glencore",
+        "color": "#f97316",
+        "opacity": 0.18,
+        "coords": [
+            [-13.5, -73.2], [-13.0, -71.5], [-14.0, -71.2],
+            [-15.0, -71.5], [-15.2, -72.5], [-14.5, -73.5],
+        ],
+    },
+    {
+        "id": "vraem",
+        "nombre": "VRAEM",
+        "descripcion": "Valle de los ríos Apurímac, Ene y Mantaro — narcoterrorismo",
+        "color": "#ef4444",
+        "opacity": 0.22,
+        "coords": [
+            [-12.0, -74.5], [-11.7, -73.5], [-12.2, -73.0],
+            [-13.2, -73.3], [-13.5, -74.2], [-12.8, -74.8],
+        ],
+    },
+    {
+        "id": "madre_dios",
+        "nombre": "Madre de Dios — Minería Ilegal",
+        "descripcion": "Tambopata · Inambari · La Pampa — actividad ilícita aurífera",
+        "color": "#f59e0b",
+        "opacity": 0.18,
+        "coords": [
+            [-12.0, -70.5], [-11.5, -69.0], [-12.8, -68.5],
+            [-13.5, -69.5], [-13.3, -70.8],
+        ],
+    },
+    {
+        "id": "frontera_norte",
+        "nombre": "Frontera Norte (Tumbes-Ecuador)",
+        "descripcion": "Migración irregular · contrabando · narcotráfico",
+        "color": "#f59e0b",
+        "opacity": 0.15,
+        "coords": [
+            [-3.4, -80.5], [-3.5, -79.8], [-4.2, -79.5],
+            [-4.5, -80.2], [-4.0, -80.8],
+        ],
+    },
+    {
+        "id": "puno_altiplano",
+        "nombre": "Puno Altiplano",
+        "descripcion": "Conflictividad ambiental · cuenca Llallimayo · bloqueos",
+        "color": "#ef4444",
+        "opacity": 0.15,
+        "coords": [
+            [-14.8, -71.0], [-14.5, -69.5], [-15.5, -69.0],
+            [-16.5, -69.5], [-16.0, -70.8],
+        ],
+    },
+]
+
+# Corredores logísticos críticos (polylines)
+CORREDORES = [
+    {
+        "id": "panamericana_norte",
+        "nombre": "Panamericana Norte",
+        "descripcion": "Lima → Trujillo → Chiclayo → Piura → Tumbes",
+        "color": "#fbbf24",
+        "coords": [
+            [-12.0464, -77.0428], [-9.93, -76.24], [-8.11, -79.03],
+            [-6.77, -79.84], [-5.19, -80.63], [-3.57, -80.45],
+        ],
+    },
+    {
+        "id": "panamericana_sur",
+        "nombre": "Panamericana Sur",
+        "descripcion": "Lima → Ica → Arequipa → Tacna",
+        "color": "#fbbf24",
+        "coords": [
+            [-12.0464, -77.0428], [-13.42, -76.13], [-14.07, -75.73],
+            [-16.40, -71.54], [-17.65, -71.34], [-18.01, -70.25],
+        ],
+    },
+    {
+        "id": "carretera_central",
+        "nombre": "Carretera Central",
+        "descripcion": "Lima → Huancayo → Pucallpa",
+        "color": "#fbbf24",
+        "coords": [
+            [-12.0464, -77.0428], [-11.50, -75.95], [-12.07, -75.21],
+            [-10.55, -74.92], [-8.38, -74.55],
+        ],
+    },
+    {
+        "id": "corredor_cobre",
+        "nombre": "Corredor del Cobre",
+        "descripcion": "Cusco → Espinar → Las Bambas → Matarani",
+        "color": "#fb923c",
+        "coords": [
+            [-13.532, -71.967], [-14.79, -71.41], [-13.95, -72.85],
+            [-16.40, -71.54], [-17.00, -72.10],
+        ],
+    },
+]
+
+# Emoji + estilo por tipo de hotspot
+ICONOS_HOTSPOT = {
+    "corredor_logistico": {"emoji": "🚧", "color": "#f97316", "label": "Bloqueo logístico"},
+    "mineria_ilegal":     {"emoji": "⚠",  "color": "#f59e0b", "label": "Minería ilegal"},
+    "conflicto_social":   {"emoji": "🔥", "color": "#ef4444", "label": "Conflicto social"},
+    "violencia":          {"emoji": "🚨", "color": "#dc2626", "label": "Violencia / criminalidad"},
+    "frontera":           {"emoji": "🌐", "color": "#f59e0b", "label": "Frontera / migración"},
+}
+
+
 def _render_hotspot_map(hotspots: list) -> str:
     if not hotspots:
-        return ""
-    # Aplanar todos los eventos con coords válidas
+        hotspots = []
+    # Aplanar eventos con coords válidas (puede estar vacío)
     markers_data = []
-    color_por_tipo = {
-        "corredor_logistico": "#f97316",
-        "mineria_ilegal": "#f59e0b",
-        "conflicto_social": "#ef4444",
-        "violencia": "#ef4444",
-        "frontera": "#f59e0b",
-    }
     for h in hotspots:
         tipo = h.get("tipo", "")
-        label = h.get("label", "")
-        color = color_por_tipo.get(tipo, "#3b82f6")
+        cfg = ICONOS_HOTSPOT.get(tipo, {"emoji": "●", "color": "#3b82f6",
+                                          "label": h.get("label", "")})
         for ev in h.get("eventos", []):
             lat, lon = ev.get("lat"), ev.get("lon")
             if lat is None or lon is None:
@@ -385,73 +492,198 @@ def _render_hotspot_map(hotspots: list) -> str:
                 markers_data.append({
                     "lat": float(lat),
                     "lon": float(lon),
-                    "label": str(label),
-                    "color": color,
-                    "titulo": str(ev.get("titulo", ""))[:150],
+                    "tipo": tipo,
+                    "emoji": cfg["emoji"],
+                    "color": cfg["color"],
+                    "label": cfg["label"],
+                    "titulo": str(ev.get("titulo", ""))[:180],
                     "lugar": str(ev.get("lugar", "")),
                     "fuente": str(ev.get("fuente", "")),
                 })
             except (TypeError, ValueError):
                 continue
 
-    # Leyenda de hotspots
-    leyenda = ""
+    # Leyenda enriquecida — hotspots activos + capas estratégicas
+    leyenda_hotspots = ""
     for h in hotspots:
         tipo = h.get("tipo", "")
-        color = color_por_tipo.get(tipo, "#3b82f6")
-        leyenda += f"""
+        cfg = ICONOS_HOTSPOT.get(tipo, {"emoji": "●", "color": "#3b82f6", "label": ""})
+        leyenda_hotspots += f"""
         <div class="legend-item">
-          <span class="legend-dot" style="background: {color};"></span>
+          <span class="legend-icon" style="background: {cfg["color"]}22; border-color: {cfg["color"]};">
+            {cfg["emoji"]}
+          </span>
           <span class="legend-label">{_esc(str(h.get("label", "")))}</span>
           <span class="legend-count">{h.get("n_eventos", 0)}</span>
         </div>
         """
 
+    leyenda_zonas = ""
+    for z in ZONAS_ESTRATEGICAS:
+        leyenda_zonas += f"""
+        <div class="legend-item legend-item--zone">
+          <span class="legend-band" style="background: {z["color"]};"></span>
+          <div class="legend-zone-meta">
+            <div class="legend-zone-name">{_esc(z["nombre"])}</div>
+            <div class="legend-zone-desc">{_esc(z["descripcion"])}</div>
+          </div>
+        </div>
+        """
+
+    leyenda_corredores = ""
+    for c in CORREDORES:
+        leyenda_corredores += f"""
+        <div class="legend-item legend-item--route">
+          <span class="legend-line" style="background: {c["color"]};"></span>
+          <div class="legend-zone-meta">
+            <div class="legend-zone-name">{_esc(c["nombre"])}</div>
+            <div class="legend-zone-desc">{_esc(c["descripcion"])}</div>
+          </div>
+        </div>
+        """
+
     import json as _json
     markers_json = _json.dumps(markers_data, ensure_ascii=False)
+    zonas_json = _json.dumps(ZONAS_ESTRATEGICAS, ensure_ascii=False)
+    corredores_json = _json.dumps(CORREDORES, ensure_ascii=False)
 
     return f"""
     <section class="hotspot-map">
       <div class="section-header">
-        <h2 class="section-title">Mapa Operacional — Hotspots</h2>
-        <div class="section-sub">Eventos georreferenciados por tipo de riesgo · {len(markers_data)} puntos activos</div>
+        <h2 class="section-title">Mapa Operacional — Hotspots & Geografía Estratégica</h2>
+        <div class="section-sub">
+          {len(markers_data)} eventos activos · {len(ZONAS_ESTRATEGICAS)} zonas estratégicas ·
+          {len(CORREDORES)} corredores logísticos críticos
+        </div>
       </div>
       <div class="map-container">
         <div id="execMap" class="map-canvas"></div>
         <aside class="map-legend">
-          <div class="legend-title">Tipos de hotspot</div>
-          {leyenda}
+          <div class="legend-title">Hotspots activos</div>
+          {leyenda_hotspots if leyenda_hotspots else '<div class="legend-empty">Sin eventos georreferenciados esta ventana.</div>'}
+          <div class="legend-divider"></div>
+          <div class="legend-title">Zonas estratégicas</div>
+          {leyenda_zonas}
+          <div class="legend-divider"></div>
+          <div class="legend-title">Corredores logísticos</div>
+          {leyenda_corredores}
         </aside>
       </div>
       <script>
         (function() {{
+          if (typeof L === 'undefined') {{
+            console.error('Leaflet no cargado');
+            return;
+          }}
           const markers = {markers_json};
-          if (typeof L === 'undefined') return;
+          const zonas = {zonas_json};
+          const corredores = {corredores_json};
+
           const map = L.map('execMap', {{
-            center: [-10.0, -75.5],
+            center: [-10.5, -75.5],
             zoom: 5,
             zoomControl: true,
             attributionControl: false,
-            preferCanvas: true,
+            preferCanvas: false,
           }});
-          // Tile capa oscura (CartoDB dark matter) — encaja con la paleta
-          L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-            maxZoom: 12,
-          }}).addTo(map);
+
+          // Tile base oscuro CartoDB dark_nolabels (sin labels = más limpio)
+          const tileDark = L.tileLayer(
+            'https://{{s}}.basemaps.cartocdn.com/dark_nolabels/{{z}}/{{x}}/{{y}}{{r}}.png',
+            {{
+              maxZoom: 13,
+              minZoom: 4,
+              subdomains: 'abcd',
+            }}
+          );
+          tileDark.addTo(map);
+
+          // Capa de labels SOBRE las zonas (sutiles, para no saturar)
+          const tileLabels = L.tileLayer(
+            'https://{{s}}.basemaps.cartocdn.com/dark_only_labels/{{z}}/{{x}}/{{y}}{{r}}.png',
+            {{ maxZoom: 13, opacity: 0.75 }}
+          );
+
+          // ========== ZONAS ESTRATÉGICAS (polígonos) ==========
+          const layerZonas = L.featureGroup();
+          zonas.forEach(z => {{
+            const poly = L.polygon(z.coords, {{
+              color: z.color,
+              fillColor: z.color,
+              fillOpacity: z.opacity,
+              weight: 1.5,
+              opacity: 0.65,
+              dashArray: '4,4',
+            }});
+            poly.bindTooltip(
+              `<strong>${{z.nombre}}</strong><br><span style="font-size:10px;">${{z.descripcion}}</span>`,
+              {{ direction: 'center', className: 'apurisk-tip', sticky: false }}
+            );
+            poly.addTo(layerZonas);
+          }});
+          layerZonas.addTo(map);
+
+          // ========== CORREDORES LOGÍSTICOS (polylines) ==========
+          const layerCorredores = L.featureGroup();
+          corredores.forEach(c => {{
+            const line = L.polyline(c.coords, {{
+              color: c.color,
+              weight: 3,
+              opacity: 0.75,
+              dashArray: '8,4',
+            }});
+            line.bindTooltip(
+              `<strong>${{c.nombre}}</strong><br><span style="font-size:10px;">${{c.descripcion}}</span>`,
+              {{ direction: 'auto', className: 'apurisk-tip', sticky: true }}
+            );
+            line.addTo(layerCorredores);
+          }});
+          layerCorredores.addTo(map);
+
+          // Agregar labels encima
+          tileLabels.addTo(map);
+
+          // ========== MARKERS DE EVENTOS (DivIcon con emoji) ==========
+          const layerMarkers = L.featureGroup();
           markers.forEach(m => {{
-            const c = L.circleMarker([m.lat, m.lon], {{
-              radius: 8,
-              color: m.color,
-              fillColor: m.color,
-              fillOpacity: 0.7,
-              weight: 2,
-            }}).addTo(map);
-            c.bindPopup(`<div style="max-width:260px;color:#0f172a;font-size:12px;">
-              <div style="font-weight:700;margin-bottom:4px;">${{m.label}}</div>
-              <div style="margin-bottom:4px;">${{m.titulo}}</div>
-              <div style="font-size:10px;color:#475569;">${{m.lugar}} · ${{m.fuente}}</div>
-            </div>`);
+            const divIcon = L.divIcon({{
+              className: 'apurisk-marker',
+              html: `<div class="marker-bubble" style="background:${{m.color}}; box-shadow:0 0 0 3px ${{m.color}}33;">
+                       <span class="marker-emoji">${{m.emoji}}</span>
+                     </div>`,
+              iconSize: [32, 32],
+              iconAnchor: [16, 16],
+              popupAnchor: [0, -18],
+            }});
+            const mk = L.marker([m.lat, m.lon], {{ icon: divIcon }});
+            mk.bindPopup(
+              `<div class="apurisk-popup">
+                <div class="pp-label" style="color:${{m.color}};">${{m.emoji}} ${{m.label}}</div>
+                <div class="pp-title">${{m.titulo}}</div>
+                <div class="pp-meta">📍 ${{m.lugar}}<br>📰 ${{m.fuente}}</div>
+              </div>`,
+              {{ maxWidth: 300, className: 'apurisk-popup-wrapper' }}
+            );
+            mk.addTo(layerMarkers);
           }});
+          layerMarkers.addTo(map);
+
+          // ========== Control de capas ==========
+          L.control.layers(
+            null,
+            {{
+              '🚨 Hotspots activos': layerMarkers,
+              '⬛ Zonas estratégicas': layerZonas,
+              '🛣 Corredores logísticos': layerCorredores,
+            }},
+            {{ position: 'bottomleft', collapsed: false }}
+          ).addTo(map);
+
+          // Si hay markers, ajustar vista para incluir todos
+          if (markers.length > 0) {{
+            const bounds = layerMarkers.getBounds().pad(0.15);
+            map.fitBounds(bounds, {{ maxZoom: 7 }});
+          }}
         }})();
       </script>
     </section>
@@ -969,47 +1201,82 @@ section { margin-bottom: var(--gap-xl); }
 /* ===== HOTSPOT MAP ===== */
 .map-container {
   display: grid;
-  grid-template-columns: 1fr 240px;
-  gap: var(--gap-md);
+  grid-template-columns: 1fr 280px;
+  gap: 0;
   background: var(--bg-1);
   border: 1px solid var(--bg-2);
   border-radius: 6px;
   overflow: hidden;
-  height: 480px;
+  height: 560px;
 }
 .map-canvas {
   width: 100%;
   height: 100%;
   background: #0a1626;
+  position: relative;
 }
 .map-legend {
   padding: var(--gap-md);
   background: var(--bg-1);
   border-left: 1px solid var(--bg-2);
   overflow-y: auto;
+  font-size: 12px;
 }
 .legend-title {
   font-size: 10px;
   color: var(--txt-3);
   text-transform: uppercase;
   letter-spacing: 1.5px;
-  font-weight: 600;
-  margin-bottom: var(--gap-sm);
+  font-weight: 700;
+  margin: 0 0 8px 0;
+}
+.legend-divider {
+  height: 1px;
+  background: var(--bg-2);
+  margin: 14px 0;
+}
+.legend-empty {
+  font-size: 11px;
+  color: var(--txt-3);
+  font-style: italic;
+  padding: 8px 0;
 }
 .legend-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 0;
+  padding: 5px 0;
   font-size: 12px;
-  border-bottom: 1px solid var(--bg-2);
 }
-.legend-item:last-child { border-bottom: none; }
-.legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.legend-item--zone, .legend-item--route {
+  align-items: flex-start;
+  padding: 7px 0;
+}
+.legend-icon {
+  width: 26px;
+  height: 26px;
+  border: 1.5px solid;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
   flex-shrink: 0;
+}
+.legend-band {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  opacity: 0.55;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.legend-line {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  margin-top: 10px;
 }
 .legend-label {
   flex: 1;
@@ -1023,6 +1290,135 @@ section { margin-bottom: var(--gap-xl); }
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+.legend-zone-meta { flex: 1; min-width: 0; }
+.legend-zone-name {
+  font-size: 12px;
+  color: var(--txt-0);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.legend-zone-desc {
+  font-size: 10px;
+  color: var(--txt-3);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+/* ===== LEAFLET PERSONALIZADO ===== */
+/* Markers de evento con burbuja + emoji */
+.apurisk-marker {
+  background: transparent;
+  border: none;
+}
+.marker-bubble {
+  width: 30px;
+  height: 30px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255,255,255,0.85);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.marker-bubble:hover {
+  transform: rotate(-45deg) scale(1.18);
+  z-index: 1000;
+}
+.marker-emoji {
+  transform: rotate(45deg);
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Popups */
+.apurisk-popup-wrapper .leaflet-popup-content-wrapper {
+  background: #1e293b;
+  color: #f1f5f9;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.55);
+  border: 1px solid #334155;
+}
+.apurisk-popup-wrapper .leaflet-popup-tip {
+  background: #1e293b;
+  border: 1px solid #334155;
+}
+.apurisk-popup-wrapper .leaflet-popup-close-button {
+  color: #94a3b8;
+}
+.apurisk-popup {
+  padding: 4px 6px;
+  min-width: 200px;
+  max-width: 280px;
+}
+.pp-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 6px;
+}
+.pp-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+.pp-meta {
+  font-size: 10.5px;
+  color: #94a3b8;
+  line-height: 1.6;
+  border-top: 1px solid #334155;
+  padding-top: 6px;
+}
+
+/* Tooltip de zonas y corredores */
+.apurisk-tip {
+  background: #1e293b !important;
+  color: #f1f5f9 !important;
+  border: 1px solid #334155 !important;
+  border-radius: 4px !important;
+  font-size: 11px !important;
+  padding: 6px 10px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+}
+.apurisk-tip::before { border-top-color: #1e293b !important; }
+
+/* Control de capas */
+.leaflet-control-layers {
+  background: rgba(15,23,42,0.92) !important;
+  color: #cbd5e1 !important;
+  border: 1px solid #334155 !important;
+  border-radius: 6px !important;
+  font-size: 11px !important;
+  padding: 8px 10px !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.6) !important;
+}
+.leaflet-control-layers label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 3px 0 !important;
+  color: #cbd5e1 !important;
+}
+.leaflet-control-layers-overlays {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+/* Zoom control */
+.leaflet-control-zoom a {
+  background: #1e293b !important;
+  color: #cbd5e1 !important;
+  border: 1px solid #334155 !important;
+}
+.leaflet-control-zoom a:hover {
+  background: #334155 !important;
+  color: #f8fafc !important;
 }
 
 /* ===== IMPLICANCIAS ===== */
