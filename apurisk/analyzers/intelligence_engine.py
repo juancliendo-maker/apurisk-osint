@@ -290,11 +290,24 @@ def detectar_convergencias(matriz_actual: list[dict],
                 "delta": round(delta, 1),
             })
 
+    def _derivar_tema(factores: list[dict], direccion: str) -> str:
+        """Tema corto descriptivo derivado de los factores y dirección."""
+        nombres_top = [f["nombre"] for f in factores[:3]]
+        if not nombres_top:
+            return f"Convergencia {direccion}"
+        # Tema = primer factor (más cambio) + N adicionales
+        primer = nombres_top[0]
+        otros = len(factores) - 1
+        if otros > 0:
+            return f"{primer} + {otros} factor{'es' if otros > 1 else ''} relacionado{'s' if otros > 1 else ''}"
+        return primer
+
     convergencias = []
     if len(factores_subiendo) >= CONVERGENCIA_MIN_FACTORES:
         factores_subiendo.sort(key=lambda x: -x["delta"])
         avg_delta = sum(f["delta"] for f in factores_subiendo) / len(factores_subiendo)
         convergencias.append({
+            "tema": _derivar_tema(factores_subiendo, "al alza"),
             "direccion": "alza",
             "n_factores": len(factores_subiendo),
             "factores": factores_subiendo,
@@ -305,6 +318,7 @@ def detectar_convergencias(matriz_actual: list[dict],
         factores_bajando.sort(key=lambda x: x["delta"])
         avg_delta = sum(f["delta"] for f in factores_bajando) / len(factores_bajando)
         convergencias.append({
+            "tema": _derivar_tema(factores_bajando, "a la baja"),
             "direccion": "baja",
             "n_factores": len(factores_bajando),
             "factores": factores_bajando,

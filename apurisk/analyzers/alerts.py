@@ -16,6 +16,17 @@ REGLAS = [
         "id": "VACANCIA_ACTIVADA",
         "nivel": "CRÍTICA",
         "patrones": ["moción de vacancia", "mocion de vacancia", "firmas para vacancia", "vacancia presidencial", "destitución", "destitucion", "destituido", "destituida", "censura presidencial"],
+        # Descartar referencias HISTÓRICAS a vacancias previas (Castillo, Vizcarra, PPK, etc.)
+        # y notas retrospectivas que no son evento actual.
+        "patrones_negacion": [
+            "pedro castillo", "vizcarra", "ppk", "kuczynski",
+            "ex presidente", "expresidente", "ex-presidente",
+            "anterior vacancia", "histórica vacancia", "historica vacancia",
+            "complot contra", "denuncia contra pedro",
+            "fue destituido", "fue destituida",
+            "destituido en", "destituida en",
+            "destituido el", "destituida el",
+        ],
         "categoria": "Estabilidad gubernamental",
         "accion": "Activar protocolo de comunicación de crisis. Briefing a stakeholders en 2h.",
     },
@@ -39,6 +50,18 @@ REGLAS = [
             "carretera tomada", "carretera bloqueada",
             "paso bloqueado", "tránsito interrumpido",
             "ruta del cobre", "carretera central",
+        ],
+        # Descartar accidentes de tránsito (no son bloqueos políticos).
+        "patrones_negacion": [
+            "choque frontal", "choque entre", "accidente de tránsito",
+            "accidente de transito", "accidente vehicular",
+            "volcadura", "volcamiento", "carambola",
+            "atropello", "atropellado",
+            "minivan", "auto se despistó", "auto se despisto",
+            "vehículo se despistó", "vehiculo se despisto",
+            "heridos en accidente", "fallecidos en accidente",
+            "obras en la carretera", "obras viales",
+            "fluidez vehicular", "fluidez del tránsito",
         ],
         "categoria": "Conflictos sociales",
         "accion": "Alertar operaciones logísticas y mineras en zona afectada.",
@@ -398,6 +421,11 @@ def detectar_alertas(articulos: list, conflictos: list, ventana_horas: int = 72)
         text = _texto(a)
         for r in REGLAS:
             if any(p in text for p in r["patrones"]):
+                # Anti-falsos positivos: si la regla tiene patrones_negacion
+                # y alguno matchea el texto, descartar este match.
+                negaciones = r.get("patrones_negacion", [])
+                if negaciones and any(neg in text for neg in negaciones):
+                    continue
                 nivel = r["nivel"]
                 # Items demo: rebajar nivel CRÍTICA → ALTA, ALTA → MEDIA
                 if is_demo:

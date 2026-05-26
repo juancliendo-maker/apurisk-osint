@@ -164,7 +164,12 @@ def _status_nacional(snapshot: dict, intelligence_brief: dict) -> dict:
 
     # Delta semanal: comparar con baseline si está disponible
     benchmark = _safe_dict(_safe_get(intelligence_brief, "comparative_benchmark"))
-    delta_score_global = _safe_num(benchmark.get("delta_vs_4w_media", 0))
+    # El benchmark expone delta_vs_4w (no delta_vs_4w_media). Compat con ambos.
+    delta_score_global = _safe_num(
+        benchmark.get("delta_vs_4w",
+            benchmark.get("delta_vs_4w_media", 0)),
+        default=0
+    )
 
     # Tendencia país derivada del delta
     if delta_score_global >= 5:
@@ -470,20 +475,45 @@ def _clasificar_hotspots(snapshot: dict) -> list[dict]:
                                               "tacna", "chile"]},
     }
 
+    # Helper para evitar "None" como string literal
+    def _str_or_empty(v):
+        if v is None:
+            return ""
+        s = str(v).strip()
+        return "" if s.lower() in ("none", "null", "n/a") else s
+
     out = []
     for tipo_id, cfg in tipos.items():
         matches = []
         for ev in eventos:
-            titulo_ev = str(_safe_get(ev, "titulo", ""))
-            desc_ev = str(_safe_get(ev, "descripcion", ""))
+            titulo_ev = _str_or_empty(_safe_get(ev, "titulo", ""))
+            desc_ev = _str_or_empty(_safe_get(ev, "descripcion", ""))
             text = (titulo_ev + " " + desc_ev).lower()
             if any(kw in text for kw in cfg["keywords"]):
+                region_str = _str_or_empty(_safe_get(ev, "region", ""))
+                lugar_str = region_str or _str_or_empty(_safe_get(ev, "lugar", ""))
+                lat = _safe_get(ev, "lat")
+                lon = _safe_get(ev, "lon")
+                # Geocodificar región → coordenadas si no vienen explícitas.
+                # Intentar primero con el lugar, después con el título completo.
+                if (lat is None or lon is None):
+                    try:
+                        try:
+                            from ..data.peru_geo import buscar_coords
+                        except ImportError:
+                            from apurisk.data.peru_geo import buscar_coords
+                        coords = (buscar_coords(lugar_str) if lugar_str else None
+                                   ) or buscar_coords(titulo_ev)
+                        if coords and len(coords) >= 2:
+                            lat, lon = coords[0], coords[1]
+                    except Exception:
+                        pass
                 matches.append({
                     "titulo": titulo_ev[:120],
-                    "lugar": str(_safe_get(ev, "region", "")) or str(_safe_get(ev, "lugar", "")),
-                    "lat": _safe_get(ev, "lat"),
-                    "lon": _safe_get(ev, "lon"),
-                    "fuente": str(_safe_get(ev, "fuente", "")),
+                    "lugar": lugar_str or "(sin región)",
+                    "lat": lat,
+                    "lon": lon,
+                    "fuente": _str_or_empty(_safe_get(ev, "fuente", "")),
                 })
         if matches:
             out.append({
@@ -597,7 +627,11 @@ def _generar_outlook_30d(snapshot: dict, intelligence_brief: dict) -> dict:
         )
     else:
         score_global = _safe_num(_safe_get(snapshot, "score_global", 0))
-    delta_4w = _safe_num(benchmark.get("delta_vs_4w_media", 0))
+    delta_4w = _safe_num(
+        benchmark.get("delta_vs_4w",
+            benchmark.get("delta_vs_4w_media", 0)),
+        default=0
+    )
 
     # Contar I&W activos (de cualquier escenario)
     n_iw_activos = sum(1 for e_id, e_data in iw.items()
