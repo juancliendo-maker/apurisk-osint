@@ -27,4 +27,8 @@ pypdf==5.1.0
 # Se activa SOLO si ANTHROPIC_API_KEY está en env vars; si no, fallback
 # determinístico por plantillas (cero costo, narrativa más robotica pero
 # funcional). Esto preserva el deploy aunque la key esté ausente o expire.
-anthropic==0.39.0
+#
+# IMPORTANTE: requerir anthropic>=0.49.0 porque versiones anteriores
+# pasan 'proxies=' al constructor de httpx.Client(), parámetro que
+# httpx>=0.28 ya no acepta (rompe con TypeError en runtime).
+anthropic>=0.49.0,<1.0.0
