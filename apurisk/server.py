@@ -578,6 +578,48 @@ async def executive_brief_regenerar():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/executive", response_class=HTMLResponse)
+async def executive_home():
+    """Executive Home — vista premium C-level (Fase B del concepto).
+
+    Renderiza el Executive Brief con estética navy intelligence (Stratfor-style).
+    Consume el cache de 4h del brief; si no hay cache lo regenera.
+    """
+    try:
+        # Obtener brief (cache o fresh)
+        if _executive_cache_es_fresca():
+            with open(EXECUTIVE_CACHE_FILE, encoding="utf-8") as f:
+                brief = json.load(f)
+        else:
+            brief = _generar_executive_brief_fresh()
+
+        # Render HTML
+        try:
+            from .reports.executive_view import render_executive_home
+        except ImportError:
+            from apurisk.reports.executive_view import render_executive_home
+        return HTMLResponse(content=render_executive_home(brief))
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        return HTMLResponse(
+            content=f"""
+            <html><body style="font-family:monospace;background:#0f172a;color:#f8fafc;padding:40px;">
+              <h1 style="color:#ef4444;">Executive Home — Error</h1>
+              <p>{_esc_html(str(e))}</p>
+              <pre style="font-size:11px;color:#94a3b8;">{_esc_html(tb)}</pre>
+              <a href="/dashboard" style="color:#3b82f6;">← Volver al dashboard</a>
+            </body></html>
+            """,
+            status_code=500,
+        )
+
+
+def _esc_html(s: str) -> str:
+    from html import escape
+    return escape(str(s))
+
+
 @app.get("/api/executive/debug-snapshot")
 async def executive_debug_snapshot():
     """Diagnóstico: muestra la estructura raíz del snapshot real (no su contenido completo,
