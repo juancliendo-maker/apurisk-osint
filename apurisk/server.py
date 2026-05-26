@@ -536,9 +536,19 @@ async def executive_brief(force: bool = Query(False, description="Forzar regener
     """
     if not force and _executive_cache_es_fresca():
         with open(EXECUTIVE_CACHE_FILE, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
     try:
-        return _generar_executive_brief_fresh()
+        brief = _generar_executive_brief_fresh()
+        return JSONResponse(
+            content=brief,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -550,7 +560,7 @@ async def executive_brief(force: bool = Query(False, description="Forzar regener
             detail={
                 "error_type": type(e).__name__,
                 "error_msg": str(e),
-                "traceback": tb.splitlines()[-15:],  # últimas 15 líneas
+                "traceback": tb.splitlines()[-15:],
             }
         )
 
@@ -566,6 +576,56 @@ async def executive_brief_regenerar():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/executive/llm-test")
+async def executive_llm_test(modelo: str = Query(None, description="Override del modelo (default env var APURISK_LLM_MODEL o claude-haiku-4-5)")):
+    """Diagnóstico: hace UNA llamada de prueba al LLM y devuelve resultado o error.
+
+    Útil para diagnosticar por qué llamadas fallan en producción.
+    Si `modelo` se pasa, prueba ese modelo específicamente.
+    """
+    import os, traceback
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    resultado = {
+        "api_key_presente": bool(api_key),
+        "api_key_largo_caracteres": len(api_key) if api_key else 0,
+        "api_key_prefix": api_key[:12] + "..." if len(api_key) > 12 else "(vacío o corto)",
+        "modelo_intentado": modelo or os.environ.get("APURISK_LLM_MODEL", "claude-haiku-4-5-20251001"),
+    }
+    if not api_key:
+        resultado["status"] = "FAIL"
+        resultado["error"] = "ANTHROPIC_API_KEY no está en env vars"
+        return resultado
+    try:
+        from anthropic import Anthropic
+    except ImportError as e:
+        resultado["status"] = "FAIL"
+        resultado["error"] = f"Paquete anthropic no instalado: {e}"
+        return resultado
+
+    modelo_use = resultado["modelo_intentado"]
+    try:
+        client = Anthropic(api_key=api_key, timeout=15)
+        respuesta = client.messages.create(
+            model=modelo_use,
+            max_tokens=50,
+            messages=[{"role": "user",
+                       "content": "Responde solo con la palabra: OK"}],
+        )
+        texto = respuesta.content[0].text.strip() if respuesta.content else ""
+        resultado["status"] = "SUCCESS"
+        resultado["respuesta"] = texto
+        resultado["input_tokens"] = respuesta.usage.input_tokens
+        resultado["output_tokens"] = respuesta.usage.output_tokens
+        resultado["modelo_usado"] = respuesta.model
+        return resultado
+    except Exception as e:
+        resultado["status"] = "FAIL"
+        resultado["error_type"] = type(e).__name__
+        resultado["error_msg"] = str(e)[:500]
+        resultado["traceback_tail"] = traceback.format_exc().splitlines()[-8:]
+        return resultado
 
 
 @app.get("/api/executive/status")

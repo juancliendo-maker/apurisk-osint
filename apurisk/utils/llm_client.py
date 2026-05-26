@@ -31,7 +31,8 @@ TIMEOUT_S = 30
 MAX_TOKENS_DEFAULT = 400
 
 # Counter global para auditar uso (no persistente, solo runtime)
-_TOKENS_USADOS = {"input": 0, "output": 0, "llamadas": 0, "fallos": 0}
+_TOKENS_USADOS = {"input": 0, "output": 0, "llamadas": 0, "fallos": 0,
+                   "ultimos_errores": []}  # ring buffer últimos 5 errores
 
 
 def _hash_key(prompt: str, contexto: str, max_tokens: int, model: str) -> str:
@@ -94,7 +95,13 @@ def _llamar_directo(prompt: str, contexto: str, max_tokens: int,
         return None
     except Exception as e:
         _TOKENS_USADOS["fallos"] += 1
-        log.warning("LLM: fallo en llamada → %s", type(e).__name__)
+        err_msg = f"{type(e).__name__}: {str(e)[:300]}"
+        log.warning("LLM: fallo en llamada → %s", err_msg)
+        # Ring buffer: guardar últimos 5 errores únicos
+        errores = _TOKENS_USADOS.get("ultimos_errores", [])
+        if err_msg not in errores:
+            errores.append(err_msg)
+            _TOKENS_USADOS["ultimos_errores"] = errores[-5:]
         return None
 
 
