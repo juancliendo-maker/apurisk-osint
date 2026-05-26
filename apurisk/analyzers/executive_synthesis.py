@@ -32,7 +32,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from ..utils.llm_client import redactar_narrativa, redactar_insight, llm_disponible
+from ..utils.llm_client import (redactar_narrativa, redactar_insight,
+                                  llm_disponible, estado_uso)
 from ..utils.timezone_pe import now_pe, now_pe_iso
 
 log = logging.getLogger("apurisk.executive")
@@ -131,12 +132,18 @@ def _status_nacional(snapshot: dict, intelligence_brief: dict) -> dict:
     matriz = [f for f in _safe_list(_safe_get(snapshot, "matriz_riesgo", []))
               if isinstance(f, dict)]
 
-    # score_global puede venir como número directo, o dentro de "riesgo" como dict
+    # El snapshot real (main.py) usa riesgo["global"]. Hay variantes alternativas
+    # en otros módulos (score_global, etc.) — tolerar todas.
     riesgo_obj = _safe_get(snapshot, "riesgo", {})
     if isinstance(riesgo_obj, dict):
-        score_global = _safe_num(riesgo_obj.get("score_global", 0))
+        # Probar las 3 claves comunes en orden
+        score_global = _safe_num(
+            riesgo_obj.get("global",
+                riesgo_obj.get("score_global",
+                    riesgo_obj.get("score", 0))),
+            default=0
+        )
     else:
-        # algunos snapshots tienen score_global en raíz
         score_global = _safe_num(_safe_get(snapshot, "score_global", 0))
 
     # Riesgo Minero: media de scores de factores mineros
@@ -321,13 +328,14 @@ ALERT_CATEGORIAS_OPERACIONALES = {
 
 
 def _filtrar_alerts_ejecutivas(snapshot: dict, max_n: int = 8) -> list[dict]:
-    """Solo alertas CRÍTICAS o ALTAS operacionales, max N."""
+    """Solo alertas CRÍTICAS o ALTAS operacionales, max N. Deduplica por URL/título."""
     alertas = [a for a in _safe_list(_safe_get(snapshot, "alertas", []))
                if isinstance(a, dict)]
     if not alertas:
         return []
 
     filtradas = []
+    seen_keys = set()  # para deduplicar
     for a in alertas:
         nivel = str(_safe_get(a, "nivel", ""))
         cat = str(_safe_get(a, "categoria", ""))
@@ -336,13 +344,21 @@ def _filtrar_alerts_ejecutivas(snapshot: dict, max_n: int = 8) -> list[dict]:
         if cat not in ALERT_CATEGORIAS_OPERACIONALES:
             continue
         titulo = str(_safe_get(a, "titulo", ""))
+        url = str(_safe_get(a, "url", "")).strip()
+
+        # Clave de dedupe: URL si existe, sino primeros 80 chars del título
+        dedup_key = url.lower() if url else titulo[:80].lower().strip()
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+
         filtradas.append({
             "nivel": nivel,
             "titulo": titulo,
             "categoria": cat,
             "regla": str(_safe_get(a, "regla", "")),
             "fuente": str(_safe_get(a, "fuente", "")),
-            "url": str(_safe_get(a, "url", "")),
+            "url": url,
             "hours_ago": _safe_get(a, "hours_ago"),
             "que_paso": titulo[:120],
             "por_que_importa": _por_que_importa(a),
@@ -378,16 +394,63 @@ def _por_que_importa(alerta: dict) -> str:
 # =====================================================================
 
 def _clasificar_hotspots(snapshot: dict) -> list[dict]:
-    """Agrupa eventos georreferenciados por tipo de riesgo."""
-    eventos = _safe_list(_safe_get(snapshot, "eventos_geo", []))
+    """Agrupa eventos por tipo de riesgo. Lee de las fuentes reales del snapshot:
+    acled_events (ACLED API), conflictos (Defensoría), crimen_items.
+    """
+    # Unificar todas las fuentes en una sola lista normalizada
+    eventos = []
+
+    # ACLED events (estructura: event_type, location, country, fatalities, notes, latitude, longitude)
+    for ev in _safe_list(_safe_get(snapshot, "acled_events", [])):
+        if not isinstance(ev, dict):
+            continue
+        eventos.append({
+            "titulo": str(_safe_get(ev, "event_type", "")) + " - " + str(_safe_get(ev, "notes", ""))[:80],
+            "descripcion": str(_safe_get(ev, "notes", "")),
+            "region": str(_safe_get(ev, "location", "")) or str(_safe_get(ev, "admin1", "")),
+            "lat": _safe_get(ev, "latitude"),
+            "lon": _safe_get(ev, "longitude"),
+            "fuente": "ACLED",
+            "origen": "acled",
+        })
+
+    # Conflictos (estructura: title, summary, region, severidad, source_name)
+    for ev in _safe_list(_safe_get(snapshot, "conflictos", [])):
+        if not isinstance(ev, dict):
+            continue
+        # conflictos puede tener "raw" anidado
+        raw = _safe_dict(_safe_get(ev, "raw", {}))
+        eventos.append({
+            "titulo": str(_safe_get(ev, "title", "")),
+            "descripcion": str(_safe_get(ev, "summary", "")),
+            "region": str(_safe_get(ev, "region", "")) or str(raw.get("region", "")),
+            "lat": _safe_get(ev, "lat") or _safe_get(raw, "lat"),
+            "lon": _safe_get(ev, "lon") or _safe_get(raw, "lon"),
+            "fuente": str(_safe_get(ev, "source_name", "")),
+            "origen": "defensoria",
+        })
+
+    # Crimen items
+    for ev in _safe_list(_safe_get(snapshot, "crimen_items", [])):
+        if not isinstance(ev, dict):
+            continue
+        eventos.append({
+            "titulo": str(_safe_get(ev, "title", "")),
+            "descripcion": str(_safe_get(ev, "summary", "")),
+            "region": str(_safe_get(ev, "region", "")),
+            "lat": _safe_get(ev, "lat"),
+            "lon": _safe_get(ev, "lon"),
+            "fuente": str(_safe_get(ev, "source_name", "")),
+            "origen": "crimen",
+        })
+
+    # Si no hay nada de las fuentes anteriores, último fallback: revisar campos legacy
     if not eventos:
-        # Intentar otra fuente típica — mapa puede ser dict O string (HTML)
+        eventos = _safe_list(_safe_get(snapshot, "eventos_geo", []))
         mapa = _safe_get(snapshot, "mapa")
         if isinstance(mapa, dict):
-            eventos = _safe_list(mapa.get("eventos", []))
-        else:
-            eventos = []
-    eventos = [e for e in eventos if isinstance(e, dict)]
+            eventos += _safe_list(mapa.get("eventos", []))
+        eventos = [e for e in eventos if isinstance(e, dict)]
 
     tipos = {
         "corredor_logistico": {"label": "Corredores logísticos", "color": "naranja",
@@ -526,7 +589,12 @@ def _generar_outlook_30d(snapshot: dict, intelligence_brief: dict) -> dict:
               if isinstance(f, dict)]
     riesgo_obj = _safe_get(snapshot, "riesgo", {})
     if isinstance(riesgo_obj, dict):
-        score_global = _safe_num(riesgo_obj.get("score_global", 0))
+        score_global = _safe_num(
+            riesgo_obj.get("global",
+                riesgo_obj.get("score_global",
+                    riesgo_obj.get("score", 0))),
+            default=0
+        )
     else:
         score_global = _safe_num(_safe_get(snapshot, "score_global", 0))
     delta_4w = _safe_num(benchmark.get("delta_vs_4w_media", 0))
@@ -783,12 +851,27 @@ def sintetizar_executive_brief(snapshot_actual: dict,
                                      snapshot_actual, intelligence_brief, default={})
     if err: errores_bloque["executive_insight"] = err
 
+    # Determinar modo LLM REAL (no solo si la key está) consultando contador de uso
+    uso = estado_uso()
+    if not llm_disponible():
+        llm_modo = "fallback-deterministico (sin API key)"
+    elif uso.get("llamadas", 0) == 0:
+        llm_modo = "API key presente — sin llamadas aún (cache)"
+    elif uso.get("fallos", 0) >= uso.get("llamadas", 0):
+        llm_modo = f"FALLBACK forzado — todas las {uso['llamadas']} llamadas LLM fallaron"
+    elif uso.get("fallos", 0) > 0:
+        llm_modo = (f"claude-haiku-4-5 (parcial: {uso['llamadas']-uso['fallos']}/"
+                    f"{uso['llamadas']} OK, {uso['fallos']} fallidas)")
+    else:
+        llm_modo = (f"claude-haiku-4-5 ({uso['llamadas']} llamadas, "
+                    f"{uso['input']}→{uso['output']} tokens)")
+
     brief = {
         "schema_version": "executive_brief.v1",
         "generado_en": generado.isoformat(timespec="seconds"),
         "valido_hasta": valido_hasta.isoformat(timespec="seconds"),
         "ttl_horas": 4,
-        "llm_modo": "claude-haiku-4-5" if llm_disponible() else "fallback-deterministico",
+        "llm_modo": llm_modo,
         "status_nacional": status,
         "amenazas_prioritarias": amenazas,
         "critical_alerts": critical,

@@ -578,6 +578,42 @@ async def executive_brief_regenerar():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/executive/debug-snapshot")
+async def executive_debug_snapshot():
+    """Diagnóstico: muestra la estructura raíz del snapshot real (no su contenido completo,
+    solo las claves y tipos) para entender por qué algunos campos no se leen bien."""
+    snap_path = _ultimo_snapshot_path()
+    if not snap_path:
+        return {"error": "Sin snapshot disponible"}
+    with open(snap_path, encoding="utf-8") as f:
+        snap = json.load(f)
+
+    def _resumen(v, depth=0):
+        if depth > 2:
+            return "..."
+        if isinstance(v, dict):
+            return {k: _resumen(vv, depth + 1) for k, vv in v.items()}
+        if isinstance(v, list):
+            return f"<list[{len(v)}] sample: {_resumen(v[0], depth+1) if v else 'empty'}>"
+        if isinstance(v, str):
+            return f"<str len={len(v)}> {v[:60]}"
+        return f"<{type(v).__name__}> {v}"
+
+    return {
+        "snapshot_path": str(snap_path),
+        "claves_raiz": list(snap.keys()),
+        "riesgo_completo": snap.get("riesgo"),
+        "matriz_riesgo_n": len(snap.get("matriz_riesgo", [])),
+        "matriz_riesgo_sample_keys": list(snap["matriz_riesgo"][0].keys()) if snap.get("matriz_riesgo") else [],
+        "alertas_n": len(snap.get("alertas", [])),
+        "acled_events_n": len(snap.get("acled_events", [])),
+        "crimen_items_n": len(snap.get("crimen_items", [])),
+        "conflictos_n": len(snap.get("conflictos", [])),
+        "acled_event_sample_keys": list(snap["acled_events"][0].keys()) if snap.get("acled_events") else [],
+        "conflicto_sample_keys": list(snap["conflictos"][0].keys()) if snap.get("conflictos") else [],
+    }
+
+
 @app.get("/api/executive/llm-test")
 async def executive_llm_test(modelo: str = Query(None, description="Override del modelo (default env var APURISK_LLM_MODEL o claude-haiku-4-5)")):
     """Diagnóstico: hace UNA llamada de prueba al LLM y devuelve resultado o error.
