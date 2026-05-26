@@ -570,11 +570,23 @@ def _render_hotspot_map(hotspots: list) -> str:
         </aside>
       </div>
       <script>
-        (function() {{
+        // Wrapper: si Leaflet aun no cargo, reintentar cada 100ms hasta 3s
+        function initApuriskMap(intentos) {{
+          intentos = intentos || 0;
           if (typeof L === 'undefined') {{
-            console.error('Leaflet no cargado');
+            if (intentos < 30) {{
+              setTimeout(() => initApuriskMap(intentos + 1), 100);
+              return;
+            }}
+            console.error('[APURISK Map] Leaflet no se cargo tras 3s, abortando');
+            document.getElementById('execMap').innerHTML =
+              '<div style="padding:40px;color:#94a3b8;text-align:center;font-size:13px;">' +
+              '⚠ No se pudo cargar la libreria de mapas (Leaflet). ' +
+              'Verifica conexión a unpkg.com.</div>';
             return;
           }}
+          console.log('[APURISK Map] Leaflet ' + L.version + ' cargado, init mapa');
+
           const markers = {markers_json};
           const zonas = {zonas_json};
           const corredores = {corredores_json};
@@ -716,7 +728,13 @@ def _render_hotspot_map(hotspots: list) -> str:
           window.addEventListener('resize', () => {{
             setTimeout(() => map.invalidateSize(), 100);
           }});
-        }})();
+        }}
+        // Disparar init cuando DOM esté listo
+        if (document.readyState === 'loading') {{
+          document.addEventListener('DOMContentLoaded', () => initApuriskMap());
+        }} else {{
+          initApuriskMap();
+        }}
       </script>
     </section>
     """
@@ -1658,6 +1676,10 @@ def render_executive_home(brief: dict) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>APURISK Intelligence — Executive Brief</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<!-- Leaflet JS CARGADO EN EL HEAD para que window.L este disponible antes
+     de cualquier script inline en el body. Si esto se mueve al final del
+     body, los scripts del mapa se ejecutan antes de que L exista. -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>{_css()}</style>
 </head>
 <body>
@@ -1675,7 +1697,6 @@ def render_executive_home(brief: dict) -> str:
     APURISK Intelligence Platform · OSINT Strategic Risk Monitoring · Perú
   </footer>
 </div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
 async function regenerarBrief() {{
   const btn = event.target;
