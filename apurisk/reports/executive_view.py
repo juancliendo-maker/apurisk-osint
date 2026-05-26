@@ -583,25 +583,45 @@ def _render_hotspot_map(hotspots: list) -> str:
             center: [-10.5, -75.5],
             zoom: 5,
             zoomControl: true,
-            attributionControl: false,
+            attributionControl: true,  // CartoDB requiere attribution
             preferCanvas: false,
+            minZoom: 4,
+            maxZoom: 13,
           }});
 
-          // Tile base oscuro CartoDB dark_nolabels (sin labels = más limpio)
-          const tileDark = L.tileLayer(
-            'https://{{s}}.basemaps.cartocdn.com/dark_nolabels/{{z}}/{{x}}/{{y}}{{r}}.png',
-            {{
-              maxZoom: 13,
-              minZoom: 4,
-              subdomains: 'abcd',
-            }}
-          );
+          // Tile base oscuro CartoDB dark_nolabels (sin {{r}} retina que
+          // a veces da 404). Usa subdomain explicito 'abcd'.
+          const cartoUrl = 'https://{{s}}.basemaps.cartocdn.com/dark_nolabels/{{z}}/{{x}}/{{y}}.png';
+          const tileDark = L.tileLayer(cartoUrl, {{
+            subdomains: 'abcd',
+            attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OSM',
+            maxZoom: 13,
+          }});
           tileDark.addTo(map);
+
+          // FALLBACK: si CartoDB falla, cambiar a OSM tile estandar
+          let cartoFailed = false;
+          tileDark.on('tileerror', function(e) {{
+            if (!cartoFailed) {{
+              cartoFailed = true;
+              console.warn('[APURISK Map] CartoDB tiles fallaron, fallback a OpenStreetMap');
+              map.removeLayer(tileDark);
+              L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                maxZoom: 13,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+              }}).addTo(map);
+            }}
+          }});
 
           // Capa de labels SOBRE las zonas (sutiles, para no saturar)
           const tileLabels = L.tileLayer(
-            'https://{{s}}.basemaps.cartocdn.com/dark_only_labels/{{z}}/{{x}}/{{y}}{{r}}.png',
-            {{ maxZoom: 13, opacity: 0.75 }}
+            'https://{{s}}.basemaps.cartocdn.com/dark_only_labels/{{z}}/{{x}}/{{y}}.png',
+            {{
+              subdomains: 'abcd',
+              maxZoom: 13,
+              opacity: 0.75,
+              attribution: '',
+            }}
           );
 
           // ========== ZONAS ESTRATÉGICAS (polígonos) ==========
@@ -684,6 +704,18 @@ def _render_hotspot_map(hotspots: list) -> str:
             const bounds = layerMarkers.getBounds().pad(0.15);
             map.fitBounds(bounds, {{ maxZoom: 7 }});
           }}
+
+          // CRÍTICO: Leaflet no renderiza tiles si el contenedor tiene altura 0
+          // al momento de init. Forzar refresh tras varios delays para asegurar
+          // que los tiles se pintan después del layout final del grid CSS.
+          [50, 200, 600, 1200].forEach(delay => {{
+            setTimeout(() => map.invalidateSize(), delay);
+          }});
+
+          // Refresh también si la ventana cambia tamaño
+          window.addEventListener('resize', () => {{
+            setTimeout(() => map.invalidateSize(), 100);
+          }});
         }})();
       </script>
     </section>
@@ -1419,6 +1451,19 @@ section { margin-bottom: var(--gap-xl); }
 .leaflet-control-zoom a:hover {
   background: #334155 !important;
   color: #f8fafc !important;
+}
+
+/* Attribution sutil */
+.leaflet-control-attribution {
+  background: rgba(15,23,42,0.85) !important;
+  color: #64748b !important;
+  font-size: 9px !important;
+  padding: 2px 6px !important;
+  border-radius: 3px 0 0 0 !important;
+}
+.leaflet-control-attribution a {
+  color: #94a3b8 !important;
+  text-decoration: none;
 }
 
 /* ===== IMPLICANCIAS ===== */
