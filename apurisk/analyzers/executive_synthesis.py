@@ -627,9 +627,20 @@ def _clasificar_hotspots(snapshot: dict) -> list[dict]:
             region_str = _str_or_empty(_safe_get(ev, "region", ""))
             lugar_str = region_str or _str_or_empty(_safe_get(ev, "lugar", ""))
             url_ev = _str_or_empty(_safe_get(ev, "url", ""))
+            origen_ev = _str_or_empty(_safe_get(ev, "origen", ""))
 
-            # Dedup key: URL si existe, sino primeros 80 chars del título
-            dedup_key = url_ev.lower() if url_ev else titulo_ev[:80].lower().strip()
+            # Dedup key:
+            #  - eventos SUTRAN: lat+lon+km (cada bloqueo es único geográficamente,
+            #    pero todos comparten la misma URL del visor del MTC)
+            #  - otros eventos: URL si existe, sino primeros 80 chars del título
+            if origen_ev == "sutran":
+                lat_e = _safe_get(ev, "lat")
+                lon_e = _safe_get(ev, "lon")
+                km_e = _str_or_empty(_safe_get(ev, "kilometraje", ""))
+                dedup_key = f"sutran:{lat_e}:{lon_e}:{km_e}"
+            else:
+                dedup_key = url_ev.lower() if url_ev else titulo_ev[:80].lower().strip()
+
             if dedup_key and dedup_key in seen_keys:
                 continue
             if dedup_key:
