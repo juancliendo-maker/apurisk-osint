@@ -656,6 +656,69 @@ async def executive_debug_snapshot():
     }
 
 
+@app.get("/api/executive/sutran-test")
+async def executive_sutran_test():
+    """Diagnóstico: hace fetch live al endpoint SUTRAN/MTC y devuelve
+    cuántas alertas obtuvo, o el error exacto si falla.
+
+    Sirve para verificar:
+      1. Que el código del collector SUTRAN está deployado
+      2. Que Render puede llegar a *.gob.pe
+      3. Cuántas alertas hay AHORA en el MTC
+    """
+    import time
+    t0 = time.time()
+    resultado = {
+        "endpoint": "https://gis.sutran.gob.pe/alerta_sutran/script_cgm/carga_xlsx.php?tipo=MAPA",
+    }
+    try:
+        try:
+            from .collectors.sutran import fetch_sutran_alertas
+        except ImportError:
+            from apurisk.collectors.sutran import fetch_sutran_alertas
+        eventos = fetch_sutran_alertas(timeout=15)
+        resultado["status"] = "OK"
+        resultado["latencia_ms"] = round((time.time() - t0) * 1000)
+        resultado["n_eventos"] = len(eventos)
+        # Resumen por estado
+        from collections import Counter
+        if eventos:
+            resultado["por_estado"] = dict(Counter(e["estado"] for e in eventos))
+            resultado["por_motivo"] = dict(Counter(e["motivo"] for e in eventos))
+            resultado["por_tipo_hotspot"] = dict(Counter(e["_tipo_hotspot_hint"] for e in eventos))
+            # Primeras 3 muestras para validar el shape
+            resultado["sample_eventos"] = [
+                {
+                    "titulo": e["titulo"][:140],
+                    "estado": e["estado"],
+                    "motivo": e["motivo"],
+                    "region": e["region"],
+                    "distrito": e["distrito"],
+                    "km": e["kilometraje"],
+                    "via": e["via_codigo"],
+                    "lat": e["lat"],
+                    "lon": e["lon"],
+                    "tipo_hotspot": e["_tipo_hotspot_hint"],
+                    "fuente": e["fuente"],
+                }
+                for e in eventos[:3]
+            ]
+        return resultado
+    except ImportError as e:
+        resultado["status"] = "FAIL_IMPORT"
+        resultado["error"] = (f"Modulo apurisk.collectors.sutran no existe en el deploy "
+                              f"actual. Push del codigo Tarea B no se hizo: {e}")
+        return resultado
+    except Exception as e:
+        import traceback
+        resultado["status"] = "FAIL_FETCH"
+        resultado["error_type"] = type(e).__name__
+        resultado["error_msg"] = str(e)[:500]
+        resultado["latencia_ms"] = round((time.time() - t0) * 1000)
+        resultado["traceback_tail"] = traceback.format_exc().splitlines()[-10:]
+        return resultado
+
+
 @app.get("/api/executive/llm-test")
 async def executive_llm_test(modelo: str = Query(None, description="Override del modelo (default env var APURISK_LLM_MODEL o claude-haiku-4-5)")):
     """Diagnóstico: hace UNA llamada de prueba al LLM y devuelve resultado o error.
