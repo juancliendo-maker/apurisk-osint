@@ -486,14 +486,37 @@ def _clasificar_hotspots(snapshot: dict) -> list[dict]:
       1. acled_events (ACLED API si activa)
       2. conflictos (Defensoría)
       3. crimen_items
-      4. alertas CRÍTICAS/ALTAS de tipos operacionales (NUEVO — Tarea A)
+      4. alertas CRÍTICAS/ALTAS de tipos operacionales (Tarea A)
+      5. SUTRAN/MTC — datos oficiales en tiempo real del Estado (Tarea B)
 
-    La fuente 4 es crítica: garantiza que cualquier paro/bloqueo cubierto
-    por la prensa nacional aparezca en el mapa, aunque ACLED y Defensoría
-    no lo hayan reportado todavía.
+    La fuente 5 (SUTRAN) es la más autoritativa: viene del Estado, tiene
+    coordenadas oficiales km a km, y se actualiza al minuto. Si el snapshot
+    no tiene 'sutran_alertas', se hace un fetch live con timeout corto.
     """
     # Unificar todas las fuentes en una sola lista normalizada
     eventos = []
+
+    # FUENTE #5 (NUEVO Tarea B): SUTRAN/MTC en tiempo real.
+    # Estos eventos tienen prioridad sobre todos los demás porque traen
+    # coordenadas oficiales precisas y son data operacional cruda del Estado.
+    sutran_eventos = _safe_list(_safe_get(snapshot, "sutran_alertas", []))
+    if not sutran_eventos:
+        # Fetch live como fallback (timeout corto para no demorar el brief)
+        try:
+            try:
+                from ..collectors.sutran import fetch_sutran_alertas
+            except ImportError:
+                from apurisk.collectors.sutran import fetch_sutran_alertas
+            sutran_eventos = fetch_sutran_alertas(timeout=10)
+            log.info("SUTRAN live fetch desde executive: %d eventos", len(sutran_eventos))
+        except Exception as e:
+            log.warning("SUTRAN live fetch fallo: %s", e)
+            sutran_eventos = []
+
+    for ev in sutran_eventos:
+        if not isinstance(ev, dict):
+            continue
+        eventos.append(ev)  # ya viene con _tipo_hotspot_hint asignado
 
     # ACLED events (estructura: event_type, location, country, fatalities, notes, latitude, longitude)
     for ev in _safe_list(_safe_get(snapshot, "acled_events", [])):
