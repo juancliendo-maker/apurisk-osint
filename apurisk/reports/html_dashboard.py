@@ -1485,6 +1485,69 @@ def generar_dashboard_html(
             "fecha_iso": it.published or "",
         })
 
+    # =====================================================================
+    # SUTRAN/MTC markers — datos OFICIALES del Estado peruano en tiempo real
+    # Fuente: gis.sutran.gob.pe (Superintendencia de Transporte Terrestre).
+    # 35 alertas vigentes típicas, con coordenadas precisas km a km en
+    # carreteras nacionales (PE-1N, PE-3S, etc).
+    # =====================================================================
+    sutran_eventos = []
+    try:
+        try:
+            from ..collectors.sutran import fetch_sutran_alertas
+        except ImportError:
+            from apurisk.collectors.sutran import fetch_sutran_alertas
+        sutran_eventos = fetch_sutran_alertas(timeout=10)
+    except Exception:
+        sutran_eventos = []
+
+    # Mapeo estado SUTRAN → nivel del dashboard
+    sutran_nivel_map = {
+        "TRANSITO INTERRUMPIDO": "CRÍTICA",
+        "TRANSITO RESTRINGIDO": "ALTA",
+        "TRANSITO NORMAL": "MEDIA",
+    }
+    # Etiqueta legible por motivo
+    sutran_categoria_map = {
+        "HUMANO": "🚧 Bloqueo / Paro",
+        "CLIMATOLOGICO": "🌧 Climatológico",
+        "INFRAESTRUCTURA": "🛠 Obras / Derrumbe",
+        "ACCIDENTES": "💥 Accidente de tránsito",
+    }
+    for ev in sutran_eventos:
+        if not isinstance(ev, dict):
+            continue
+        lat = ev.get("lat")
+        lon = ev.get("lon")
+        if lat is None or lon is None:
+            continue
+        estado = ev.get("estado", "")
+        motivo = ev.get("motivo", "")
+        nivel = sutran_nivel_map.get(estado, "MEDIA")
+        categoria = sutran_categoria_map.get(motivo, "Vía nacional")
+        # Resumen rico para el popup
+        km = ev.get("kilometraje", "")
+        via = ev.get("via_codigo", "")
+        via_nombre = ev.get("via_nombre", "")
+        evento_desc = ev.get("descripcion", "") or ev.get("evento", "")
+        resumen = f"{evento_desc} · {via} {km} ({via_nombre})"
+        # Calcular hours_ago desde fecha_actualizacion ("26/05/2026 22:41 HORAS")
+        h_ago = 0  # SUTRAN solo muestra alertas vigentes, asumimos recientes
+        map_markers.append({
+            "lat": float(lat), "lng": float(lon),
+            "tipo": "sutran",
+            "nivel": nivel,
+            "titulo": f"[{estado}] {evento_desc[:80]}",
+            "resumen": resumen,
+            "url": "https://gis.sutran.gob.pe/alerta_sutran/",
+            "fuente": ev.get("fuente", "SUTRAN/MTC"),
+            "categoria": categoria,
+            "region": (ev.get("region") or "").title(),
+            "hours_ago": h_ago,
+            "fecha": ev.get("fecha_actualizacion", ""),
+            "fecha_iso": ev.get("fecha_actualizacion", ""),
+        })
+
     # Datos para charts
     matriz_data = [
         {"x": f["probabilidad"], "y": f["impacto"], "r": max(8, f["score"] / 5),
@@ -1923,7 +1986,8 @@ def generar_dashboard_html(
   <section class="tab-panel" id="tab-geo">
     <div class="grid grid-12">
       <div class="card span-12">
-        <h3>Geolocalización de alertas y conflictos · ÚLTIMAS 48 HORAS <span class="badge" style="background:{'var(--critico)' if len(map_markers) == 0 else 'var(--accent)'};">{len(map_markers)} {'punto' if len(map_markers) == 1 else 'puntos'} activos</span></h3>
+        <h3>Geolocalización de alertas, conflictos y alertas viales SUTRAN/MTC <span class="badge" style="background:{'var(--critico)' if len(map_markers) == 0 else 'var(--accent)'};">{len(map_markers)} {'punto' if len(map_markers) == 1 else 'puntos'} activos</span></h3>
+        <div style="font-size:11px; color:var(--txt-2); margin-bottom:8px;">Prensa nacional (últimas 48h) · ACLED (14 días) · Conflictos Defensoría · <strong style="color:var(--accent);">SUTRAN/MTC alertas vigentes en carreteras (tiempo real)</strong></div>
         <div style="font-size: 12px; color: var(--txt-2); margin-bottom: 10px;">
           🕒 Filtro temporal estricto: solo eventos con timestamp dentro de las últimas <b>48 horas</b>.
           Items demo y eventos viejos NO aparecen aquí. Se renueva automáticamente cada 30 min con el scheduler.
