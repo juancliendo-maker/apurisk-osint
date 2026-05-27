@@ -377,6 +377,63 @@ footer { text-align: center; padding: 24px; color: var(--txt-3); font-size: 11px
 .leaflet-popup-content strong { color: var(--txt-0);}
 .leaflet-control-attribution { background: rgba(15,23,42,0.7) !important; color: var(--txt-3) !important;}
 .leaflet-control-attribution a { color: var(--accent) !important;}
+
+/* ===== CONTROL DE CAPAS (estilo dark dashboard) ===== */
+.leaflet-control-layers {
+  background: rgba(15, 23, 42, 0.95) !important;
+  color: var(--txt-1) !important;
+  border: 1px solid var(--bg-3) !important;
+  border-radius: 6px !important;
+  padding: 10px 12px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.6) !important;
+  font-size: 12px !important;
+  max-height: 480px !important;
+  overflow-y: auto !important;
+  min-width: 240px;
+}
+.leaflet-control-layers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.leaflet-control-layers label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 4px 0 !important;
+  color: var(--txt-1) !important;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.leaflet-control-layers label:hover { color: var(--txt-0) !important; }
+.leaflet-control-layers label span { line-height: 1.3; }
+.leaflet-control-layers input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.leaflet-control-layers-separator { border-color: var(--bg-3) !important; }
+
+/* Markers DivIcon del dashboard */
+.apurisk-dash-marker { background: transparent !important; border: none !important; }
+.apurisk-dash-marker > div {
+  transition: transform 0.15s ease;
+  cursor: pointer;
+}
+.apurisk-dash-marker > div:hover {
+  transform: scale(1.18);
+  z-index: 1000 !important;
+}
+
+/* Zoom control dark */
+.leaflet-control-zoom a {
+  background: rgba(15,23,42,0.95) !important;
+  color: var(--txt-1) !important;
+  border: 1px solid var(--bg-3) !important;
+}
+.leaflet-control-zoom a:hover {
+  background: var(--bg-2) !important;
+  color: var(--txt-0) !important;
+}
 """
 
 
@@ -1335,9 +1392,22 @@ def generar_dashboard_html(
         if not coords:
             coords = buscar_coords((a.get("titulo") or "") + " " + (a.get("resumen") or ""))
         if coords:
+            # Clasificar alerta a una capa específica según regla
+            regla = a.get("regla", "") or ""
+            if regla in ("BLOQUEO_VIA_NACIONAL", "BLOQUEO_CORREDOR_MINERO",
+                          "PARO_REGIONAL", "BLOQUEO_FLUVIAL"):
+                capa = "alerta_bloqueo"
+            elif regla in ("SICARIATO_HOMICIDIO_ORGANIZADO",
+                            "ASESINATOS_VIOLENCIA_CRITICA", "ATAQUE_VIOLENCIA"):
+                capa = "alerta_violencia"
+            elif regla in ("VACANCIA_ACTIVADA", "CENSURA_GABINETE",
+                            "RENUNCIA_MINISTRO", "PROCESO_ELECTORAL"):
+                capa = "alerta_politico"
+            else:
+                capa = "alerta_prensa"
             map_markers.append({
                 "lat": coords[0], "lng": coords[1],
-                "tipo": "alerta", "nivel": a["nivel"],
+                "tipo": "alerta", "capa": capa, "nivel": a["nivel"],
                 "titulo": a["titulo"], "resumen": a["resumen"],
                 "url": a.get("url", ""), "fuente": a["fuente"],
                 "categoria": a["categoria"], "region": a.get("region", ""),
@@ -1369,7 +1439,7 @@ def generar_dashboard_html(
             sev = raw.get("severidad", "media")
             map_markers.append({
                 "lat": coords[0], "lng": coords[1],
-                "tipo": "conflicto",
+                "tipo": "conflicto", "capa": "conflicto_social",
                 "nivel": "CRÍTICA" if sev == "alta" else "ALTA" if sev == "media" else "MEDIA",
                 "titulo": c.title, "resumen": c.summary,
                 "url": c.url, "fuente": c.source_name,
@@ -1412,7 +1482,7 @@ def generar_dashboard_html(
         is_demo_acled = raw.get("is_demo", False)
         map_markers.append({
             "lat": float(lat), "lng": float(lng),
-            "tipo": "acled",
+            "tipo": "acled", "capa": "acled",
             "nivel": nivel,
             "titulo": ev.title,
             "resumen": ev.summary,
@@ -1469,9 +1539,20 @@ def generar_dashboard_html(
             "extorsion_sicariato": "🔫 Extorsión/Sicariato",
         }
         categoria_label = etiquetas.get(tipologia, "Crimen organizado")
+        # Mapeo tipología → capa específica de crimen
+        capa_crimen_map = {
+            "narcotrafico": "crimen_narcotrafico",
+            "extorsion_sicariato": "crimen_sicariato",
+            "mineria_ilegal": "crimen_mineria_ilegal",
+            "tala_ilegal": "crimen_mineria_ilegal",
+            "contrabando": "crimen_otro",
+            "migracion_irregular": "crimen_otro",
+            "crimen_organizado_transnacional": "crimen_sicariato",
+        }
+        capa = capa_crimen_map.get(tipologia, "crimen_otro")
         map_markers.append({
             "lat": coords[0], "lng": coords[1],
-            "tipo": "crimen",
+            "tipo": "crimen", "capa": capa,
             "tipologia": tipologia,
             "nivel": nivel,
             "titulo": it.title,
@@ -1533,9 +1614,17 @@ def generar_dashboard_html(
         resumen = f"{evento_desc} · {via} {km} ({via_nombre})"
         # Calcular hours_ago desde fecha_actualizacion ("26/05/2026 22:41 HORAS")
         h_ago = 0  # SUTRAN solo muestra alertas vigentes, asumimos recientes
+        # Capa SUTRAN según motivo (permite filtros granulares)
+        capa_sutran_map = {
+            "HUMANO": "sutran_humano",
+            "CLIMATOLOGICO": "sutran_clima",
+            "INFRAESTRUCTURA": "sutran_obras",
+            "ACCIDENTES": "sutran_accidente",
+        }
+        capa_sutran = capa_sutran_map.get(motivo, "sutran_otro")
         map_markers.append({
             "lat": float(lat), "lng": float(lon),
-            "tipo": "sutran",
+            "tipo": "sutran", "capa": capa_sutran,
             "nivel": nivel,
             "titulo": f"[{estado}] {evento_desc[:80]}",
             "resumen": resumen,
@@ -3175,60 +3264,134 @@ python -m http.server 8080 --directory output
 
   const colorByNivelMap = {{ 'CRÍTICA': '#ef4444', 'ALTA': '#f97316', 'MEDIA': '#f59e0b', 'BAJA': '#22c55e' }};
 
-  // Agrupar markers por coordenada (mismo departamento) para mostrar uno solo con count
+  // Definición de capas: emoji + label + color base. Cada marker se asigna
+  // a una capa según su campo `capa` (asignado en el backend Python).
+  const CAPAS_DEF = {{
+    'sutran_humano':         {{ emoji: '🚧', label: 'SUTRAN · Bloqueo/Paro',     color: '#ef4444' }},
+    'sutran_clima':          {{ emoji: '🌧', label: 'SUTRAN · Climatológico',     color: '#0ea5e9' }},
+    'sutran_obras':          {{ emoji: '🛠', label: 'SUTRAN · Obras/Derrumbe',    color: '#f59e0b' }},
+    'sutran_accidente':      {{ emoji: '💥', label: 'SUTRAN · Accidente vial',    color: '#dc2626' }},
+    'sutran_otro':           {{ emoji: '📍', label: 'SUTRAN · Otros',             color: '#94a3b8' }},
+    'alerta_bloqueo':        {{ emoji: '🚦', label: 'Prensa · Bloqueo/Paro',      color: '#f97316' }},
+    'alerta_violencia':      {{ emoji: '🔫', label: 'Prensa · Violencia crítica', color: '#dc2626' }},
+    'alerta_politico':       {{ emoji: '🏛', label: 'Prensa · Político',          color: '#a855f7' }},
+    'alerta_prensa':         {{ emoji: '📰', label: 'Prensa · Otras alertas',     color: '#fbbf24' }},
+    'conflicto_social':      {{ emoji: '🔥', label: 'Defensoría · Conflicto',     color: '#f97316' }},
+    'crimen_narcotrafico':   {{ emoji: '🚫', label: 'Crimen · Narcotráfico',      color: '#dc2626' }},
+    'crimen_sicariato':      {{ emoji: '🔫', label: 'Crimen · Sicariato',         color: '#991b1b' }},
+    'crimen_mineria_ilegal': {{ emoji: '⛏', label: 'Crimen · Minería ilegal',    color: '#b45309' }},
+    'crimen_otro':           {{ emoji: '⚠', label: 'Crimen · Otros',             color: '#f59e0b' }},
+    'acled':                 {{ emoji: '⚠', label: 'ACLED · Violencia armada',   color: '#dc2626' }},
+  }};
+
+  // Crear feature groups (capas) — todas inician encendidas
+  const layerGroups = {{}};
+  const layerCounts = {{}};
+  Object.keys(CAPAS_DEF).forEach(k => {{
+    layerGroups[k] = L.featureGroup();
+    layerCounts[k] = 0;
+  }});
+
+  // Agrupar por (lat, lng, capa) — preserva diferenciación si dos tipos
+  // distintos caen en la misma región.
   const grouped = {{}};
   mapMarkers.forEach(m => {{
-    const key = m.lat.toFixed(3) + ',' + m.lng.toFixed(3);
-    if (!grouped[key]) grouped[key] = {{ lat: m.lat, lng: m.lng, region: m.region, items: [] }};
+    const capa = m.capa || 'alerta_prensa';
+    const key = m.lat.toFixed(3) + ',' + m.lng.toFixed(3) + ',' + capa;
+    if (!grouped[key]) grouped[key] = {{
+      lat: m.lat, lng: m.lng, region: m.region, capa: capa, items: []
+    }};
     grouped[key].items.push(m);
   }});
 
   Object.values(grouped).forEach(g => {{
-    // determinar nivel agregado por mayor severidad del grupo
+    const capaDef = CAPAS_DEF[g.capa] || CAPAS_DEF['alerta_prensa'];
+    // determinar nivel agregado por mayor severidad
     const orden = ['CRÍTICA', 'ALTA', 'MEDIA', 'BAJA'];
     let nivelGrupo = 'MEDIA';
     for (const lvl of orden) {{
       if (g.items.some(x => x.nivel === lvl)) {{ nivelGrupo = lvl; break; }}
     }}
-    const color = colorByNivelMap[nivelGrupo] || '#38bdf8';
+    const colorNivel = colorByNivelMap[nivelGrupo] || capaDef.color;
     const count = g.items.length;
-    const radius = count > 1 ? Math.min(22, 10 + count * 2) : (nivelGrupo === 'CRÍTICA' ? 12 : nivelGrupo === 'ALTA' ? 10 : 8);
 
-    // ÚNICO marker por región — sin jitter, contenido en su zona
-    const circle = L.circleMarker([g.lat, g.lng], {{
-      radius: radius, color: color, weight: 2,
-      fillColor: color, fillOpacity: 0.65,
-    }}).addTo(map);
+    // DivIcon con emoji + borde de color según severidad
+    const tamano = nivelGrupo === 'CRÍTICA' ? 34 : nivelGrupo === 'ALTA' ? 30 : 26;
+    const html = `<div style="
+        width: ${{tamano}}px; height: ${{tamano}}px;
+        background: ${{capaDef.color}}ee;
+        border: 2.5px solid ${{colorNivel}};
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: ${{tamano * 0.5}}px; line-height: 1;
+        box-shadow: 0 0 8px ${{colorNivel}}88;
+        position: relative;
+      ">
+        <span>${{capaDef.emoji}}</span>
+        ${{count > 1 ? `<span style="
+          position: absolute; top: -6px; right: -6px;
+          background: #0a0e1a; color: #fff; border-radius: 50%;
+          width: 18px; height: 18px; font-size: 10px; font-weight: 700;
+          display: flex; align-items: center; justify-content: center;
+          border: 1.5px solid ${{colorNivel}};
+        ">${{count}}</span>` : ''}}
+      </div>`;
+    const icon = L.divIcon({{
+      className: 'apurisk-dash-marker',
+      html: html,
+      iconSize: [tamano, tamano],
+      iconAnchor: [tamano/2, tamano/2],
+      popupAnchor: [0, -tamano/2],
+    }});
+    const marker = L.marker([g.lat, g.lng], {{ icon: icon }});
 
-    // Si son múltiples eventos, mostrar count en el centro
-    if (count > 1) {{
-      const icon = L.divIcon({{
-        className: 'marker-count',
-        html: `<div style="background:${{color}}; color:#fff; border-radius:50%; width:24px; height:24px; line-height:24px; text-align:center; font-weight:700; font-size:11px; border:2px solid #0a0e1a; box-shadow:0 0 6px rgba(0,0,0,0.5);">${{count}}</div>`,
-        iconSize: [24, 24], iconAnchor: [12, 12]
-      }});
-      L.marker([g.lat, g.lng], {{ icon: icon, interactive: false }}).addTo(map);
-    }}
-
-    // Popup con TODOS los eventos del grupo
+    // Popup con TODOS los eventos del grupo (igual que antes)
     const eventos = g.items.map(m => {{
       const u = m.url ? `<br><a href='${{m.url}}' target='_blank' rel='noopener' style='color:#38bdf8;'>🔗 ${{m.fuente}}</a>` : '';
       const f = m.fecha ? `<span style='color:#94a3b8; font-size:10px;'>🕒 ${{m.fecha}}</span>` : '';
       return `<div style="padding: 6px 0; border-top: 1px solid #334155;">
         <div style='font-weight:600; font-size:12px; color:#fff;'>[${{m.nivel}}] ${{m.titulo}}</div>
-        <div style='font-size:11px; color:#cbd5e1; margin: 2px 0;'>${{m.resumen.substring(0, 150)}}${{m.resumen.length > 150 ? '…' : ''}}</div>
+        <div style='font-size:11px; color:#cbd5e1; margin: 2px 0;'>${{(m.resumen||'').substring(0, 200)}}${{(m.resumen||'').length > 200 ? '…' : ''}}</div>
         ${{f}}${{u}}
       </div>`;
     }}).join('');
-    circle.bindPopup(
-      `<div style='max-width: 320px; max-height: 380px; overflow-y: auto;'>
-        <strong style='font-size:13px;'>📍 ${{g.region || 'Sin región'}}</strong>
-        <span style='background:${{color}}; color:#fff; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:700; margin-left:6px;'>${{count}} ${{count === 1 ? 'evento' : 'eventos'}}</span>
+    marker.bindPopup(
+      `<div style='max-width: 340px; max-height: 380px; overflow-y: auto;'>
+        <div style='display:flex; align-items:center; gap:6px; margin-bottom:4px;'>
+          <span style='font-size:16px;'>${{capaDef.emoji}}</span>
+          <strong style='font-size:13px;'>${{capaDef.label}}</strong>
+        </div>
+        <div style='font-size:11px; color:#94a3b8;'>📍 ${{g.region || 'Sin región'}}
+          <span style='background:${{colorNivel}}; color:#fff; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:700; margin-left:6px;'>${{count}} ${{count === 1 ? 'evento' : 'eventos'}}</span>
+        </div>
         ${{eventos}}
       </div>`,
-      {{maxWidth: 360}}
+      {{maxWidth: 380}}
     );
+
+    // Agregar a la capa correspondiente (no directamente al map)
+    if (layerGroups[g.capa]) {{
+      marker.addTo(layerGroups[g.capa]);
+      layerCounts[g.capa] += count;
+    }}
   }});
+
+  // Agregar todas las capas al mapa (encendidas por default)
+  Object.entries(layerGroups).forEach(([k, lg]) => {{
+    if (layerCounts[k] > 0) lg.addTo(map);
+  }});
+
+  // Construir el control de capas con conteo y emoji
+  const overlays = {{}};
+  Object.entries(CAPAS_DEF).forEach(([k, def]) => {{
+    if (layerCounts[k] > 0) {{
+      overlays[`${{def.emoji}} ${{def.label}} (${{layerCounts[k]}})`] = layerGroups[k];
+    }}
+  }});
+  L.control.layers(null, overlays, {{
+    position: 'topright',
+    collapsed: false,
+  }}).addTo(map);
 
   // Si hay markers, ajustar bounds para mostrar todos los puntos
   if (mapMarkers.length > 0) {{
