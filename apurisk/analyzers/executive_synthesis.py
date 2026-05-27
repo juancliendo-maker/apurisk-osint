@@ -398,9 +398,99 @@ def _por_que_importa(alerta: dict) -> str:
 # BLOQUE 4: HOTSPOTS CLASIFICADOS
 # =====================================================================
 
+# Mapeo: regla de alerta → tipo de hotspot (para inyección al mapa)
+REGLA_A_TIPO_HOTSPOT = {
+    "BLOQUEO_VIA_NACIONAL":          "corredor_logistico",
+    "BLOQUEO_CORREDOR_MINERO":       "corredor_logistico",
+    "PARO_REGIONAL":                 "corredor_logistico",
+    "BLOQUEO_FLUVIAL":               "corredor_logistico",
+    "TOMA_UNIVERSITARIA":            "conflicto_social",
+    "TOMA_UNIVERSIDAD":              "conflicto_social",
+    "PROTESTAS_VIOLENTAS":           "conflicto_social",
+    "CONFLICTO_COMUNITARIO":         "conflicto_social",
+    "SICARIATO_HOMICIDIO_ORGANIZADO": "violencia",
+    "ASESINATOS_VIOLENCIA_CRITICA":  "violencia",
+    "ATAQUE_VIOLENCIA":              "violencia",
+    "NARCOTRAFICO_OPERATIVO":        "violencia",
+    "MINERIA_ILEGAL":                "mineria_ilegal",
+    "TENSIONES_FRONTERIZAS":         "frontera",
+    "CRISIS_MIGRATORIA":             "frontera",
+}
+
+
+def _alertas_como_hotspots(snapshot: dict) -> list[dict]:
+    """Convierte alertas CRÍTICAS/ALTAS de tipos operacionales a eventos
+    georreferenciados para el mapa. Usa peru_geo.buscar_coords sobre el título
+    para inferir coordenadas reales cuando la alerta no las trae.
+
+    Esto es lo que permite que un paro agrario nacional cubierto por la
+    prensa aparezca como múltiples hotspots en el mapa, sin depender de
+    ACLED ni Defensoría.
+    """
+    out = []
+    try:
+        try:
+            from ..data.peru_geo import buscar_coords
+        except ImportError:
+            from apurisk.data.peru_geo import buscar_coords
+    except Exception:
+        def buscar_coords(_t):
+            return None
+
+    alertas = _safe_list(_safe_get(snapshot, "alertas", []))
+    for a in alertas:
+        if not isinstance(a, dict):
+            continue
+        nivel = str(_safe_get(a, "nivel", ""))
+        if nivel not in ("CRÍTICA", "ALTA"):
+            continue
+        regla = str(_safe_get(a, "regla", ""))
+        tipo = REGLA_A_TIPO_HOTSPOT.get(regla)
+        if not tipo:
+            continue
+
+        titulo = str(_safe_get(a, "titulo", ""))
+        url = str(_safe_get(a, "url", ""))
+        region = str(_safe_get(a, "region", "")) or ""
+        fuente = str(_safe_get(a, "fuente", ""))
+
+        # Geocodificar — primero por región si la trae, después por título
+        coords = None
+        try:
+            if region:
+                coords = buscar_coords(region)
+            if not coords:
+                coords = buscar_coords(titulo)
+        except Exception:
+            coords = None
+
+        lat = coords[0] if coords and len(coords) >= 2 else None
+        lon = coords[1] if coords and len(coords) >= 2 else None
+
+        out.append({
+            "titulo": titulo,
+            "descripcion": titulo,
+            "region": region,
+            "lat": lat,
+            "lon": lon,
+            "fuente": f"{fuente} · alerta {regla}",
+            "url": url,
+            "origen": "alerta",
+            "_tipo_hotspot_hint": tipo,  # hint para clasificación posterior
+        })
+    return out
+
+
 def _clasificar_hotspots(snapshot: dict) -> list[dict]:
-    """Agrupa eventos por tipo de riesgo. Lee de las fuentes reales del snapshot:
-    acled_events (ACLED API), conflictos (Defensoría), crimen_items.
+    """Agrupa eventos por tipo de riesgo. Lee de varias fuentes:
+      1. acled_events (ACLED API si activa)
+      2. conflictos (Defensoría)
+      3. crimen_items
+      4. alertas CRÍTICAS/ALTAS de tipos operacionales (NUEVO — Tarea A)
+
+    La fuente 4 es crítica: garantiza que cualquier paro/bloqueo cubierto
+    por la prensa nacional aparezca en el mapa, aunque ACLED y Defensoría
+    no lo hayan reportado todavía.
     """
     # Unificar todas las fuentes en una sola lista normalizada
     eventos = []
@@ -449,6 +539,11 @@ def _clasificar_hotspots(snapshot: dict) -> list[dict]:
             "origen": "crimen",
         })
 
+    # FUENTE #4 (NUEVO): alertas CRÍTICAS/ALTAS convertidas a hotspots.
+    # Esto cubre el caso donde la prensa reporta un paro/bloqueo masivo
+    # pero ACLED y Defensoría aún no lo han mapeado.
+    eventos.extend(_alertas_como_hotspots(snapshot))
+
     # Si no hay nada de las fuentes anteriores, último fallback: revisar campos legacy
     if not eventos:
         eventos = _safe_list(_safe_get(snapshot, "eventos_geo", []))
@@ -482,46 +577,72 @@ def _clasificar_hotspots(snapshot: dict) -> list[dict]:
         s = str(v).strip()
         return "" if s.lower() in ("none", "null", "n/a") else s
 
+    # Dedup por URL o título normalizado: el mismo evento puede venir de
+    # varias fuentes (alerta + conflicto + nota) y no queremos puntos
+    # duplicados sobre el mapa.
+    seen_keys = set()
+
     out = []
     for tipo_id, cfg in tipos.items():
         matches = []
         for ev in eventos:
+            # Si el evento ya tiene un hint del tipo (viene de _alertas_como_hotspots),
+            # respetarlo. Si no, clasificar por keywords.
+            hint = ev.get("_tipo_hotspot_hint")
+            if hint:
+                if hint != tipo_id:
+                    continue
+            else:
+                titulo_ev = _str_or_empty(_safe_get(ev, "titulo", ""))
+                desc_ev = _str_or_empty(_safe_get(ev, "descripcion", ""))
+                text = (titulo_ev + " " + desc_ev).lower()
+                if not any(kw in text for kw in cfg["keywords"]):
+                    continue
+
             titulo_ev = _str_or_empty(_safe_get(ev, "titulo", ""))
             desc_ev = _str_or_empty(_safe_get(ev, "descripcion", ""))
-            text = (titulo_ev + " " + desc_ev).lower()
-            if any(kw in text for kw in cfg["keywords"]):
-                region_str = _str_or_empty(_safe_get(ev, "region", ""))
-                lugar_str = region_str or _str_or_empty(_safe_get(ev, "lugar", ""))
-                lat = _safe_get(ev, "lat")
-                lon = _safe_get(ev, "lon")
-                # Geocodificar región → coordenadas si no vienen explícitas.
-                # Intentar primero con el lugar, después con el título completo.
-                if (lat is None or lon is None):
+            region_str = _str_or_empty(_safe_get(ev, "region", ""))
+            lugar_str = region_str or _str_or_empty(_safe_get(ev, "lugar", ""))
+            url_ev = _str_or_empty(_safe_get(ev, "url", ""))
+
+            # Dedup key: URL si existe, sino primeros 80 chars del título
+            dedup_key = url_ev.lower() if url_ev else titulo_ev[:80].lower().strip()
+            if dedup_key and dedup_key in seen_keys:
+                continue
+            if dedup_key:
+                seen_keys.add(dedup_key)
+
+            lat = _safe_get(ev, "lat")
+            lon = _safe_get(ev, "lon")
+            # Geocodificar si no trae coords
+            if (lat is None or lon is None):
+                try:
                     try:
-                        try:
-                            from ..data.peru_geo import buscar_coords
-                        except ImportError:
-                            from apurisk.data.peru_geo import buscar_coords
-                        coords = (buscar_coords(lugar_str) if lugar_str else None
-                                   ) or buscar_coords(titulo_ev)
-                        if coords and len(coords) >= 2:
-                            lat, lon = coords[0], coords[1]
-                    except Exception:
-                        pass
-                matches.append({
-                    "titulo": titulo_ev[:120],
-                    "lugar": lugar_str or "(sin región)",
-                    "lat": lat,
-                    "lon": lon,
-                    "fuente": _str_or_empty(_safe_get(ev, "fuente", "")),
-                })
+                        from ..data.peru_geo import buscar_coords
+                    except ImportError:
+                        from apurisk.data.peru_geo import buscar_coords
+                    coords = (buscar_coords(lugar_str) if lugar_str else None
+                               ) or buscar_coords(titulo_ev)
+                    if coords and len(coords) >= 2:
+                        lat, lon = coords[0], coords[1]
+                except Exception:
+                    pass
+            matches.append({
+                "titulo": titulo_ev[:120],
+                "lugar": lugar_str or "(sin región)",
+                "lat": lat,
+                "lon": lon,
+                "fuente": _str_or_empty(_safe_get(ev, "fuente", "")),
+                "origen": _str_or_empty(_safe_get(ev, "origen", "")),
+                "url": url_ev,
+            })
         if matches:
             out.append({
                 "tipo": tipo_id,
                 "label": cfg["label"],
                 "color": cfg["color"],
                 "n_eventos": len(matches),
-                "eventos": matches[:5],  # max 5 por hotspot
+                "eventos": matches[:25],  # max 25 por hotspot (paros masivos)
             })
 
     return out
