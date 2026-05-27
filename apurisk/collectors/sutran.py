@@ -72,11 +72,16 @@ def fetch_sutran_alertas(timeout: int = TIMEOUT) -> list[dict]:
         log.warning("SUTRAN fetch fallo: %s: %s", type(e).__name__, e)
         return []
 
-    # SUTRAN devuelve JSON con BOM (﻿) y MIME text/html. Limpiamos.
+    # SUTRAN responde con Content-Type 'text/html; charset=UTF-8' pero el
+    # body es JSON con BOM. Forzamos decode UTF-8 (sin esto requests
+    # adivina Latin-1 y produce mojibake: â€" en lugar de —, Â· en
+    # lugar de ·, etc.).
     try:
-        text = resp.text.lstrip("﻿").strip()
+        resp.encoding = "utf-8"
+        text = resp.content.decode("utf-8", errors="replace")
+        text = text.lstrip("﻿").lstrip("﻿").strip()
         data = json.loads(text)
-    except (json.JSONDecodeError, ValueError) as e:
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
         log.warning("SUTRAN parse JSON fallo: %s", e)
         return []
 
