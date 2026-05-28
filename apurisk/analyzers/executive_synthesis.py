@@ -96,6 +96,10 @@ IMPLICANCIAS_POR_FACTOR = {
     "crisis_migratoria":      ["fuerza_laboral", "esg"],
     "tensiones_diplomaticas": ["regulatorio", "reputacional"],
     "violencia_electoral":    ["continuidad", "fuerza_laboral", "logistica"],
+    # Crisis institucional autónoma (TC, PJ, JNJ, Contraloría, Defensoría).
+    # Impacto puramente regulatorio y reputacional: parálisis del control
+    # constitucional sobre leyes mineras/tributarias.
+    "crisis_institucional":   ["regulatorio", "reputacional"],
 }
 
 # Factores que aportan al Riesgo Minero específicamente
@@ -415,6 +419,11 @@ REGLA_A_TIPO_HOTSPOT = {
     "MINERIA_ILEGAL":                "mineria_ilegal",
     "TENSIONES_FRONTERIZAS":         "frontera",
     "CRISIS_MIGRATORIA":             "frontera",
+    # Eventos institucionales se localizan típicamente en Lima
+    "CRISIS_INSTITUCIONAL_JUDICIAL": "conflicto_social",
+    "VACANCIA_ACTIVADA":             "conflicto_social",
+    "CENSURA_GABINETE":              "conflicto_social",
+    "RENUNCIA_MINISTRO":             "conflicto_social",
 }
 
 

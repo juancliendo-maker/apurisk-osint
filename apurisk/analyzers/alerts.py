@@ -38,6 +38,86 @@ REGLAS = [
         "accion": "Mapear sucesor probable. Evaluar continuidad de políticas sectoriales.",
     },
     {
+        # Crisis del eje institucional autónomo: Tribunal Constitucional,
+        # Poder Judicial, Junta Nacional de Justicia, Contraloría, Defensoría.
+        # Estos órganos resuelven sobre constitucionalidad de leyes mineras,
+        # amparos empresariales, autonomía sectorial. Su crisis impacta la
+        # certidumbre regulatoria y la previsibilidad de inversiones.
+        "id": "CRISIS_INSTITUCIONAL_JUDICIAL",
+        "nivel": "CRÍTICA",
+        "patrones": [
+            # Tribunal Constitucional
+            "renuncia presidente del tribunal constitucional",
+            "renuncia presidenta del tribunal constitucional",
+            "renuncia del presidente del tc",
+            "renuncia de la presidenta del tc",
+            "presidenta del tc renuncia",
+            "presidente del tc renuncia",
+            "magistrado del tc renuncia",
+            "magistrada del tc renuncia",
+            "magistrados del tribunal constitucional renuncian",
+            "renuncia magistrado del tribunal constitucional",
+            "renuncia magistrada del tribunal constitucional",
+            "destitución magistrado",
+            "destitucion magistrado",
+            "vacancia tribunal constitucional",
+            "crisis en el tribunal constitucional",
+            "crisis del tribunal constitucional",
+            "crisis en el tc",
+            "crisis del tc",
+            # Poder Judicial
+            "renuncia presidente del poder judicial",
+            "renuncia presidenta del poder judicial",
+            "renuncia presidente de la corte suprema",
+            "renuncia presidenta de la corte suprema",
+            "juez supremo renuncia",
+            "jueza suprema renuncia",
+            "destitución de juez supremo",
+            "destitucion de juez supremo",
+            "crisis del poder judicial",
+            "crisis en el poder judicial",
+            # Junta Nacional de Justicia
+            "renuncia presidente de la jnj",
+            "renuncia presidenta de la jnj",
+            "junta nacional de justicia renuncia",
+            "miembro de la jnj renuncia",
+            "crisis en la junta nacional de justicia",
+            "crisis en la jnj",
+            "remoción miembros jnj",
+            "remocion miembros jnj",
+            # Contraloría General
+            "renuncia contralor general",
+            "renuncia contralora general",
+            "destitución contralor general",
+            "destitucion contralor general",
+            "crisis en la contraloría",
+            "crisis en la contraloria",
+            # Defensoría del Pueblo
+            "renuncia defensor del pueblo",
+            "renuncia defensora del pueblo",
+            "crisis en la defensoría del pueblo",
+            "crisis en la defensoria del pueblo",
+            # Fiscalía / Ministerio Público (institucional, no por caso)
+            "renuncia fiscal de la nación",
+            "renuncia fiscal de la nacion",
+            "destitución fiscal de la nación",
+            "destitucion fiscal de la nacion",
+            "crisis en el ministerio público",
+            "crisis en el ministerio publico",
+        ],
+        # Descartar referencias HISTÓRICAS (no eventos actuales)
+        "patrones_negacion": [
+            "anterior renuncia", "anterior crisis", "previa renuncia",
+            "ex magistrado", "ex magistrada", "exmagistrado", "exmagistrada",
+            "ex contralor", "ex defensor", "ex fiscal",
+            "histórica renuncia", "historica renuncia",
+            # Casos cerrados o sentencias antiguas
+            "absuelve magistrado", "absuelven magistrado",
+        ],
+        "categoria": "Riesgo regulatorio",
+        "accion": "Evaluar impacto en certidumbre constitucional. Revisar agenda del TC/PJ próximos 30 días sobre sectores expuestos (minería, tributario, ambiental).",
+    },
+    {
         "id": "BLOQUEO_VIA_NACIONAL",
         "nivel": "CRÍTICA",
         "patrones": [

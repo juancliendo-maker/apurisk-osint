@@ -411,6 +411,79 @@ FACTORES = [
                               "magnicidio en otro país", "magnicidio en otro pais"],
         "descripcion": "Violencia física contra candidatos, atentados, magnicidios, fraude o impugnación masiva de resultados electorales.",
     },
+    {
+        # Crisis del eje institucional autónomo: TC, PJ, JNJ, Contraloría,
+        # Defensoría. Estos órganos resuelven sobre constitucionalidad de
+        # leyes mineras, amparos empresariales, autonomía sectorial,
+        # auditorías de megaproyectos. Su debilitamiento o crisis afecta
+        # la certidumbre regulatoria y la previsibilidad de inversiones.
+        "id": "crisis_institucional",
+        "nombre": "Crisis institucional (TC / PJ / JNJ / Contraloría)",
+        "categoria": "Riesgo regulatorio",
+        "impacto_base": 78,
+        "keywords_fuertes": [
+            # Tribunal Constitucional
+            "renuncia presidente del tribunal constitucional",
+            "renuncia presidenta del tribunal constitucional",
+            "presidenta del tc renuncia",
+            "presidente del tc renuncia",
+            "magistrado del tc renuncia",
+            "magistrada del tc renuncia",
+            "magistrados del tribunal constitucional renuncian",
+            "crisis en el tribunal constitucional",
+            "crisis del tribunal constitucional",
+            "vacancia tribunal constitucional",
+            # Poder Judicial / Corte Suprema
+            "renuncia presidente del poder judicial",
+            "renuncia presidenta del poder judicial",
+            "renuncia presidente de la corte suprema",
+            "juez supremo renuncia",
+            "jueza suprema renuncia",
+            "crisis del poder judicial",
+            "crisis en el poder judicial",
+            # JNJ
+            "renuncia presidente de la jnj",
+            "renuncia presidenta de la jnj",
+            "miembro de la jnj renuncia",
+            "crisis en la jnj",
+            "crisis en la junta nacional de justicia",
+            "remoción miembros jnj", "remocion miembros jnj",
+            # Contraloría
+            "renuncia contralor general", "renuncia contralora general",
+            "destitución contralor general", "destitucion contralor general",
+            "crisis en la contraloría", "crisis en la contraloria",
+            # Defensoría
+            "renuncia defensor del pueblo", "renuncia defensora del pueblo",
+            # Fiscalía institucional
+            "renuncia fiscal de la nación", "renuncia fiscal de la nacion",
+            "destitución fiscal de la nación", "destitucion fiscal de la nacion",
+            "crisis en el ministerio público", "crisis en el ministerio publico",
+        ],
+        "keywords_contexto": [
+            "tribunal constitucional", "tc resuelve", "magistrado tc",
+            "magistrada tc", "poder judicial", "corte suprema",
+            "junta nacional de justicia", "jnj", "contraloría general",
+            "contraloria general", "defensor del pueblo", "defensora del pueblo",
+            "fiscal de la nación", "fiscal de la nacion",
+        ],
+        "keywords_negacion": [
+            "ex presidente del tc", "expresidente del tc",
+            "anterior presidente del tc", "anterior presidenta del tc",
+            "ex magistrado", "ex magistrada", "exmagistrado", "exmagistrada",
+            "ex contralor", "ex defensor", "ex fiscal",
+            "histórica renuncia", "historica renuncia",
+            # Notas retrospectivas de casos cerrados
+            "fallo del tc del año pasado", "fallo del tc del ano pasado",
+            "histórica sentencia del tc", "historica sentencia del tc",
+            # Otros países (común en Perú coberturas mediáticas)
+            "tribunal constitucional de chile",
+            "tribunal constitucional de bolivia",
+            "tribunal constitucional de colombia",
+            "tribunal constitucional de ecuador",
+            "tribunal constitucional español", "tribunal constitucional espanol",
+        ],
+        "descripcion": "Renuncia, destitución o crisis activa en órganos institucionales autónomos (TC, PJ, JNJ, Contraloría, Defensoría, Fiscalía de la Nación) que afecta la certidumbre regulatoria y la independencia del control constitucional sobre leyes y políticas que impactan a sectores extractivos y al marco tributario.",
+    },
 ]
 
 
@@ -529,6 +602,7 @@ PROB_BASE_FACTOR = {
     "crisis_migratoria":         18,
     "tensiones_diplomaticas":    14,
     "violencia_electoral":       22,  # contexto electoral activo
+    "crisis_institucional":      18,  # baja prob estructural pero alto impacto
 }
 
 # Fallback por categoría si no hay entry específica

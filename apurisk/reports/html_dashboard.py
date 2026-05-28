@@ -1401,7 +1401,8 @@ def generar_dashboard_html(
                             "ASESINATOS_VIOLENCIA_CRITICA", "ATAQUE_VIOLENCIA"):
                 capa = "alerta_violencia"
             elif regla in ("VACANCIA_ACTIVADA", "CENSURA_GABINETE",
-                            "RENUNCIA_MINISTRO", "PROCESO_ELECTORAL"):
+                            "RENUNCIA_MINISTRO", "PROCESO_ELECTORAL",
+                            "CRISIS_INSTITUCIONAL_JUDICIAL"):
                 capa = "alerta_politico"
             else:
                 capa = "alerta_prensa"
