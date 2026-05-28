@@ -620,6 +620,124 @@ def _esc_html(s: str) -> str:
     return escape(str(s))
 
 
+@app.get("/api/diagnostico/crisis-tc")
+async def diagnostico_crisis_tc():
+    """Diagnóstico end-to-end del flujo CRISIS_INSTITUCIONAL_JUDICIAL.
+
+    Verifica en orden:
+      1. Que la regla esté cargada en el deploy (no es bug de push)
+      2. Que el factor crisis_institucional exista en la matriz
+      3. Cuántos artículos del snapshot mencionan TC/magistrado/etc
+      4. Cuántas alertas hay en el archive SQLite con esa regla
+      5. Edad del último snapshot
+    """
+    resultado = {}
+
+    # ===== 1. Regla cargada =====
+    try:
+        try:
+            from .analyzers.alerts import REGLAS
+        except ImportError:
+            from apurisk.analyzers.alerts import REGLAS
+        reglas_ids = [r.get("id") for r in REGLAS]
+        regla_crisis = next((r for r in REGLAS if r.get("id") == "CRISIS_INSTITUCIONAL_JUDICIAL"), None)
+        resultado["regla_cargada"] = regla_crisis is not None
+        resultado["total_reglas_cargadas"] = len(REGLAS)
+        if regla_crisis:
+            resultado["regla_n_patrones"] = len(regla_crisis.get("patrones", []))
+            resultado["regla_n_negaciones"] = len(regla_crisis.get("patrones_negacion", []))
+            resultado["regla_sample_patrones"] = regla_crisis.get("patrones", [])[:5]
+    except Exception as e:
+        resultado["regla_cargada_error"] = str(e)
+
+    # ===== 2. Factor P×I cargado =====
+    try:
+        try:
+            from .analyzers.risk_matrix import FACTORES
+        except ImportError:
+            from apurisk.analyzers.risk_matrix import FACTORES
+        factor_ids = [f.get("id") for f in FACTORES]
+        resultado["factor_cargado"] = "crisis_institucional" in factor_ids
+        resultado["total_factores_cargados"] = len(FACTORES)
+    except Exception as e:
+        resultado["factor_cargado_error"] = str(e)
+
+    # ===== 3. Snapshot actual + búsqueda en artículos =====
+    snap_path = _ultimo_snapshot_path()
+    if snap_path:
+        try:
+            with open(snap_path, encoding="utf-8") as f:
+                snap = json.load(f)
+            resultado["snapshot_generado"] = snap.get("generado")
+
+            articulos = snap.get("articulos", []) or []
+            resultado["snapshot_n_articulos"] = len(articulos)
+
+            # Búsqueda de keywords del TC en artículos
+            keywords_test = [
+                "tribunal constitucional", "tc renuncia", "tc presidenta",
+                "magistrado", "magistrada", "poder judicial", "corte suprema",
+                "junta nacional de justicia", "jnj",
+            ]
+            articulos_encontrados = {}
+            for kw in keywords_test:
+                kw_low = kw.lower()
+                matches = []
+                for a in articulos:
+                    title = (a.get("title", "") or "").lower()
+                    summary = (a.get("summary", "") or "").lower()
+                    if kw_low in title or kw_low in summary:
+                        matches.append({
+                            "title": a.get("title", "")[:120],
+                            "source": a.get("source_name", ""),
+                            "published": a.get("published", ""),
+                            "url": a.get("url", "")[:120],
+                        })
+                articulos_encontrados[kw] = {
+                    "count": len(matches),
+                    "samples": matches[:3],
+                }
+            resultado["busqueda_articulos"] = articulos_encontrados
+
+            # Alertas del snapshot
+            alertas = snap.get("alertas", []) or []
+            resultado["snapshot_n_alertas_total"] = len(alertas)
+            alertas_crisis = [a for a in alertas if a.get("regla") == "CRISIS_INSTITUCIONAL_JUDICIAL"]
+            resultado["alertas_crisis_en_snapshot"] = len(alertas_crisis)
+            if alertas_crisis:
+                resultado["sample_alerta_crisis"] = alertas_crisis[0]
+
+            # Probar el matching MANUAL sobre un artículo que mencione TC
+            if articulos_encontrados.get("tribunal constitucional", {}).get("count", 0) > 0:
+                primer_match = articulos_encontrados["tribunal constitucional"]["samples"][0]
+                resultado["test_matching_manual"] = {
+                    "articulo": primer_match,
+                    "explicacion": "Existe artículo con 'tribunal constitucional' pero no genera alerta.",
+                }
+        except Exception as e:
+            resultado["snapshot_error"] = str(e)
+    else:
+        resultado["snapshot_error"] = "No hay snapshot disponible"
+
+    # ===== 4. Buscar alertas en archive SQLite (últimas 7 días) =====
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if db_path.exists():
+        try:
+            archive = ApuriskArchive(str(db_path))
+            with archive._conn() as c:
+                rows = c.execute("""
+                    SELECT COUNT(*) as n, MAX(timestamp) as ultima
+                    FROM alertas
+                    WHERE regla = 'CRISIS_INSTITUCIONAL_JUDICIAL'
+                """).fetchone()
+                resultado["archive_alertas_crisis_total"] = rows["n"]
+                resultado["archive_ultima_alerta_crisis"] = rows["ultima"]
+        except Exception as e:
+            resultado["archive_error"] = str(e)
+
+    return resultado
+
+
 @app.get("/api/executive/debug-snapshot")
 async def executive_debug_snapshot():
     """Diagnóstico: muestra la estructura raíz del snapshot real (no su contenido completo,
