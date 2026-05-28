@@ -422,18 +422,69 @@ FACTORES = [
         "categoria": "Riesgo regulatorio",
         "impacto_base": 78,
         "keywords_fuertes": [
-            # Tribunal Constitucional
-            "renuncia presidente del tribunal constitucional",
-            "renuncia presidenta del tribunal constitucional",
-            "presidenta del tc renuncia",
-            "presidente del tc renuncia",
+            # ── Tribunal Constitucional ──
+            # Forma "X renuncia A LA presidencia DE Y" (la real del español periodístico)
+            "renuncia a la presidencia del tribunal constitucional",
+            "renuncia a la presidencia del tc",
+            "renuncia a presidencia del tribunal constitucional",
+            "renuncia a presidencia del tc",
+            "renunció a la presidencia del tribunal constitucional",
+            "renuncio a la presidencia del tribunal constitucional",
+            "renunció a la presidencia del tc",
+            "renuncio a la presidencia del tc",
+            "renunció a presidencia del tribunal constitucional",
+            "renuncio a presidencia del tribunal constitucional",
+            "renunció a presidencia del tc",
+            "renuncio a presidencia del tc",
+            # Forma DEJA / ABANDONA
+            "deja la presidencia del tribunal constitucional",
+            "deja la presidencia del tc",
+            "dejó la presidencia del tribunal constitucional",
+            "dejo la presidencia del tribunal constitucional",
+            "dejó la presidencia del tc",
+            "dejo la presidencia del tc",
+            "abandona la presidencia del tribunal constitucional",
+            "abandona la presidencia del tc",
+            # Renuncia al cargo
+            "renuncia al cargo de presidente del tribunal constitucional",
+            "renuncia al cargo de presidenta del tribunal constitucional",
+            "renuncia al cargo de presidente del tc",
+            "renuncia al cargo de presidenta del tc",
+            # Renuncia irrevocable
+            "renuncia irrevocable presidente del tc",
+            "renuncia irrevocable presidenta del tc",
+            # Magistrados
             "magistrado del tc renuncia",
             "magistrada del tc renuncia",
+            "magistrado del tribunal constitucional renuncia",
+            "magistrada del tribunal constitucional renuncia",
             "magistrados del tribunal constitucional renuncian",
+            "renuncia magistrado del tribunal constitucional",
+            "renuncia magistrada del tribunal constitucional",
+            "renuncia magistrado del tc",
+            "renuncia magistrada del tc",
+            # Crisis activa
             "crisis en el tribunal constitucional",
             "crisis del tribunal constitucional",
+            "crisis en el tc",
+            "crisis del tc",
             "vacancia tribunal constitucional",
-            # Poder Judicial / Corte Suprema
+            "perder apoyo de magistrados",
+            "perdió apoyo de magistrados",
+            "perdio apoyo de magistrados",
+            "rechazo del pleno del tc",
+            "rechazo del pleno del tribunal constitucional",
+
+            # ── Poder Judicial / Corte Suprema ──
+            "renuncia a la presidencia del poder judicial",
+            "renuncia a la presidencia de la corte suprema",
+            "renunció a la presidencia del poder judicial",
+            "renuncio a la presidencia del poder judicial",
+            "renunció a la presidencia de la corte suprema",
+            "renuncio a la presidencia de la corte suprema",
+            "deja la presidencia del poder judicial",
+            "dejó la presidencia del poder judicial",
+            "dejo la presidencia del poder judicial",
             "renuncia presidente del poder judicial",
             "renuncia presidenta del poder judicial",
             "renuncia presidente de la corte suprema",
@@ -441,20 +492,37 @@ FACTORES = [
             "jueza suprema renuncia",
             "crisis del poder judicial",
             "crisis en el poder judicial",
-            # JNJ
+
+            # ── JNJ ──
+            "renuncia a la presidencia de la jnj",
+            "renunció a la presidencia de la jnj",
+            "renuncio a la presidencia de la jnj",
+            "deja la presidencia de la jnj",
+            "dejó la presidencia de la jnj",
             "renuncia presidente de la jnj",
             "renuncia presidenta de la jnj",
             "miembro de la jnj renuncia",
+            "miembros de la jnj renuncian",
             "crisis en la jnj",
             "crisis en la junta nacional de justicia",
             "remoción miembros jnj", "remocion miembros jnj",
-            # Contraloría
+            "pacto mafioso jnj",
+
+            # ── Contraloría ──
+            "renuncia a la contraloría general",
+            "renuncia a la contraloria general",
             "renuncia contralor general", "renuncia contralora general",
             "destitución contralor general", "destitucion contralor general",
             "crisis en la contraloría", "crisis en la contraloria",
-            # Defensoría
+
+            # ── Defensoría ──
+            "renuncia a la defensoría del pueblo",
+            "renuncia a la defensoria del pueblo",
             "renuncia defensor del pueblo", "renuncia defensora del pueblo",
-            # Fiscalía institucional
+
+            # ── Fiscalía de la Nación ──
+            "renuncia a la fiscalía de la nación",
+            "renuncia a la fiscalia de la nacion",
             "renuncia fiscal de la nación", "renuncia fiscal de la nacion",
             "destitución fiscal de la nación", "destitucion fiscal de la nacion",
             "crisis en el ministerio público", "crisis en el ministerio publico",
