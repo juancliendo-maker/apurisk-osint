@@ -45,17 +45,27 @@ SILENCIO_RATIO_THRESHOLD = 0.3  # < 30% del promedio histórico
 
 # Actores clave para detectar movimientos (silencios o picos)
 ACTORES_INSTITUCIONALES_CLAVE = [
-    "MINEM", "MINAM", "MEF", "MININTER", "MRE",
-    "BCRP", "BCR", "OEFA", "ANA",
-    "Defensoría", "Defensoría del Pueblo",
-    "Congreso", "Comisión Permanente",
+    # Ejecutivo
+    "MINEM", "MINAM", "MEF", "MININTER", "MRE", "MTC", "PRODUCE",
+    "BCRP", "BCR", "OEFA", "ANA", "SUNAT", "SUNARP",
     "PCM", "Presidencia",
-    "MP", "Fiscalía", "Ministerio Público",
-    "PJ", "Poder Judicial", "Tribunal Constitucional",
-    "FFAA", "Comando Conjunto", "PNP",
-    "ONPE", "JNE",
+    # Eje institucional autónomo (NUEVO Nivel 2)
+    "Tribunal Constitucional", "TC",
+    "Poder Judicial", "PJ", "Corte Suprema",
+    "Junta Nacional de Justicia", "JNJ",
+    "Contraloría", "Contraloría General",
+    "Defensoría", "Defensoría del Pueblo",
+    "Ministerio Público", "MP", "Fiscalía", "Fiscalía de la Nación",
+    # Legislativo
+    "Congreso", "Comisión Permanente", "Comisión de Constitución",
+    # Fuerza pública
+    "FFAA", "Comando Conjunto", "PNP", "DIRANDRO", "DIVIAC",
+    # Electoral
+    "ONPE", "JNE", "RENIEC",
+    # Internacional
     "Embajada EEUU", "Embajada Estados Unidos",
-    "Banco Mundial", "BID", "FMI",
+    "Banco Mundial", "BID", "FMI", "CIDH", "OEA",
+    "Departamento de Estado", "DEA", "OFAC",
 ]
 
 
@@ -99,6 +109,51 @@ INDICADORES_OBSERVABLES = {
             ("Atentado contra fuerzas del orden", ["atentado contra", "ataque a comisaría"]),
             ("Comunidades reportan amenazas de grupos armados", ["amenaza grupos armados", "amenazas a comuneros"]),
             ("DEA o SOUTHCOM aumenta presencia", ["dea operativo", "southcom"]),
+        ],
+    },
+    # NUEVO Nivel 2: Crisis del eje institucional autónomo (TC/PJ/JNJ/Contraloría).
+    # Estos eventos pueden parecer separados pero suelen converger en momentos
+    # de crisis. Esta convergencia es señal estratégica clave para C-level.
+    "crisis_eje_institucional": {
+        "nombre": "Crisis del eje institucional autónomo (TC/PJ/JNJ/Contraloría)",
+        "indicadores": [
+            ("Renuncia o destitución en TC", [
+                "renuncia a la presidencia del tc",
+                "renuncia a la presidencia del tribunal constitucional",
+                "dejó la presidencia del tc", "dejo la presidencia del tc",
+                "renuncia magistrado del tc",
+                "renunció a presidencia del tribunal constitucional",
+            ]),
+            ("Crisis o votación interna fracturada en TC", [
+                "rechazo del pleno del tc",
+                "perdió apoyo de magistrados",
+                "perder apoyo de magistrados",
+                "crisis en el tribunal constitucional",
+            ]),
+            ("Renuncia/crisis en Poder Judicial o Corte Suprema", [
+                "renuncia presidente del poder judicial",
+                "renuncia a la presidencia del poder judicial",
+                "dejó la presidencia del poder judicial",
+                "crisis en el poder judicial",
+                "huelga del poder judicial",
+                "paro nacional del poder judicial",
+            ]),
+            ("Crisis en JNJ con cuestionamiento público", [
+                "crisis en la jnj",
+                "pacto mafioso jnj",
+                "renuncia a la junta nacional de justicia",
+                "remoción miembros jnj",
+                "miembros de la jnj renuncian",
+            ]),
+            ("Crisis Contraloría / Defensoría / Fiscalía de la Nación", [
+                "crisis en la contraloría", "crisis en la contraloria",
+                "renuncia contralor general",
+                "renuncia defensor del pueblo",
+                "renuncia defensora del pueblo",
+                "renuncia fiscal de la nación",
+                "renunció fiscal de la nación",
+                "crisis en el ministerio público",
+            ]),
         ],
     },
 }

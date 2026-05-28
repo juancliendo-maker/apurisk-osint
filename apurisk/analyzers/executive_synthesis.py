@@ -96,10 +96,13 @@ IMPLICANCIAS_POR_FACTOR = {
     "crisis_migratoria":      ["fuerza_laboral", "esg"],
     "tensiones_diplomaticas": ["regulatorio", "reputacional"],
     "violencia_electoral":    ["continuidad", "fuerza_laboral", "logistica"],
-    # Crisis institucional autónoma (TC, PJ, JNJ, Contraloría, Defensoría).
-    # Impacto puramente regulatorio y reputacional: parálisis del control
-    # constitucional sobre leyes mineras/tributarias.
-    "crisis_institucional":   ["regulatorio", "reputacional"],
+    # Crisis del eje institucional autónomo — Nivel 2: 3 factores separados.
+    # TC: parálisis del control constitucional sobre leyes mineras/tributarias
+    "crisis_tc":              ["regulatorio", "reputacional"],
+    # PJ/Corte Suprema: amparos empresariales, predictibilidad procesal
+    "crisis_pj_corte_suprema": ["regulatorio"],
+    # JNJ/Contraloría/Defensoría/Fiscalía: auditorías, control horizontal
+    "crisis_organos_control": ["regulatorio", "reputacional"],
 }
 
 # Factores que aportan al Riesgo Minero específicamente
@@ -419,11 +422,16 @@ REGLA_A_TIPO_HOTSPOT = {
     "MINERIA_ILEGAL":                "mineria_ilegal",
     "TENSIONES_FRONTERIZAS":         "frontera",
     "CRISIS_MIGRATORIA":             "frontera",
-    # Eventos institucionales se localizan típicamente en Lima
-    "CRISIS_INSTITUCIONAL_JUDICIAL": "conflicto_social",
-    "VACANCIA_ACTIVADA":             "conflicto_social",
-    "CENSURA_GABINETE":              "conflicto_social",
-    "RENUNCIA_MINISTRO":             "conflicto_social",
+    # Eventos institucionales se localizan típicamente en Lima.
+    # Nivel 2: las 3 reglas separadas.
+    "CRISIS_TRIBUNAL_CONSTITUCIONAL": "conflicto_social",
+    "CRISIS_PODER_JUDICIAL":          "conflicto_social",
+    "CRISIS_ORGANOS_CONTROL":         "conflicto_social",
+    # Backward compat con regla del Nivel 1
+    "CRISIS_INSTITUCIONAL_JUDICIAL":  "conflicto_social",
+    "VACANCIA_ACTIVADA":              "conflicto_social",
+    "CENSURA_GABINETE":               "conflicto_social",
+    "RENUNCIA_MINISTRO":              "conflicto_social",
 }
 
 

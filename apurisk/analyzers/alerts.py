@@ -38,12 +38,8 @@ REGLAS = [
         "accion": "Mapear sucesor probable. Evaluar continuidad de políticas sectoriales.",
     },
     {
-        # Crisis del eje institucional autónomo: Tribunal Constitucional,
-        # Poder Judicial, Junta Nacional de Justicia, Contraloría, Defensoría.
-        # Estos órganos resuelven sobre constitucionalidad de leyes mineras,
-        # amparos empresariales, autonomía sectorial. Su crisis impacta la
-        # certidumbre regulatoria y la previsibilidad de inversiones.
-        "id": "CRISIS_INSTITUCIONAL_JUDICIAL",
+        # Crisis específica del Tribunal Constitucional.
+        "id": "CRISIS_TRIBUNAL_CONSTITUCIONAL",
         "nivel": "CRÍTICA",
         "patrones": [
             # ── Tribunal Constitucional ──
@@ -108,8 +104,28 @@ REGLAS = [
             "perdio apoyo de magistrados",
             "rechazo del pleno del tc",
             "rechazo del pleno del tribunal constitucional",
-
-            # ── Poder Judicial / Corte Suprema ──
+        ],
+        "patrones_negacion": [
+            "ex magistrado", "ex magistrada", "exmagistrado", "exmagistrada",
+            "ex presidente del tc", "expresidente del tc",
+            "anterior renuncia", "anterior crisis", "previa renuncia",
+            "histórica renuncia", "historica renuncia",
+            "absuelve magistrado", "absuelven magistrado",
+            "fallo del tc del año pasado", "fallo del tc del ano pasado",
+            "tribunal constitucional de chile",
+            "tribunal constitucional de bolivia",
+            "tribunal constitucional de colombia",
+            "tribunal constitucional de ecuador",
+            "tribunal constitucional español", "tribunal constitucional espanol",
+        ],
+        "categoria": "Riesgo regulatorio",
+        "accion": "Evaluar impacto en certidumbre constitucional. Revisar agenda del TC próximos 30 días sobre sectores expuestos (minería, tributario, ambiental).",
+    },
+    {
+        # Crisis específica del Poder Judicial / Corte Suprema.
+        "id": "CRISIS_PODER_JUDICIAL",
+        "nivel": "CRÍTICA",
+        "patrones": [
             "renuncia a la presidencia del poder judicial",
             "renuncia a la presidencia de la corte suprema",
             "renunció a la presidencia del poder judicial",
@@ -121,6 +137,7 @@ REGLAS = [
             "dejo la presidencia del poder judicial",
             "deja la presidencia de la corte suprema",
             "dejó la presidencia de la corte suprema",
+            "dejo la presidencia de la corte suprema",
             "renuncia presidente del poder judicial",
             "renuncia presidenta del poder judicial",
             "renuncia presidente de la corte suprema",
@@ -129,10 +146,33 @@ REGLAS = [
             "jueza suprema renuncia",
             "destitución de juez supremo",
             "destitucion de juez supremo",
+            "remoción jueces supremos",
+            "remocion jueces supremos",
             "crisis del poder judicial",
             "crisis en el poder judicial",
-
-            # ── Junta Nacional de Justicia (JNJ) ──
+            "crisis en la corte suprema",
+            "huelga del poder judicial",
+            "paro nacional del poder judicial",
+            "paro nacional del pj",
+        ],
+        "patrones_negacion": [
+            "ex presidente del poder judicial", "expresidente del poder judicial",
+            "ex juez supremo", "exjuez supremo",
+            "histórica renuncia", "historica renuncia",
+            "poder judicial de chile", "poder judicial de bolivia",
+            "corte suprema de chile", "corte suprema de argentina",
+            "corte suprema de eeuu", "corte suprema de estados unidos",
+        ],
+        "categoria": "Riesgo regulatorio",
+        "accion": "Evaluar impacto en amparos empresariales pendientes y procesos por delitos económicos. Revisar resoluciones críticas del próximo mes en Sala Suprema Constitucional.",
+    },
+    {
+        # Crisis en órganos de control horizontal: JNJ, Contraloría,
+        # Defensoría, Fiscalía de la Nación.
+        "id": "CRISIS_ORGANOS_CONTROL",
+        "nivel": "CRÍTICA",
+        "patrones": [
+            # JNJ
             "renuncia a la presidencia de la jnj",
             "renunció a la presidencia de la jnj",
             "renuncio a la presidencia de la jnj",
@@ -140,61 +180,56 @@ REGLAS = [
             "dejó la presidencia de la jnj",
             "renuncia presidente de la jnj",
             "renuncia presidenta de la jnj",
-            "junta nacional de justicia renuncia",
+            "renuncia a la junta nacional de justicia",
             "miembro de la jnj renuncia",
             "miembros de la jnj renuncian",
+            "renuncia miembro de la jnj",
             "crisis en la junta nacional de justicia",
             "crisis en la jnj",
-            "remoción miembros jnj",
-            "remocion miembros jnj",
-            "pleno de la jnj",  # cobertura activa
+            "remoción miembros jnj", "remocion miembros jnj",
+            "remoción de la jnj", "remocion de la jnj",
             "pacto mafioso jnj",
             "pacto mafioso de la jnj",
-
-            # ── Contraloría General ──
+            # Contraloría
             "renuncia a la contraloría general",
             "renuncia a la contraloria general",
-            "renuncia contralor general",
-            "renuncia contralora general",
-            "destitución contralor general",
-            "destitucion contralor general",
-            "destitución contralora general",
-            "destitucion contralora general",
-            "crisis en la contraloría",
-            "crisis en la contraloria",
-
-            # ── Defensoría del Pueblo ──
+            "renuncia contralor general", "renuncia contralora general",
+            "renunció contralor general", "renuncio contralor general",
+            "renunció contralora general", "renuncio contralora general",
+            "deja la contraloría", "dejó la contraloría", "dejo la contraloria",
+            "destitución contralor general", "destitucion contralor general",
+            "destitución contralora general", "destitucion contralora general",
+            "crisis en la contraloría", "crisis en la contraloria",
+            # Defensoría del Pueblo
             "renuncia a la defensoría del pueblo",
             "renuncia a la defensoria del pueblo",
-            "renuncia defensor del pueblo",
-            "renuncia defensora del pueblo",
-            "crisis en la defensoría del pueblo",
-            "crisis en la defensoria del pueblo",
-
-            # ── Fiscalía de la Nación ──
+            "renuncia defensor del pueblo", "renuncia defensora del pueblo",
+            "renunció defensor del pueblo", "renuncio defensor del pueblo",
+            "destitución defensor del pueblo", "destitucion defensor del pueblo",
+            "crisis en la defensoría", "crisis en la defensoria",
+            # Fiscalía de la Nación
             "renuncia a la fiscalía de la nación",
             "renuncia a la fiscalia de la nacion",
-            "renuncia fiscal de la nación",
-            "renuncia fiscal de la nacion",
-            "destitución fiscal de la nación",
-            "destitucion fiscal de la nacion",
-            "deja la fiscalía de la nación",
-            "dejó la fiscalía de la nación",
+            "renuncia fiscal de la nación", "renuncia fiscal de la nacion",
+            "renunció fiscal de la nación", "renuncio fiscal de la nacion",
+            "destitución fiscal de la nación", "destitucion fiscal de la nacion",
+            "deja la fiscalía de la nación", "dejó la fiscalía de la nación",
             "dejo la fiscalia de la nacion",
-            "crisis en el ministerio público",
-            "crisis en el ministerio publico",
+            "crisis en el ministerio público", "crisis en el ministerio publico",
+            "huelga del ministerio público", "huelga del ministerio publico",
         ],
-        # Descartar referencias HISTÓRICAS (no eventos actuales)
         "patrones_negacion": [
-            "anterior renuncia", "anterior crisis", "previa renuncia",
-            "ex magistrado", "ex magistrada", "exmagistrado", "exmagistrada",
-            "ex contralor", "ex defensor", "ex fiscal",
-            "histórica renuncia", "historica renuncia",
-            # Casos cerrados o sentencias antiguas
-            "absuelve magistrado", "absuelven magistrado",
+            "ex contralor", "excontralor",
+            "ex defensor", "exdefensor",
+            "ex fiscal de la nación", "ex fiscal de la nacion",
+            "anterior contralor", "anterior defensor",
+            "fiscalía de chile", "fiscalia de chile",
+            "fiscalía de bolivia", "fiscalia de bolivia",
+            "contraloría de chile", "contraloria de chile",
+            "defensoría de méxico", "defensoria de mexico",
         ],
         "categoria": "Riesgo regulatorio",
-        "accion": "Evaluar impacto en certidumbre constitucional. Revisar agenda del TC/PJ próximos 30 días sobre sectores expuestos (minería, tributario, ambiental).",
+        "accion": "Evaluar impacto en auditorías de megaproyectos públicos, mediación en conflictos sociales, persecución delitos económicos. Revisar agenda próximas 4 semanas.",
     },
     {
         "id": "BLOQUEO_VIA_NACIONAL",

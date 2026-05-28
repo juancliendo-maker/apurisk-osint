@@ -1402,6 +1402,11 @@ def generar_dashboard_html(
                 capa = "alerta_violencia"
             elif regla in ("VACANCIA_ACTIVADA", "CENSURA_GABINETE",
                             "RENUNCIA_MINISTRO", "PROCESO_ELECTORAL",
+                            # Nivel 2: 3 reglas institucionales separadas
+                            "CRISIS_TRIBUNAL_CONSTITUCIONAL",
+                            "CRISIS_PODER_JUDICIAL",
+                            "CRISIS_ORGANOS_CONTROL",
+                            # Backward compat Nivel 1
                             "CRISIS_INSTITUCIONAL_JUDICIAL"):
                 capa = "alerta_politico"
             else:

@@ -412,18 +412,16 @@ FACTORES = [
         "descripcion": "Violencia física contra candidatos, atentados, magnicidios, fraude o impugnación masiva de resultados electorales.",
     },
     {
-        # Crisis del eje institucional autónomo: TC, PJ, JNJ, Contraloría,
-        # Defensoría. Estos órganos resuelven sobre constitucionalidad de
-        # leyes mineras, amparos empresariales, autonomía sectorial,
-        # auditorías de megaproyectos. Su debilitamiento o crisis afecta
-        # la certidumbre regulatoria y la previsibilidad de inversiones.
-        "id": "crisis_institucional",
-        "nombre": "Crisis institucional (TC / PJ / JNJ / Contraloría)",
+        # Crisis específica del Tribunal Constitucional. Es el órgano que
+        # resuelve demandas de inconstitucionalidad sobre leyes mineras,
+        # tributarias, ambientales. Su crisis = parálisis del control
+        # constitucional sobre el marco regulatorio nacional.
+        "id": "crisis_tc",
+        "nombre": "Crisis del Tribunal Constitucional",
         "categoria": "Riesgo regulatorio",
-        "impacto_base": 78,
+        "impacto_base": 82,
         "keywords_fuertes": [
-            # ── Tribunal Constitucional ──
-            # Forma "X renuncia A LA presidencia DE Y" (la real del español periodístico)
+            # Forma "X renuncia A LA presidencia DEL TC" (la real del periodismo peruano)
             "renuncia a la presidencia del tribunal constitucional",
             "renuncia a la presidencia del tc",
             "renuncia a presidencia del tribunal constitucional",
@@ -436,7 +434,7 @@ FACTORES = [
             "renuncio a presidencia del tribunal constitucional",
             "renunció a presidencia del tc",
             "renuncio a presidencia del tc",
-            # Forma DEJA / ABANDONA
+            # DEJA / ABANDONA
             "deja la presidencia del tribunal constitucional",
             "deja la presidencia del tc",
             "dejó la presidencia del tribunal constitucional",
@@ -450,7 +448,6 @@ FACTORES = [
             "renuncia al cargo de presidenta del tribunal constitucional",
             "renuncia al cargo de presidente del tc",
             "renuncia al cargo de presidenta del tc",
-            # Renuncia irrevocable
             "renuncia irrevocable presidente del tc",
             "renuncia irrevocable presidenta del tc",
             # Magistrados
@@ -474,8 +471,36 @@ FACTORES = [
             "perdio apoyo de magistrados",
             "rechazo del pleno del tc",
             "rechazo del pleno del tribunal constitucional",
-
-            # ── Poder Judicial / Corte Suprema ──
+        ],
+        "keywords_contexto": [
+            "tribunal constitucional", "tc resuelve", "magistrado tc",
+            "magistrada tc", "pleno del tc",
+        ],
+        "keywords_negacion": [
+            "ex presidente del tc", "expresidente del tc",
+            "anterior presidente del tc", "anterior presidenta del tc",
+            "ex magistrado", "ex magistrada", "exmagistrado", "exmagistrada",
+            "histórica renuncia", "historica renuncia",
+            "fallo del tc del año pasado", "fallo del tc del ano pasado",
+            "histórica sentencia del tc", "historica sentencia del tc",
+            "tribunal constitucional de chile",
+            "tribunal constitucional de bolivia",
+            "tribunal constitucional de colombia",
+            "tribunal constitucional de ecuador",
+            "tribunal constitucional español", "tribunal constitucional espanol",
+        ],
+        "descripcion": "Renuncia de magistrados, destitución, vacancia o crisis activa en el Tribunal Constitucional. Afecta directamente la certidumbre constitucional sobre leyes que regulan sectores extractivos, tributario, ambiental y derechos de empresarios.",
+    },
+    {
+        # Crisis en Poder Judicial / Corte Suprema. Resuelven amparos
+        # empresariales, apelaciones contra resoluciones administrativas,
+        # procesos por delitos económicos. Su debilitamiento afecta tiempos
+        # de resolución, predictibilidad procesal y derechos de propiedad.
+        "id": "crisis_pj_corte_suprema",
+        "nombre": "Crisis del Poder Judicial / Corte Suprema",
+        "categoria": "Riesgo regulatorio",
+        "impacto_base": 75,
+        "keywords_fuertes": [
             "renuncia a la presidencia del poder judicial",
             "renuncia a la presidencia de la corte suprema",
             "renunció a la presidencia del poder judicial",
@@ -485,15 +510,51 @@ FACTORES = [
             "deja la presidencia del poder judicial",
             "dejó la presidencia del poder judicial",
             "dejo la presidencia del poder judicial",
+            "deja la presidencia de la corte suprema",
+            "dejó la presidencia de la corte suprema",
+            "dejo la presidencia de la corte suprema",
             "renuncia presidente del poder judicial",
             "renuncia presidenta del poder judicial",
             "renuncia presidente de la corte suprema",
+            "renuncia presidenta de la corte suprema",
             "juez supremo renuncia",
             "jueza suprema renuncia",
+            "destitución de juez supremo",
+            "destitucion de juez supremo",
+            "remoción jueces supremos",
+            "remocion jueces supremos",
             "crisis del poder judicial",
             "crisis en el poder judicial",
-
-            # ── JNJ ──
+            "crisis en la corte suprema",
+            "huelga del poder judicial",
+            "paro nacional del poder judicial",
+        ],
+        "keywords_contexto": [
+            "poder judicial", "corte suprema", "juez supremo", "jueza suprema",
+            "sala suprema", "presidente del poder judicial",
+        ],
+        "keywords_negacion": [
+            "ex presidente del poder judicial", "expresidente del poder judicial",
+            "ex juez supremo", "exjuez supremo",
+            "histórica renuncia", "historica renuncia",
+            "poder judicial de chile", "poder judicial de bolivia",
+            "corte suprema de chile", "corte suprema de argentina",
+            "corte suprema de eeuu", "corte suprema de estados unidos",
+        ],
+        "descripcion": "Crisis en la cabeza del Poder Judicial o de la Corte Suprema. Impacta tiempos de amparos empresariales, procesos económicos y predictibilidad procesal en demandas contra el Estado.",
+    },
+    {
+        # Crisis en órganos de control horizontal: JNJ (nombra/remueve jueces
+        # y fiscales), Contraloría (audita megaproyectos), Defensoría
+        # (mediación en conflictos sociales), Fiscalía de la Nación (cabeza
+        # del MP). Su debilitamiento afecta auditorías, independencia
+        # judicial y proceso de inversiones públicas.
+        "id": "crisis_organos_control",
+        "nombre": "Crisis en órganos de control (JNJ / Contraloría / Defensoría / Fiscalía)",
+        "categoria": "Riesgo regulatorio",
+        "impacto_base": 72,
+        "keywords_fuertes": [
+            # JNJ
             "renuncia a la presidencia de la jnj",
             "renunció a la presidencia de la jnj",
             "renuncio a la presidencia de la jnj",
@@ -501,56 +562,63 @@ FACTORES = [
             "dejó la presidencia de la jnj",
             "renuncia presidente de la jnj",
             "renuncia presidenta de la jnj",
+            "renuncia a la junta nacional de justicia",
             "miembro de la jnj renuncia",
             "miembros de la jnj renuncian",
+            "renuncia miembro de la jnj",
             "crisis en la jnj",
             "crisis en la junta nacional de justicia",
             "remoción miembros jnj", "remocion miembros jnj",
+            "remoción de la jnj", "remocion de la jnj",
             "pacto mafioso jnj",
-
-            # ── Contraloría ──
+            "pacto mafioso de la jnj",
+            # Contraloría
             "renuncia a la contraloría general",
             "renuncia a la contraloria general",
             "renuncia contralor general", "renuncia contralora general",
+            "renunció contralor general", "renuncio contralor general",
+            "renunció contralora general", "renuncio contralora general",
+            "deja la contraloría", "dejó la contraloría", "dejo la contraloria",
             "destitución contralor general", "destitucion contralor general",
+            "destitución contralora general", "destitucion contralora general",
             "crisis en la contraloría", "crisis en la contraloria",
-
-            # ── Defensoría ──
+            # Defensoría
             "renuncia a la defensoría del pueblo",
             "renuncia a la defensoria del pueblo",
             "renuncia defensor del pueblo", "renuncia defensora del pueblo",
-
-            # ── Fiscalía de la Nación ──
+            "renunció defensor del pueblo", "renuncio defensor del pueblo",
+            "destitución defensor del pueblo", "destitucion defensor del pueblo",
+            "crisis en la defensoría", "crisis en la defensoria",
+            # Fiscalía de la Nación
             "renuncia a la fiscalía de la nación",
             "renuncia a la fiscalia de la nacion",
             "renuncia fiscal de la nación", "renuncia fiscal de la nacion",
+            "renunció fiscal de la nación", "renuncio fiscal de la nacion",
             "destitución fiscal de la nación", "destitucion fiscal de la nacion",
+            "deja la fiscalía de la nación", "dejó la fiscalía de la nación",
+            "dejo la fiscalia de la nacion",
             "crisis en el ministerio público", "crisis en el ministerio publico",
+            "huelga del ministerio público", "huelga del ministerio publico",
         ],
         "keywords_contexto": [
-            "tribunal constitucional", "tc resuelve", "magistrado tc",
-            "magistrada tc", "poder judicial", "corte suprema",
-            "junta nacional de justicia", "jnj", "contraloría general",
-            "contraloria general", "defensor del pueblo", "defensora del pueblo",
+            "junta nacional de justicia", "jnj",
+            "contraloría general", "contraloria general",
+            "contralor general", "contralora general",
+            "defensoría del pueblo", "defensoria del pueblo",
+            "defensor del pueblo", "defensora del pueblo",
             "fiscal de la nación", "fiscal de la nacion",
+            "ministerio público", "ministerio publico",
         ],
         "keywords_negacion": [
-            "ex presidente del tc", "expresidente del tc",
-            "anterior presidente del tc", "anterior presidenta del tc",
-            "ex magistrado", "ex magistrada", "exmagistrado", "exmagistrada",
-            "ex contralor", "ex defensor", "ex fiscal",
-            "histórica renuncia", "historica renuncia",
-            # Notas retrospectivas de casos cerrados
-            "fallo del tc del año pasado", "fallo del tc del ano pasado",
-            "histórica sentencia del tc", "historica sentencia del tc",
-            # Otros países (común en Perú coberturas mediáticas)
-            "tribunal constitucional de chile",
-            "tribunal constitucional de bolivia",
-            "tribunal constitucional de colombia",
-            "tribunal constitucional de ecuador",
-            "tribunal constitucional español", "tribunal constitucional espanol",
+            "ex contralor", "excontralor", "ex defensor", "exdefensor",
+            "ex fiscal de la nación", "ex fiscal de la nacion",
+            "anterior contralor", "anterior defensor",
+            "fiscalía de chile", "fiscalia de chile",
+            "fiscalía de bolivia", "fiscalia de bolivia",
+            "contraloría de chile", "contraloria de chile",
+            "defensoría de méxico", "defensoria de mexico",
         ],
-        "descripcion": "Renuncia, destitución o crisis activa en órganos institucionales autónomos (TC, PJ, JNJ, Contraloría, Defensoría, Fiscalía de la Nación) que afecta la certidumbre regulatoria y la independencia del control constitucional sobre leyes y políticas que impactan a sectores extractivos y al marco tributario.",
+        "descripcion": "Crisis en órganos de control horizontal (JNJ, Contraloría, Defensoría, Fiscalía de la Nación). Afecta auditorías de megaproyectos públicos, independencia judicial, mediación en conflictos sociales y persecución de delitos económicos.",
     },
 ]
 
@@ -670,7 +738,9 @@ PROB_BASE_FACTOR = {
     "crisis_migratoria":         18,
     "tensiones_diplomaticas":    14,
     "violencia_electoral":       22,  # contexto electoral activo
-    "crisis_institucional":      18,  # baja prob estructural pero alto impacto
+    "crisis_tc":                 20,  # TC con tensiones estructurales actuales
+    "crisis_pj_corte_suprema":   16,  # Poder Judicial relativamente estable
+    "crisis_organos_control":    22,  # JNJ con conflictos recurrentes
 }
 
 # Fallback por categoría si no hay entry específica
