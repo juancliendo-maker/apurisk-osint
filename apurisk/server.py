@@ -620,6 +620,194 @@ def _esc_html(s: str) -> str:
     return escape(str(s))
 
 
+@app.get("/api/diagnostico/historico-edi")
+async def diagnostico_historico_edi():
+    """Auditoría del histórico SQLite para evaluar factibilidad del
+    Estado de Derecho Index (EDI).
+
+    Reporta:
+      - Rango temporal real (primer snapshot, último, días totales)
+      - Densidad: snapshots/día observados vs esperados (cada 30 min = 48/día)
+      - Gaps: días con menos de 4 snapshots (degradados)
+      - Conteo de alertas por categoría/regla últimos 90 días
+      - Conteo de factores P×I por id
+      - VEREDICTO: qué series temporales son factibles
+    """
+    from datetime import datetime, timedelta, timezone
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if not db_path.exists():
+        return {"error": "Archive SQLite no existe"}
+
+    try:
+        archive = ApuriskArchive(str(db_path))
+        stats_base = archive.stats()
+
+        with archive._conn() as c:
+            # 1) Densidad por día
+            rows_dias = c.execute("""
+                SELECT DATE(generado) as fecha, COUNT(*) as n_snapshots,
+                       MIN(generado) as primer, MAX(generado) as ultimo,
+                       AVG(score_global) as score_promedio
+                FROM snapshots
+                GROUP BY DATE(generado)
+                ORDER BY fecha ASC
+            """).fetchall()
+            dias_observados = [
+                {
+                    "fecha": r["fecha"],
+                    "snapshots": r["n_snapshots"],
+                    "score_promedio": round(r["score_promedio"], 1) if r["score_promedio"] else None,
+                }
+                for r in rows_dias
+            ]
+
+            # 2) Conteo alertas por regla últimos 90 días
+            cutoff_90d = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+            rows_reglas = c.execute("""
+                SELECT regla, nivel, COUNT(*) as n
+                FROM alertas
+                WHERE timestamp >= ?
+                GROUP BY regla, nivel
+                ORDER BY n DESC
+                LIMIT 50
+            """, (cutoff_90d,)).fetchall()
+            alertas_por_regla = [
+                {"regla": r["regla"], "nivel": r["nivel"], "n": r["n"]}
+                for r in rows_reglas
+            ]
+
+            # 3) Conteo factores únicos
+            rows_factores = c.execute("""
+                SELECT factor_id, COUNT(*) as n_observaciones,
+                       AVG(score) as score_promedio,
+                       MIN(score) as score_min, MAX(score) as score_max
+                FROM factores
+                GROUP BY factor_id
+                ORDER BY n_observaciones DESC
+            """).fetchall()
+            factores_disponibles = [
+                {
+                    "factor_id": r["factor_id"],
+                    "n_observaciones": r["n_observaciones"],
+                    "score_avg": round(r["score_promedio"], 1) if r["score_promedio"] else None,
+                    "rango": [round(r["score_min"], 1) if r["score_min"] else None,
+                             round(r["score_max"], 1) if r["score_max"] else None],
+                }
+                for r in rows_factores
+            ]
+
+            # 4) Conteo alertas institucionales específicas (críticas para EDI)
+            reglas_edi_independencia = [
+                'CRISIS_TRIBUNAL_CONSTITUCIONAL',
+                'CRISIS_PODER_JUDICIAL',
+                'CRISIS_ORGANOS_CONTROL',
+                'CRISIS_INSTITUCIONAL_JUDICIAL',
+            ]
+            placeholders = ",".join("?" * len(reglas_edi_independencia))
+            rows_inst = c.execute(f"""
+                SELECT COUNT(*) as n FROM alertas
+                WHERE regla IN ({placeholders}) AND timestamp >= ?
+            """, (*reglas_edi_independencia, cutoff_90d)).fetchall()
+            alertas_independencia_judicial_90d = rows_inst[0]["n"]
+
+        # Calcular métricas derivadas
+        total_dias = len(dias_observados)
+        dias_densidad_ok = sum(1 for d in dias_observados if d["snapshots"] >= 12)  # >= 12 snapshots/día = densidad mínima aceptable
+        dias_degradados = sum(1 for d in dias_observados if d["snapshots"] < 4)
+
+        # Primer y último día
+        primer_dia = dias_observados[0]["fecha"] if dias_observados else None
+        ultimo_dia = dias_observados[-1]["fecha"] if dias_observados else None
+
+        # Días continuos sin gaps (>=4 snapshots)
+        dias_continuos_desde_ultimo = 0
+        for d in reversed(dias_observados):
+            if d["snapshots"] >= 4:
+                dias_continuos_desde_ultimo += 1
+            else:
+                break
+
+        # ===== VEREDICTO =====
+        veredicto = {}
+        if dias_continuos_desde_ultimo >= 90:
+            veredicto["serie_90d"] = "✅ Factible"
+            veredicto["serie_30d"] = "✅ Factible"
+            veredicto["nivel_confianza"] = "ALTO"
+            veredicto["recomendacion"] = ("Implementar EDI con ambas series temporales como se propuso. "
+                                          "Suficiente histórico para análisis estructural confiable.")
+        elif dias_continuos_desde_ultimo >= 60:
+            veredicto["serie_90d"] = "⚠️ Parcial (recortar a {} días)".format(dias_continuos_desde_ultimo)
+            veredicto["serie_30d"] = "✅ Factible"
+            veredicto["nivel_confianza"] = "MEDIO"
+            veredicto["recomendacion"] = ("Implementar EDI con serie 30d completa y serie larga "
+                                          "limitada a {} días disponibles. Mostrar 'acumulando histórico' "
+                                          "hasta cruzar 90 días.").format(dias_continuos_desde_ultimo)
+        elif dias_continuos_desde_ultimo >= 30:
+            veredicto["serie_90d"] = "❌ No factible aún (acumular más)"
+            veredicto["serie_30d"] = "✅ Factible"
+            veredicto["nivel_confianza"] = "MEDIO-BAJO"
+            veredicto["recomendacion"] = ("Implementar EDI con solo serie 30d. Postponer serie 90d "
+                                          "hasta tener {} días más de histórico.").format(90 - dias_continuos_desde_ultimo)
+        elif dias_continuos_desde_ultimo >= 14:
+            veredicto["serie_90d"] = "❌ No factible"
+            veredicto["serie_30d"] = "⚠️ Parcial"
+            veredicto["nivel_confianza"] = "BAJO"
+            veredicto["recomendacion"] = ("Solo implementar EDI espontáneo (cálculo instantáneo "
+                                          "sin serie temporal). Acumular {} días más para serie 30d.").format(30 - dias_continuos_desde_ultimo)
+        else:
+            veredicto["serie_90d"] = "❌ No factible"
+            veredicto["serie_30d"] = "❌ No factible"
+            veredicto["nivel_confianza"] = "INSUFICIENTE"
+            veredicto["recomendacion"] = ("Histórico demasiado corto. Implementar EDI espontáneo "
+                                          "solamente, sin promesa de series temporales hasta tener "
+                                          "más datos.")
+
+        # Factores requeridos por el EDI presentes
+        factores_ids_observados = {f["factor_id"] for f in factores_disponibles}
+        factores_edi_criticos = [
+            "crisis_tc", "crisis_pj_corte_suprema", "crisis_organos_control",
+            "vacancia_presidencial", "censura_gabinete", "investigacion_corrupcion",
+            "corrupcion_sistemica", "regulacion_sectorial",
+        ]
+        factores_disponibles_para_edi = [
+            f for f in factores_edi_criticos if f in factores_ids_observados
+        ]
+        factores_faltantes_edi = [
+            f for f in factores_edi_criticos if f not in factores_ids_observados
+        ]
+
+        return {
+            "veredicto": veredicto,
+            "rango_temporal": {
+                "primer_dia": primer_dia,
+                "ultimo_dia": ultimo_dia,
+                "total_dias_observados": total_dias,
+                "dias_continuos_desde_ultimo": dias_continuos_desde_ultimo,
+                "dias_degradados": dias_degradados,
+                "dias_densidad_ok": dias_densidad_ok,
+            },
+            "stats_base": stats_base,
+            "factores_edi": {
+                "disponibles_para_edi": factores_disponibles_para_edi,
+                "faltantes_para_edi": factores_faltantes_edi,
+                "completitud_pct": round(100 * len(factores_disponibles_para_edi) / len(factores_edi_criticos), 1),
+            },
+            "alertas_independencia_judicial_90d": alertas_independencia_judicial_90d,
+            "dias_observados_sample": dias_observados[:15] + (
+                ["..."] if total_dias > 30 else []
+            ) + (dias_observados[-15:] if total_dias > 30 else []),
+            "alertas_por_regla_top": alertas_por_regla[:20],
+            "factores_disponibles_top": factores_disponibles[:20],
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "error_type": type(e).__name__,
+            "error_msg": str(e),
+            "traceback_tail": traceback.format_exc().splitlines()[-10:],
+        }
+
+
 @app.get("/api/diagnostico/crisis-tc")
 async def diagnostico_crisis_tc():
     """Diagnóstico end-to-end del flujo CRISIS_INSTITUCIONAL_JUDICIAL.
