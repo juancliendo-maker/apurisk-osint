@@ -481,6 +481,21 @@ def _alertas_como_hotspots(snapshot: dict) -> list[dict]:
         except Exception:
             coords = None
 
+        # Fallback institucional: reglas TC/PJ/JNJ/Contraloría/etc.
+        # ocurren típicamente en Lima centro pero los titulares no
+        # mencionan la ciudad. Sin este fallback, no se geocodifican.
+        if not coords and regla in {
+            "CRISIS_TRIBUNAL_CONSTITUCIONAL",
+            "CRISIS_PODER_JUDICIAL",
+            "CRISIS_ORGANOS_CONTROL",
+            "CRISIS_INSTITUCIONAL_JUDICIAL",  # backward compat
+            "VACANCIA_ACTIVADA",
+            "CENSURA_GABINETE",
+            "RENUNCIA_MINISTRO",
+            "PROCESO_ELECTORAL",
+        }:
+            coords = (-12.0464, -77.0428)  # Lima centro
+
         lat = coords[0] if coords and len(coords) >= 2 else None
         lon = coords[1] if coords and len(coords) >= 2 else None
 

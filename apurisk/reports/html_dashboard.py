@@ -1386,28 +1386,43 @@ def generar_dashboard_html(
         # Excluir items demo
         if a.get("is_demo", False):
             continue
+        # Reglas institucionales que ocurren típicamente en Lima centro
+        # (TC, PJ, JNJ, Contraloría, Defensoría, Fiscalía de la Nación,
+        # Vacancia, Censura, Renuncia Ministerial, Proceso Electoral).
+        # Los titulares periodísticos no mencionan "Lima" porque se asume,
+        # así que buscar_coords() devuelve None y el marker no se crea.
+        # Fix: fallback a Lima centro para estas reglas específicas.
+        REGLAS_INSTITUCIONALES_LIMA = {
+            "CRISIS_TRIBUNAL_CONSTITUCIONAL",
+            "CRISIS_PODER_JUDICIAL",
+            "CRISIS_ORGANOS_CONTROL",
+            "CRISIS_INSTITUCIONAL_JUDICIAL",  # backward compat Nivel 1
+            "VACANCIA_ACTIVADA",
+            "CENSURA_GABINETE",
+            "RENUNCIA_MINISTRO",
+            "PROCESO_ELECTORAL",
+        }
+        LIMA_CENTRO = (-12.0464, -77.0428)
+
+        regla = a.get("regla", "") or ""
         coords = None
         if a.get("region"):
             coords = buscar_coords(a["region"])
         if not coords:
             coords = buscar_coords((a.get("titulo") or "") + " " + (a.get("resumen") or ""))
+        # Fallback institucional: si la regla es de tipo TC/PJ/JNJ/etc.
+        # y aún no tenemos coords, default a Lima centro.
+        if not coords and regla in REGLAS_INSTITUCIONALES_LIMA:
+            coords = LIMA_CENTRO
         if coords:
             # Clasificar alerta a una capa específica según regla
-            regla = a.get("regla", "") or ""
             if regla in ("BLOQUEO_VIA_NACIONAL", "BLOQUEO_CORREDOR_MINERO",
                           "PARO_REGIONAL", "BLOQUEO_FLUVIAL"):
                 capa = "alerta_bloqueo"
             elif regla in ("SICARIATO_HOMICIDIO_ORGANIZADO",
                             "ASESINATOS_VIOLENCIA_CRITICA", "ATAQUE_VIOLENCIA"):
                 capa = "alerta_violencia"
-            elif regla in ("VACANCIA_ACTIVADA", "CENSURA_GABINETE",
-                            "RENUNCIA_MINISTRO", "PROCESO_ELECTORAL",
-                            # Nivel 2: 3 reglas institucionales separadas
-                            "CRISIS_TRIBUNAL_CONSTITUCIONAL",
-                            "CRISIS_PODER_JUDICIAL",
-                            "CRISIS_ORGANOS_CONTROL",
-                            # Backward compat Nivel 1
-                            "CRISIS_INSTITUCIONAL_JUDICIAL"):
+            elif regla in REGLAS_INSTITUCIONALES_LIMA:
                 capa = "alerta_politico"
             else:
                 capa = "alerta_prensa"
