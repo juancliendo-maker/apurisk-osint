@@ -204,6 +204,142 @@ def _render_status_bar(status: dict) -> str:
 # =====================================================================
 # SECCIÓN 3: EXECUTIVE INSIGHT (hero memo)
 # =====================================================================
+def _render_edi(edi: dict) -> str:
+    """Estado de Derecho Index — bloque destacado tipo gauge + sub-componentes."""
+    if not edi or "edi" not in edi:
+        return ""
+
+    score = edi.get("edi", 0)
+    banda = edi.get("banda_confianza", 0)
+    etiqueta = _esc(str(edi.get("etiqueta", "")))
+    color_tok = edi.get("color", "ambar")
+    color = _color(color_tok)
+    tend = edi.get("tendencia", {}) or {}
+    arrow = _esc(str(tend.get("arrow", "→")))
+    delta = tend.get("delta_7d", 0)
+    delta_str = f"+{delta:.1f}" if delta > 0 else f"{delta:.1f}"
+    delta_color = _color("verde") if delta > 0 else _color("rojo") if delta < 0 else _color("ambar")
+    fecha_corte = _esc(str(edi.get("fecha_corte", ""))[:16].replace("T", " "))
+
+    # Sub-componentes con barras horizontales
+    subs = edi.get("subcomponentes", {}) or {}
+    SUB_LABELS = {
+        "independencia_judicial": ("Independencia Judicial", "🏛"),
+        "capacidad_control":      ("Capacidad de Control",  "🛡"),
+        "estabilidad_normativa":  ("Estabilidad Normativa", "📜"),
+        "convergencia_crisis":    ("Convergencia de Crisis", "⚡"),
+    }
+    subs_html = ""
+    for key, (label, icon) in SUB_LABELS.items():
+        sub = subs.get(key, {})
+        sub_score = sub.get("score", 0)
+        peso = sub.get("peso_pct", 0)
+        baseline = sub.get("baseline", 0)
+        penalizacion = sub.get("penalizacion_total", 0)
+        # Color por score del sub-componente
+        if sub_score >= 70:
+            sub_color = _color("verde")
+        elif sub_score >= 55:
+            sub_color = _color("verde-amarillo")
+        elif sub_score >= 40:
+            sub_color = _color("ambar")
+        elif sub_score >= 25:
+            sub_color = _color("naranja")
+        else:
+            sub_color = _color("rojo")
+        subs_html += f"""
+        <div class="edi-sub">
+          <div class="edi-sub-head">
+            <span class="edi-sub-icon">{icon}</span>
+            <span class="edi-sub-label">{label}</span>
+            <span class="edi-sub-peso">{peso:.0f}%</span>
+            <span class="edi-sub-score" style="color: {sub_color};">{sub_score:.0f}</span>
+          </div>
+          <div class="edi-sub-bar">
+            <div class="edi-sub-fill" style="width:{sub_score}%; background:{sub_color};"></div>
+          </div>
+          <div class="edi-sub-detail">
+            Base {baseline} − {penalizacion:.1f} pts por eventos del ciclo
+          </div>
+        </div>
+        """
+
+    # Top drivers
+    drivers = edi.get("top_drivers", []) or []
+    drivers_html = ""
+    for d in drivers[:5]:
+        tipo = d.get("tipo", "")
+        d_id = _esc(str(d.get("id", "")))
+        d_nombre = _esc(str(d.get("nombre", d.get("id", ""))))
+        impacto = d.get("impacto", 0)
+        subc = _esc(str(d.get("subcomponente", "")))
+        n_alertas = d.get("n_alertas_7d", "")
+        n_factores = d.get("n_factores", "")
+        detalle = ""
+        if tipo == "factor":
+            score_f = d.get("score_factor", "")
+            detalle = f"Factor P×I score {score_f}"
+        elif tipo == "alerta":
+            detalle = f"{n_alertas} alertas en 7 días"
+        elif tipo == "convergencia":
+            detalle = f"{n_factores} factores convergentes"
+        elif tipo == "indicators_warnings":
+            detalle = f"{d.get('n_iw_activos', 0)} I&W activos"
+        drivers_html += f"""
+        <div class="edi-driver">
+          <div class="edi-driver-impact" style="color: {_color('rojo')};">{impacto:+.1f}</div>
+          <div class="edi-driver-body">
+            <div class="edi-driver-name">{d_nombre if tipo == 'factor' else d_id}</div>
+            <div class="edi-driver-meta">{detalle} · {subc.replace('_', ' ')}</div>
+          </div>
+        </div>
+        """
+    if not drivers_html:
+        drivers_html = '<div style="color: var(--txt-3); font-size: 12px; padding: 8px;">Sin drivers negativos significativos esta semana.</div>'
+
+    # Banner de disponibilidad de series
+    disp = edi.get("disponibilidad_series", {}) or {}
+    banner_html = f"""
+    <div class="edi-banner">
+      <span class="edi-banner-item edi-banner-item--ok">📊 Serie 14 días: {_esc(disp.get('serie_14d', ''))}</span>
+      <span class="edi-banner-item edi-banner-item--pending">⏳ Serie 30 días: {_esc(disp.get('serie_30d', ''))}</span>
+      <span class="edi-banner-item edi-banner-item--pending">⏳ Serie 90 días: {_esc(disp.get('serie_90d', ''))}</span>
+    </div>
+    """
+
+    return f"""
+    <section class="edi-block" style="--edi-color: {color};">
+      <div class="section-header">
+        <h2 class="section-title">Estado de Derecho Index · Perú</h2>
+        <div class="section-sub">Índice estratégico institucional · ventana móvil 7 días · fecha de corte {fecha_corte} PET</div>
+      </div>
+      <div class="edi-main-grid">
+        <div class="edi-gauge-card">
+          <div class="edi-gauge-label">EDI</div>
+          <div class="edi-gauge-score">
+            <span class="edi-gauge-num" style="color: {color};">{score:.0f}</span>
+            <span class="edi-gauge-band">± {banda}</span>
+          </div>
+          <div class="edi-gauge-etiqueta" style="background: {color}22; color: {color}; border-color: {color};">{etiqueta}</div>
+          <div class="edi-gauge-tendencia">
+            <span style="font-size: 22px; color: {delta_color};">{arrow}</span>
+            <span style="color: {delta_color}; font-weight: 700;">{delta_str}</span>
+            <span style="color: var(--txt-3); font-size: 11px;">vs 7 días atrás</span>
+          </div>
+        </div>
+        <div class="edi-subs-card">
+          {subs_html}
+        </div>
+        <div class="edi-drivers-card">
+          <div class="edi-drivers-title">Drivers del ciclo (eventos que más impactaron)</div>
+          {drivers_html}
+        </div>
+      </div>
+      {banner_html}
+    </section>
+    """
+
+
 def _render_executive_insight(insight: dict) -> str:
     if not insight or not insight.get("insight"):
         return ""
@@ -1023,6 +1159,126 @@ section { margin-bottom: var(--gap-xl); }
 }
 .status-card--trend { text-align: left; }
 
+/* ===== ESTADO DE DERECHO INDEX (EDI) ===== */
+.edi-block {
+  background: linear-gradient(135deg, var(--bg-1), rgba(168,85,247,0.04));
+  border: 1px solid var(--bg-2);
+  border-left: 4px solid var(--edi-color);
+  border-radius: 8px;
+  padding: var(--gap-md) var(--gap-lg);
+  margin-bottom: var(--gap-xl);
+}
+.edi-main-grid {
+  display: grid;
+  grid-template-columns: 200px 1fr 280px;
+  gap: var(--gap-lg);
+  margin-bottom: var(--gap-md);
+}
+.edi-gauge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--gap-md);
+  background: rgba(15,23,42,0.4);
+  border-radius: 8px;
+  border: 1px solid var(--bg-2);
+}
+.edi-gauge-label {
+  font-size: 11px;
+  color: var(--txt-3);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.edi-gauge-score { display: flex; align-items: baseline; gap: 6px; margin: 6px 0; }
+.edi-gauge-num {
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.edi-gauge-band {
+  font-size: 13px;
+  color: var(--txt-3);
+  font-family: ui-monospace, monospace;
+}
+.edi-gauge-etiqueta {
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  margin: 6px 0;
+}
+.edi-gauge-tendencia { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.edi-subs-card { display: flex; flex-direction: column; gap: 10px; }
+.edi-sub {
+  background: rgba(15,23,42,0.3);
+  padding: 8px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--bg-2);
+}
+.edi-sub-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.edi-sub-icon { font-size: 14px; }
+.edi-sub-label { font-size: 12px; color: var(--txt-1); font-weight: 600; flex: 1; }
+.edi-sub-peso { font-size: 10px; color: var(--txt-3); font-family: monospace; }
+.edi-sub-score { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.edi-sub-bar {
+  height: 5px;
+  background: var(--bg-2);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.edi-sub-fill { height: 100%; transition: width 0.6s ease; }
+.edi-sub-detail { font-size: 10px; color: var(--txt-3); }
+.edi-drivers-card {
+  padding: var(--gap-sm);
+  background: rgba(15,23,42,0.3);
+  border-radius: 6px;
+  border: 1px solid var(--bg-2);
+}
+.edi-drivers-title {
+  font-size: 10px;
+  color: var(--txt-3);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.edi-driver { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--bg-2); }
+.edi-driver:last-child { border-bottom: none; }
+.edi-driver-impact {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  min-width: 45px;
+  text-align: right;
+}
+.edi-driver-body { flex: 1; min-width: 0; }
+.edi-driver-name { font-size: 12px; color: var(--txt-0); font-weight: 600; line-height: 1.3; }
+.edi-driver-meta { font-size: 10px; color: var(--txt-3); }
+.edi-banner {
+  display: flex;
+  gap: var(--gap-sm);
+  padding-top: var(--gap-sm);
+  border-top: 1px dashed var(--bg-2);
+  flex-wrap: wrap;
+}
+.edi-banner-item {
+  font-size: 10.5px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  letter-spacing: 0.3px;
+}
+.edi-banner-item--ok { background: rgba(34,197,94,0.12); color: var(--estable); }
+.edi-banner-item--pending { background: rgba(100,116,139,0.15); color: var(--txt-2); }
+@media (max-width: 1100px) {
+  .edi-main-grid { grid-template-columns: 1fr; }
+}
+
 /* ===== EXECUTIVE INSIGHT ===== */
 .executive-insight {
   display: flex;
@@ -1687,6 +1943,7 @@ def render_executive_home(brief: dict) -> str:
   {_render_header(brief)}
   {errores_html}
   {_render_status_bar(status)}
+  {_render_edi(brief.get("edi", {}))}
   {_render_executive_insight(insight)}
   {_render_threat_panel(amenazas)}
   {_render_critical_alerts(alerts)}

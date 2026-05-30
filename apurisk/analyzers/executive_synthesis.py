@@ -1002,6 +1002,17 @@ def _extraer_insight_estrategico(snapshot: dict, intelligence_brief: dict) -> di
 # ORQUESTADOR PRINCIPAL
 # =====================================================================
 
+def _calcular_edi_para_brief(snapshot: dict, archive,
+                              intelligence_brief: dict) -> dict:
+    """Wrapper para invocar el motor EDI desde el orquestador del brief."""
+    try:
+        from .estado_derecho_index import calcular_edi
+    except ImportError:
+        from apurisk.analyzers.estado_derecho_index import calcular_edi
+    return calcular_edi(snapshot, archive=archive,
+                         intelligence_brief=intelligence_brief)
+
+
 def _ejecutar_bloque(nombre: str, fn, *args, default=None):
     """Ejecuta una función de bloque y captura cualquier error sin propagarlo.
     Devuelve (resultado, mensaje_error). Si éxito: (resultado, None).
@@ -1017,7 +1028,8 @@ def _ejecutar_bloque(nombre: str, fn, *args, default=None):
 
 
 def sintetizar_executive_brief(snapshot_actual: dict,
-                                intelligence_brief: dict) -> dict:
+                                intelligence_brief: dict,
+                                archive=None) -> dict:
     """Orquestador. Devuelve el brief ejecutivo completo en JSON.
 
     Cada bloque se aísla en try/except para tolerancia a fallos:
@@ -1027,9 +1039,10 @@ def sintetizar_executive_brief(snapshot_actual: dict,
     Args:
         snapshot_actual: salida del pipeline OSINT.
         intelligence_brief: salida de generar_intelligence_brief().
+        archive: instancia ApuriskArchive (opcional, requerido para EDI).
 
     Returns:
-        Dict con los 7 bloques del Executive Home + metadata + errores parciales.
+        Dict con los 8 bloques del Executive Home (incluye EDI Nivel 3) + metadata.
     """
     snapshot_actual = _safe_dict(snapshot_actual)
     intelligence_brief = _safe_dict(intelligence_brief)
@@ -1087,13 +1100,21 @@ def sintetizar_executive_brief(snapshot_actual: dict,
         llm_modo = (f"claude-haiku-4-5 ({uso['llamadas']} llamadas, "
                     f"{uso['input']}→{uso['output']} tokens)")
 
+    # ====== EDI (Estado de Derecho Index) — Nivel 3 ======
+    edi_data, err = _ejecutar_bloque("edi", _calcular_edi_para_brief,
+                                       snapshot_actual, archive,
+                                       intelligence_brief, default={})
+    if err:
+        errores_bloque["edi"] = err
+
     brief = {
-        "schema_version": "executive_brief.v1",
+        "schema_version": "executive_brief.v2",
         "generado_en": generado.isoformat(timespec="seconds"),
         "valido_hasta": valido_hasta.isoformat(timespec="seconds"),
         "ttl_horas": 4,
         "llm_modo": llm_modo,
         "status_nacional": status,
+        "edi": edi_data,
         "amenazas_prioritarias": amenazas,
         "critical_alerts": critical,
         "hotspots": hotspots,

@@ -2052,6 +2052,7 @@ def generar_dashboard_html(
   <div class="tab" data-tab="acled">📍 ACLED Eventos <span class="count">{len(acled_events)}</span></div>
   <div class="tab" data-tab="entidades">Entidades</div>
   <div class="tab" data-tab="tendencias">📈 Tendencias 7d <span class="count">{persistentes_count}</span></div>
+  <div class="tab" data-tab="edi">⚖ Estado de Derecho</div>
   <div class="tab" data-tab="riesgo_minero">⛏️ Riesgo Minero</div>
   <div class="tab" data-tab="descargas">📥 Descargas <span class="count">{total_descargas}</span></div>
   <div class="tab" data-tab="analisis">🔍 Análisis de Caso</div>
@@ -2250,6 +2251,46 @@ def generar_dashboard_html(
   <section class="tab-panel" id="tab-tendencias">
     <div class="grid grid-12">
       {tendencias_html}
+    </div>
+  </section>
+
+  <!-- TAB: ESTADO DE DERECHO INDEX (EDI) -->
+  <section class="tab-panel" id="tab-edi">
+    <div class="grid grid-12">
+      <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
+        <h3 style="margin-bottom: 6px;">⚖ Estado de Derecho Index · Perú</h3>
+        <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
+          Índice estratégico institucional 0-100 calculado sobre ventana móvil de 7 días.
+          Mide la salud del eje institucional autónomo (TC, PJ, JNJ, Contraloría) ponderado
+          por convergencias de crisis. La serie temporal muestra la trayectoria del EDI día a día,
+          desagregada por sus 4 sub-componentes.
+        </div>
+      </div>
+      <div id="edi-current-card" class="card span-12" style="padding: 16px;">
+        <div style="color: var(--txt-2); font-size: 12px; padding: 24px; text-align: center;">
+          ⟳ Cargando EDI actual...
+        </div>
+      </div>
+      <div class="card span-12">
+        <h3>📈 Serie temporal · últimos 14 días</h3>
+        <div style="font-size: 11px; color: var(--txt-2); margin-bottom: 8px;">
+          Línea azul = EDI compuesto · Líneas finas = sub-componentes individuales
+        </div>
+        <div style="height: 360px;"><canvas id="ediSerieChart"></canvas></div>
+      </div>
+      <div class="card span-12" id="edi-banner-card">
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px;">
+          <span style="background: rgba(34,197,94,0.12); color: var(--bajo); padding: 6px 14px; border-radius: 12px;">
+            📊 Serie 14 días: disponible
+          </span>
+          <span style="background: rgba(100,116,139,0.15); color: var(--txt-2); padding: 6px 14px; border-radius: 12px;">
+            ⏳ Serie 30 días: cuando el archive cruce 30 días continuos
+          </span>
+          <span style="background: rgba(100,116,139,0.15); color: var(--txt-2); padding: 6px 14px; border-radius: 12px;">
+            ⏳ Serie 90 días: cuando el archive cruce 90 días continuos
+          </span>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -3256,6 +3297,156 @@ python -m http.server 8080 --directory output
         }}
       }});
     }});
+  }}
+
+  // ====== ESTADO DE DERECHO INDEX (EDI) ======
+  // Carga del EDI actual + serie 14d con fetch async.
+  // Se renderiza cuando el usuario clickea la pestaña EDI o al cargar la página.
+  async function cargarEDI() {{
+    try {{
+      const [respEDI, respSerie] = await Promise.all([
+        fetch('/api/edi/snapshot').then(r => r.json()),
+        fetch('/api/edi/serie?dias=14').then(r => r.json()),
+      ]);
+      renderEDICard(respEDI);
+      renderEDISerie(respSerie);
+    }} catch (e) {{
+      console.error('EDI fetch error:', e);
+      const card = document.getElementById('edi-current-card');
+      if (card) card.innerHTML = '<div style="color: var(--critico); padding: 20px;">⚠ Error cargando EDI: ' + e.message + '</div>';
+    }}
+  }}
+
+  function renderEDICard(edi) {{
+    const card = document.getElementById('edi-current-card');
+    if (!card || !edi || !edi.edi) return;
+    const colorMap = {{
+      'verde': '#22c55e', 'verde-amarillo': '#84cc16',
+      'ambar': '#f59e0b', 'naranja': '#f97316', 'rojo': '#ef4444',
+    }};
+    const color = colorMap[edi.color] || '#f59e0b';
+    const tend = edi.tendencia || {{}};
+    const subs = edi.subcomponentes || {{}};
+    const SUB_LABELS = {{
+      'independencia_judicial': ['🏛 Independencia Judicial', '30%'],
+      'capacidad_control':      ['🛡 Capacidad de Control',  '25%'],
+      'estabilidad_normativa':  ['📜 Estabilidad Normativa', '25%'],
+      'convergencia_crisis':    ['⚡ Convergencia de Crisis', '20%'],
+    }};
+    let subsHtml = '';
+    for (const [k, [label, peso]] of Object.entries(SUB_LABELS)) {{
+      const s = subs[k] || {{}};
+      const sc = s.score || 0;
+      let subColor = '#f59e0b';
+      if (sc >= 70) subColor = '#22c55e';
+      else if (sc >= 55) subColor = '#84cc16';
+      else if (sc >= 40) subColor = '#f59e0b';
+      else if (sc >= 25) subColor = '#f97316';
+      else subColor = '#ef4444';
+      subsHtml += `<div style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; font-size:12px;">
+          <span style="color: var(--txt-1); font-weight:600;">${{label}}</span>
+          <span style="color: var(--txt-3); font-size:10px; font-family:monospace;">${{peso}}</span>
+          <span style="color: ${{subColor}}; font-weight:700; font-size:15px;">${{sc.toFixed(0)}}</span>
+        </div>
+        <div style="height: 5px; background: var(--bg-2); border-radius: 3px; overflow:hidden;">
+          <div style="width: ${{sc}}%; height: 100%; background: ${{subColor}};"></div>
+        </div>
+      </div>`;
+    }}
+    let driversHtml = '';
+    for (const d of (edi.top_drivers || []).slice(0, 5)) {{
+      const impacto = d.impacto || 0;
+      const name = d.nombre || d.id || '?';
+      let detalle = '';
+      if (d.tipo === 'factor') detalle = `Factor P×I score ${{d.score_factor || ''}}`;
+      else if (d.tipo === 'alerta') detalle = `${{d.n_alertas_7d || 0}} alertas en 7 días`;
+      else if (d.tipo === 'convergencia') detalle = `${{d.n_factores || 0}} factores convergentes`;
+      else if (d.tipo === 'indicators_warnings') detalle = `${{d.n_iw_activos || 0}} I&W activos`;
+      const subc = (d.subcomponente || '').replace(/_/g, ' ');
+      driversHtml += `<div style="display:flex; gap:10px; padding:5px 0; border-bottom: 1px solid var(--bg-2); font-size:11px;">
+        <div style="font-weight:700; color: var(--critico); min-width: 42px; text-align:right; font-family:monospace;">${{impacto > 0 ? '+' : ''}}${{impacto.toFixed(1)}}</div>
+        <div style="flex:1;"><div style="color: var(--txt-0); font-weight:600;">${{name}}</div><div style="color: var(--txt-3); font-size:10px;">${{detalle}} · ${{subc}}</div></div>
+      </div>`;
+    }}
+    const delta = tend.delta_7d || 0;
+    const arrowColor = delta > 0 ? '#22c55e' : delta < 0 ? '#ef4444' : '#f59e0b';
+    const fechaCorte = (edi.fecha_corte || '').substring(0, 16).replace('T', ' ');
+    card.innerHTML = `
+    <div style="display: grid; grid-template-columns: 200px 1fr 280px; gap: 24px; align-items: start;">
+      <div style="display:flex; flex-direction:column; align-items:center; padding: 20px; background: rgba(15,23,42,0.4); border-radius: 8px; border: 1px solid var(--bg-2);">
+        <div style="font-size:11px; color: var(--txt-3); letter-spacing: 3px; font-weight: 700;">EDI</div>
+        <div style="display:flex; align-items:baseline; gap:6px; margin: 6px 0;">
+          <span style="font-size: 60px; font-weight: 700; color: ${{color}}; line-height:1; font-variant-numeric: tabular-nums;">${{edi.edi.toFixed(0)}}</span>
+          <span style="font-size: 13px; color: var(--txt-3); font-family: monospace;">± ${{edi.banda_confianza}}</span>
+        </div>
+        <div style="padding:4px 12px; border-radius:4px; border: 1px solid ${{color}}; background: ${{color}}22; color: ${{color}}; font-size: 11px; font-weight:700; letter-spacing:1.5px;">${{edi.etiqueta}}</div>
+        <div style="display:flex; gap:6px; align-items:center; margin-top: 8px;">
+          <span style="font-size: 20px; color: ${{arrowColor}};">${{tend.arrow}}</span>
+          <span style="color: ${{arrowColor}}; font-weight: 700;">${{delta > 0 ? '+' : ''}}${{delta.toFixed(1)}}</span>
+          <span style="color: var(--txt-3); font-size: 11px;">vs 7d</span>
+        </div>
+        <div style="margin-top: 8px; font-size: 9px; color: var(--txt-3); text-align: center;">Corte: ${{fechaCorte}} PET</div>
+      </div>
+      <div>${{subsHtml}}</div>
+      <div style="padding: 12px; background: rgba(15,23,42,0.3); border-radius: 6px; border: 1px solid var(--bg-2);">
+        <div style="font-size: 10px; color: var(--txt-3); letter-spacing: 1.5px; font-weight: 700; margin-bottom: 8px;">DRIVERS DEL CICLO</div>
+        ${{driversHtml || '<div style="color: var(--txt-3); font-size: 11px; padding: 6px;">Sin drivers negativos significativos.</div>'}}
+      </div>
+    </div>`;
+  }}
+
+  function renderEDISerie(data) {{
+    if (!data || !data.serie || data.serie.length === 0) {{
+      const ctx = document.getElementById('ediSerieChart');
+      if (ctx) ctx.parentElement.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--txt-3);">Sin serie temporal disponible aún.</div>';
+      return;
+    }}
+    const labels = data.serie.map(d => d.fecha.substring(5));  // MM-DD
+    const ds = (key, label, color, width, dash) => ({{
+      label: label,
+      data: data.serie.map(d => d[key]),
+      borderColor: color,
+      backgroundColor: color + '20',
+      borderWidth: width,
+      borderDash: dash || [],
+      tension: 0.3,
+      pointRadius: width === 3 ? 3 : 2,
+      pointHoverRadius: 5,
+    }});
+    safeInit('ediSerieChart', () => {{
+      new Chart(document.getElementById('ediSerieChart'), {{
+        type: 'line',
+        data: {{
+          labels: labels,
+          datasets: [
+            ds('edi',                       'EDI compuesto',          '#3b82f6', 3),
+            ds('independencia_judicial',    'Indep. Judicial (30%)',  '#a855f7', 1.5, [4,4]),
+            ds('capacidad_control',         'Cap. Control (25%)',     '#22c55e', 1.5, [4,4]),
+            ds('estabilidad_normativa',     'Estab. Normativa (25%)', '#f59e0b', 1.5, [4,4]),
+            ds('convergencia_crisis',       'Convergencia (20%)',     '#ef4444', 1.5, [4,4]),
+          ],
+        }},
+        options: {{
+          responsive: true, maintainAspectRatio: false,
+          plugins: {{
+            legend: {{ position: 'bottom', labels: {{ color: '#cbd5e1', font: {{ size: 11 }}, boxWidth: 14 }} }},
+            tooltip: {{ mode: 'index', intersect: false }},
+          }},
+          scales: {{
+            x: {{ ticks: {{ color: '#94a3b8', font: {{ size: 10 }} }}, grid: {{ color: 'rgba(148,163,184,0.1)' }} }},
+            y: {{ min: 0, max: 100, ticks: {{ color: '#94a3b8', font: {{ size: 10 }} }}, grid: {{ color: 'rgba(148,163,184,0.1)' }} }},
+          }},
+          interaction: {{ mode: 'index', intersect: false }},
+        }},
+      }});
+    }});
+  }}
+  // Cargar EDI cuando el DOM esté listo
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', cargarEDI);
+  }} else {{
+    cargarEDI();
   }}
 
   // Mapa Leaflet (envuelto en safeInit para que un fallo no rompa el resto)

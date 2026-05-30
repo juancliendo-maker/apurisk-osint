@@ -513,7 +513,8 @@ def _generar_executive_brief_fresh() -> dict:
         from .analyzers.executive_synthesis import sintetizar_executive_brief
     except ImportError:
         from apurisk.analyzers.executive_synthesis import sintetizar_executive_brief
-    brief = sintetizar_executive_brief(snap, intel)
+    # archive se inyecta para que el EDI (Nivel 3) tenga acceso a histórico
+    brief = sintetizar_executive_brief(snap, intel, archive=archive)
 
     # 3. Persistir cache
     try:
@@ -618,6 +619,103 @@ async def executive_home():
 def _esc_html(s: str) -> str:
     from html import escape
     return escape(str(s))
+
+
+@app.get("/api/edi/snapshot")
+async def edi_snapshot():
+    """Estado de Derecho Index (EDI) — snapshot actual.
+
+    Devuelve el EDI calculado sobre ventana móvil de últimos 7 días:
+      - Score 0-100 con etiqueta (SÓLIDO/ESTABLE/TENSIONADO/FRÁGIL/CRÍTICO)
+      - Banda de confianza ±
+      - 4 sub-componentes con sus drivers
+      - Tendencia vs 7 días atrás
+      - Top 5 drivers cruzados
+    """
+    snap_path = _ultimo_snapshot_path()
+    if not snap_path:
+        raise HTTPException(status_code=503, detail="Sin snapshot disponible.")
+    with open(snap_path, encoding="utf-8") as f:
+        snap = json.load(f)
+
+    archive = None
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if db_path.exists():
+        try:
+            archive = ApuriskArchive(str(db_path))
+        except Exception:
+            pass
+
+    # Intelligence brief (insumo de convergencias e I&W)
+    intel = None
+    try:
+        try:
+            from .analyzers.intelligence_engine import generar_intelligence_brief
+        except ImportError:
+            from apurisk.analyzers.intelligence_engine import generar_intelligence_brief
+        intel = generar_intelligence_brief(snap, archive=archive, dias_baseline=28)
+    except Exception:
+        intel = None
+
+    try:
+        try:
+            from .analyzers.estado_derecho_index import calcular_edi
+        except ImportError:
+            from apurisk.analyzers.estado_derecho_index import calcular_edi
+        edi = calcular_edi(snap, archive=archive, intelligence_brief=intel)
+        return JSONResponse(
+            content=edi,
+            media_type="application/json; charset=utf-8",
+        )
+    except Exception as e:
+        import traceback
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error_msg": str(e),
+                "traceback": traceback.format_exc().splitlines()[-15:],
+            }
+        )
+
+
+@app.get("/api/edi/serie")
+async def edi_serie(dias: int = Query(14, ge=7, le=180)):
+    """Serie temporal del EDI últimos N días.
+
+    Default 14 días (lo que el histórico actual permite con confianza).
+    Cuando el archive cruce 30 y 90 días, esos rangos se vuelven viables.
+    """
+    archive = None
+    db_path = OUTPUT_DIR / "apurisk_archive.db"
+    if db_path.exists():
+        try:
+            archive = ApuriskArchive(str(db_path))
+        except Exception:
+            pass
+    if not archive:
+        raise HTTPException(status_code=503, detail="Archive no disponible.")
+
+    try:
+        try:
+            from .analyzers.estado_derecho_index import calcular_edi_serie
+        except ImportError:
+            from apurisk.analyzers.estado_derecho_index import calcular_edi_serie
+        serie = calcular_edi_serie(archive, dias=dias)
+        return JSONResponse(
+            content=serie,
+            media_type="application/json; charset=utf-8",
+        )
+    except Exception as e:
+        import traceback
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error_msg": str(e),
+                "traceback": traceback.format_exc().splitlines()[-15:],
+            }
+        )
 
 
 @app.get("/api/diagnostico/historico-edi")
