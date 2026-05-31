@@ -414,6 +414,54 @@ footer { text-align: center; padding: 24px; color: var(--txt-3); font-size: 11px
 .leaflet-control-layers-separator { border-color: var(--bg-3) !important; }
 
 /* Markers DivIcon del dashboard */
+/* Tooltip metodológico EDI (dashboard analyst) */
+.edi-tooltip-dash {
+  display: inline-flex;
+  position: relative;
+  margin-left: 8px;
+  vertical-align: middle;
+  cursor: help;
+  font-weight: normal;
+}
+.edi-tooltip-icon-dash {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  background: var(--bg-2);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+}
+.edi-tooltip-body-dash {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  background: var(--bg-1);
+  color: var(--txt-1);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 100;
+}
+.edi-tooltip-dash:hover .edi-tooltip-body-dash,
+.edi-tooltip-dash:focus-within .edi-tooltip-body-dash {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .apurisk-dash-marker { background: transparent !important; border: none !important; }
 .apurisk-dash-marker > div {
   transition: transform 0.15s ease;
@@ -2258,12 +2306,24 @@ def generar_dashboard_html(
   <section class="tab-panel" id="tab-edi">
     <div class="grid grid-12">
       <div class="card span-12" style="background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); margin-bottom: 14px;">
-        <h3 style="margin-bottom: 6px;">⚖ Estado de Derecho Index · Perú</h3>
+        <h3 style="margin-bottom: 6px;">
+          ⚖ Estado de Derecho Index · Perú
+          <span class="edi-tooltip-dash" tabindex="0">
+            <span class="edi-tooltip-icon-dash">?</span>
+            <span class="edi-tooltip-body-dash">
+              EDI mide la salud del eje institucional autónomo (TC, PJ, JNJ, Contraloría) en
+              escala 0-100. <strong>Mayor número = mejor salud institucional.</strong>
+              Compuesto por 4 sub-componentes ponderados:
+              Independencia Judicial 30%, Capacidad de Control 25%,
+              Estabilidad Normativa 25%, Convergencia de Crisis 20%.
+              Calculado sobre ventana móvil de últimos 7 días.
+            </span>
+          </span>
+        </h3>
         <div style="color: var(--txt-1); font-size: 13px; line-height: 1.6;">
-          Índice estratégico institucional 0-100 calculado sobre ventana móvil de 7 días.
-          Mide la salud del eje institucional autónomo (TC, PJ, JNJ, Contraloría) ponderado
-          por convergencias de crisis. La serie temporal muestra la trayectoria del EDI día a día,
-          desagregada por sus 4 sub-componentes.
+          Escala 0-100 · <strong style="color: var(--bajo);">Mayor número = mejor salud institucional ↑</strong>
+          · Índice estratégico calculado sobre ventana móvil de 7 días.
+          La serie temporal muestra la trayectoria día a día desagregada por sus 4 sub-componentes.
         </div>
       </div>
       <div id="edi-current-card" class="card span-12" style="padding: 16px;">
@@ -3337,20 +3397,27 @@ python -m http.server 8080 --directory output
     for (const [k, [label, peso]] of Object.entries(SUB_LABELS)) {{
       const s = subs[k] || {{}};
       const sc = s.score || 0;
+      const pesoNum = parseFloat(peso);
+      // Contribución real del sub-componente al EDI compuesto
+      const aporta = (sc * pesoNum / 100).toFixed(1);
       let subColor = '#f59e0b';
       if (sc >= 70) subColor = '#22c55e';
       else if (sc >= 55) subColor = '#84cc16';
       else if (sc >= 40) subColor = '#f59e0b';
       else if (sc >= 25) subColor = '#f97316';
       else subColor = '#ef4444';
-      subsHtml += `<div style="margin-bottom:10px;">
+      subsHtml += `<div style="margin-bottom:14px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; font-size:12px;">
-          <span style="color: var(--txt-1); font-weight:600;">${{label}}</span>
-          <span style="color: var(--txt-3); font-size:10px; font-family:monospace;">${{peso}}</span>
-          <span style="color: ${{subColor}}; font-weight:700; font-size:15px;">${{sc.toFixed(0)}}</span>
+          <span style="color: var(--txt-1); font-weight:600; flex:1;">${{label}}</span>
+          <span style="color: var(--txt-3); font-size:10px; font-family:monospace; margin-right:10px;">Peso ${{peso}}</span>
+          <span style="color: var(--txt-3); font-size:10px; margin-right:6px;">Score</span>
+          <span style="color: ${{subColor}}; font-weight:700; font-size:15px; font-variant-numeric:tabular-nums;">${{sc.toFixed(0)}}</span>
         </div>
-        <div style="height: 5px; background: var(--bg-2); border-radius: 3px; overflow:hidden;">
-          <div style="width: ${{sc}}%; height: 100%; background: ${{subColor}};"></div>
+        <div style="height: 5px; background: var(--bg-2); border-radius: 3px; overflow:hidden; margin-bottom:3px;">
+          <div style="width: ${{sc}}%; height: 100%; background: ${{subColor}}; transition: width 0.6s ease;"></div>
+        </div>
+        <div style="font-size:10px; color: var(--txt-3);">
+          Aporta <strong style="color: var(--txt-1);">${{aporta}} pts</strong> al EDI compuesto
         </div>
       </div>`;
     }}

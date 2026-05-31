@@ -247,19 +247,21 @@ def _render_edi(edi: dict) -> str:
             sub_color = _color("naranja")
         else:
             sub_color = _color("rojo")
+        # Contribución real del sub-componente al EDI compuesto
+        aporta = round(sub_score * (peso / 100), 1)
         subs_html += f"""
         <div class="edi-sub">
           <div class="edi-sub-head">
             <span class="edi-sub-icon">{icon}</span>
             <span class="edi-sub-label">{label}</span>
-            <span class="edi-sub-peso">{peso:.0f}%</span>
-            <span class="edi-sub-score" style="color: {sub_color};">{sub_score:.0f}</span>
+            <span class="edi-sub-peso">Peso {peso:.0f}%</span>
+            <span class="edi-sub-score" style="color: {sub_color};">Score <strong>{sub_score:.0f}</strong></span>
           </div>
           <div class="edi-sub-bar">
             <div class="edi-sub-fill" style="width:{sub_score}%; background:{sub_color};"></div>
           </div>
           <div class="edi-sub-detail">
-            Base {baseline} − {penalizacion:.1f} pts por eventos del ciclo
+            Aporta <strong style="color:var(--txt-1);">{aporta:.1f} pts</strong> al EDI · Base {baseline} − {penalizacion:.1f} pts por eventos del ciclo
           </div>
         </div>
         """
@@ -307,11 +309,28 @@ def _render_edi(edi: dict) -> str:
     </div>
     """
 
+    # Tooltip metodológico
+    tooltip_text = (
+        "EDI mide la salud del eje institucional autónomo (TC, PJ, JNJ, Contraloría) "
+        "en escala 0-100. Mayor número = mejor salud institucional. "
+        "Compuesto por 4 sub-componentes ponderados: Independencia Judicial 30%, "
+        "Capacidad de Control 25%, Estabilidad Normativa 25%, Convergencia de Crisis 20%. "
+        "Calculado sobre ventana móvil de últimos 7 días."
+    )
     return f"""
     <section class="edi-block" style="--edi-color: {color};">
       <div class="section-header">
-        <h2 class="section-title">Estado de Derecho Index · Perú</h2>
-        <div class="section-sub">Índice estratégico institucional · ventana móvil 7 días · fecha de corte {fecha_corte} PET</div>
+        <h2 class="section-title">
+          Estado de Derecho Index · Perú
+          <span class="edi-tooltip" tabindex="0" title="{_esc(tooltip_text)}">
+            <span class="edi-tooltip-icon">?</span>
+            <span class="edi-tooltip-body">{_esc(tooltip_text)}</span>
+          </span>
+        </h2>
+        <div class="section-sub">
+          Escala 0-100 · <strong style="color: var(--estable);">Mayor número = mejor salud institucional ↑</strong>
+          · Ventana móvil 7 días · Fecha de corte {fecha_corte} PET
+        </div>
       </div>
       <div class="edi-main-grid">
         <div class="edi-gauge-card">
@@ -1234,6 +1253,57 @@ section { margin-bottom: var(--gap-xl); }
 }
 .edi-sub-fill { height: 100%; transition: width 0.6s ease; }
 .edi-sub-detail { font-size: 10px; color: var(--txt-3); }
+
+/* Tooltip metodológico del EDI */
+.edi-tooltip {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  margin-left: 8px;
+  vertical-align: middle;
+  cursor: help;
+}
+.edi-tooltip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  background: var(--bg-2);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+}
+.edi-tooltip-body {
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-1);
+  color: var(--txt-1);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.55;
+  width: 360px;
+  max-width: 90vw;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 50;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.edi-tooltip:hover .edi-tooltip-body,
+.edi-tooltip:focus-within .edi-tooltip-body {
+  opacity: 1;
+  pointer-events: auto;
+}
 .edi-drivers-card {
   padding: var(--gap-sm);
   background: rgba(15,23,42,0.3);
