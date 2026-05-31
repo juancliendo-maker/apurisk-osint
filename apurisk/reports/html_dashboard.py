@@ -2059,9 +2059,26 @@ def generar_dashboard_html(
 
 <div class="kpi-row">
   <div class="kpi {kpi_class}">
-    <div class="lbl">Score Riesgo Global</div>
+    <div class="lbl">
+      Score Riesgo Global
+      <span class="edi-tooltip-dash" tabindex="0">
+        <span class="edi-tooltip-icon-dash">?</span>
+        <span class="edi-tooltip-body-dash">
+          Mide RIESGO operacional consolidado del país en escala 0-100.
+          <strong>Mayor número = mayor riesgo (peor).</strong>
+          Agrega 19 factores P×I (vacancia, paros, bloqueos, sicariato, etc.).
+          <br><br>
+          ⚠ <strong>Atención:</strong> NO confundir con el EDI (pestaña ⚖ Estado de Derecho)
+          que mide salud institucional con lógica inversa. En el Riesgo querés números
+          bajos ↓ ; en el EDI querés números altos ↑.
+        </span>
+      </span>
+    </div>
     <div class="val nivel-{kpi_global_nivel}">{kpi_global}</div>
-    <div class="sub">Nivel: <strong class="nivel-{kpi_global_nivel}">{kpi_global_nivel}</strong></div>
+    <div class="sub">
+      Nivel: <strong class="nivel-{kpi_global_nivel}">{kpi_global_nivel}</strong>
+      · <span style="color: var(--alto); font-size: 10px;">↑ peor cuando sube</span>
+    </div>
   </div>
   <div class="kpi critico">
     <div class="lbl">Alertas Críticas</div>
@@ -2337,6 +2354,47 @@ def generar_dashboard_html(
           Línea azul = EDI compuesto · Líneas finas = sub-componentes individuales
         </div>
         <div style="height: 360px;"><canvas id="ediSerieChart"></canvas></div>
+      </div>
+      <div class="card span-12">
+        <h3 style="margin-bottom: 12px;">📚 Cómo leer los dos índices de la plataforma</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px;">
+          <div style="border-left: 4px solid var(--alto); padding-left: 14px;">
+            <div style="font-size: 11px; color: var(--alto); letter-spacing: 2px; font-weight: 700; margin-bottom: 6px;">
+              SCORE RIESGO GLOBAL
+            </div>
+            <div style="font-size: 13px; color: var(--txt-1); line-height: 1.6; margin-bottom: 8px;">
+              Agrega 19 factores P×I (vacancia, paros, bloqueos, sicariato,
+              minería ilegal, etc.) en una escala consolidada.
+            </div>
+            <div style="font-size: 14px; color: var(--alto); font-weight: 700;">
+              ↑ Mayor número = mayor riesgo (peor)
+            </div>
+            <div style="font-size: 11px; color: var(--txt-2); margin-top: 4px;">
+              Objetivo: mantenerlo bajo. Banderazo rojo cuando supera 70.
+            </div>
+          </div>
+          <div style="border-left: 4px solid var(--bajo); padding-left: 14px;">
+            <div style="font-size: 11px; color: var(--bajo); letter-spacing: 2px; font-weight: 700; margin-bottom: 6px;">
+              ESTADO DE DERECHO INDEX (EDI)
+            </div>
+            <div style="font-size: 13px; color: var(--txt-1); line-height: 1.6; margin-bottom: 8px;">
+              Mide la salud del eje institucional autónomo (TC, PJ, JNJ,
+              Contraloría) en escala 0-100.
+            </div>
+            <div style="font-size: 14px; color: var(--bajo); font-weight: 700;">
+              ↑ Mayor número = mejor salud institucional
+            </div>
+            <div style="font-size: 11px; color: var(--txt-2); margin-top: 4px;">
+              Objetivo: mantenerlo alto. Alerta cuando cae bajo 50.
+            </div>
+          </div>
+        </div>
+        <div style="font-size: 11px; color: var(--txt-2); margin-top: 14px; padding: 8px 12px; background: var(--bg-2); border-radius: 4px; line-height: 1.55;">
+          💡 <strong>Truco mnemotécnico:</strong> el Riesgo es como la fiebre —
+          subir es malo. El EDI es como el oxígeno en sangre — subir es bueno.
+          Hoy pueden coincidir aritméticamente (58 y 59) sin significar lo mismo:
+          uno se acerca a "preocupante", el otro se aleja de "óptimo".
+        </div>
       </div>
       <div class="card span-12" id="edi-banner-card">
         <div style="display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px;">

@@ -187,8 +187,24 @@ def _render_status_bar(status: dict) -> str:
     return f"""
     <section class="status-bar">
       <div class="section-header">
-        <h2 class="section-title">Executive Status — Perú</h2>
-        <div class="section-sub">Riesgo operacional consolidado · ventana 7 días</div>
+        <h2 class="section-title">
+          Executive Status — Perú
+          <span class="edi-tooltip" tabindex="0">
+            <span class="edi-tooltip-icon">?</span>
+            <span class="edi-tooltip-body">
+              Estas 5 métricas miden RIESGO operacional en escala 0-100.
+              <strong>Mayor número = mayor riesgo (peor).</strong>
+              Los colores indican el nivel: verde=ESTABLE, ámbar=MODERADO,
+              naranja=ELEVADO, rojo=CRÍTICO. Para distinguirlo del EDI
+              (que mide salud institucional con lógica inversa), recuerda:
+              en Riesgo querés números bajos ↓ ; en EDI querés números altos ↑.
+            </span>
+          </span>
+        </h2>
+        <div class="section-sub">
+          Escala 0-100 · <strong style="color: var(--elevado);">Mayor número = mayor riesgo ↑</strong>
+          · Riesgo operacional consolidado · Ventana 7 días
+        </div>
       </div>
       <div class="status-grid">
         {_card(status.get("operacional_nacional", {}), destacado=True)}
