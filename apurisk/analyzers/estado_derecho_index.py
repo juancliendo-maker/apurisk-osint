@@ -64,24 +64,29 @@ MAPEO_FACTORES_SUBCOMPONENTE = {
     "renuncia_ministro":         [("estabilidad_normativa", 0.3)],
 }
 
-# Reglas de alertas críticas que penalizan adicionalmente cada sub-componente
-# (cada alerta CRÍTICA de esa regla resta los puntos indicados, con cap)
+# Reglas de alertas críticas que penalizan cada sub-componente.
+# Formato: (regla, k_coef, cap_max).
+# La penalización es: min(cap, k_coef * log(1 + n_alertas_unicas)).
+# k_coef calibrado para que con ~30 alertas únicas llegue a ~75% del cap.
+# (Recordatorio: las alertas vienen DEDUPLICADAS desde _obtener_alertas_7d)
 REGLAS_PENALIZACION = {
     "independencia_judicial": [
-        ("CRISIS_TRIBUNAL_CONSTITUCIONAL", 3.0, 18),  # 3 pts c/u, máx -18
-        ("CRISIS_PODER_JUDICIAL",          2.5, 12),
+        # k=3.5 con cap=18 da: 5→-6.3, 30→-12, 100→-16, 200→cap.
+        # Eso preserva discriminación entre crisis moderada vs catastrófica.
+        ("CRISIS_TRIBUNAL_CONSTITUCIONAL", 3.5, 18),
+        ("CRISIS_PODER_JUDICIAL",          2.8, 12),
         ("CRISIS_INSTITUCIONAL_JUDICIAL",  2.0, 10),  # backward compat
     ],
     "capacidad_control": [
-        ("CRISIS_ORGANOS_CONTROL",         3.0, 18),
-        ("CORRUPCION_SISTEMICA",           1.0, 10),
-        ("INVESTIGACION_FORMAL",           0.5,  8),
+        ("CRISIS_ORGANOS_CONTROL",         3.5, 18),
+        ("CORRUPCION_SISTEMICA",           2.2, 10),
+        ("INVESTIGACION_FORMAL",           1.5,  8),
     ],
     "estabilidad_normativa": [
-        ("VACANCIA_ACTIVADA",              2.5, 15),
-        ("CENSURA_GABINETE",               2.0, 10),
-        ("RENUNCIA_MINISTRO",              1.5,  9),
-        ("REFORMA_INSTITUCIONAL",          0.5,  6),
+        ("VACANCIA_ACTIVADA",              2.8, 14),
+        ("CENSURA_GABINETE",               2.3,  9),
+        ("RENUNCIA_MINISTRO",              2.0,  8),
+        ("REFORMA_INSTITUCIONAL",          1.5,  6),
     ],
     "convergencia_crisis": [],  # convergencias se computan aparte
 }
@@ -129,15 +134,22 @@ def _score_subcomponente(nombre: str, snapshot: dict, alertas_7d: list) -> dict:
                     "impacto": -round(penalizacion, 1),
                 })
 
-    # 2) Penalización por alertas críticas/altas en últimos 7 días
+    # 2) Penalización por alertas críticas/altas en últimos 7 días.
+    # Curva LOGARÍTMICA: en lugar de "cap rígido lineal", usamos
+    # min(cap, k * log(1 + n)). Esto da gradiente continuo:
+    #   5 alertas únicas  → ~6 pts (señal moderada)
+    #   30 alertas únicas → ~14 pts (crisis activa)
+    #   100 alertas únicas → ~18 pts (saturación cerca del cap)
+    # Y distingue magnitudes: 30 vs 100 alertas únicas NO es lo mismo.
     penalizaciones_reglas = REGLAS_PENALIZACION.get(nombre, [])
-    for (regla, pen_unitaria, cap) in penalizaciones_reglas:
+    for (regla, k_coef, cap) in penalizaciones_reglas:
         n_alertas = sum(
             1 for a in alertas_7d
             if a.get("regla") == regla and a.get("nivel") in ("CRÍTICA", "ALTA")
         )
         if n_alertas > 0:
-            penalizacion = min(cap, n_alertas * pen_unitaria)
+            # k_coef es el coeficiente del log (no más "puntos por alerta")
+            penalizacion = min(cap, k_coef * math.log(1 + n_alertas))
             score -= penalizacion
             drivers.append({
                 "tipo": "alerta",
@@ -218,7 +230,15 @@ def _score_convergencia(snapshot: dict, intelligence_brief: dict) -> dict:
 # ==========================================================================
 
 def _obtener_alertas_7d(archive, ahora) -> list[dict]:
-    """Devuelve alertas de los últimos 7 días desde el archive."""
+    """Devuelve alertas ÚNICAS de los últimos 7 días desde el archive.
+
+    DEDUP CRÍTICO: la misma nota puede aparecer cientos de veces (48
+    snapshots/día × 14 fuentes × 7 días = miles de filas) pero es un
+    solo evento. Agrupamos por (regla, primeros 80 chars de título
+    normalizado) y devolvemos una alerta representativa por grupo.
+
+    Esto evita inflación masiva del conteo que distorsionaba el EDI.
+    """
     if not archive:
         return []
     cutoff = (ahora - timedelta(days=7)).isoformat()
@@ -229,7 +249,17 @@ def _obtener_alertas_7d(archive, ahora) -> list[dict]:
                 FROM alertas
                 WHERE timestamp >= ?
             """, (cutoff,)).fetchall()
-        return [dict(r) for r in rows]
+
+        # Dedup por (regla, titulo normalizado primeros 80 chars)
+        vistos = {}
+        for r in rows:
+            regla = r["regla"] or ""
+            titulo_norm = (r["titulo"] or "").lower().strip()[:80]
+            key = f"{regla}::{titulo_norm}"
+            if key in vistos:
+                continue
+            vistos[key] = dict(r)
+        return list(vistos.values())
     except Exception:
         return []
 
@@ -262,25 +292,75 @@ def _calcular_banda_confianza(archive, ahora) -> float:
 
 
 def _calcular_tendencia(archive, ahora, score_actual: float) -> dict:
-    """Compara EDI actual vs aproximación de hace 7 días."""
+    """Compara EDI actual vs EDI REAL de hace 7 días.
+
+    En lugar de aproximar invirtiendo el score nacional (que era una
+    corredera burda), reconstruye el snapshot de hace 7 días desde el
+    archive y calcula el EDI con la misma fórmula. Honesto y trazable.
+    """
     if not archive:
-        return {"delta_7d": 0, "arrow": "→", "etiqueta": "ESTABLE"}
+        return {"delta_7d": 0, "arrow": "→", "etiqueta": "SIN HISTÓRICO"}
     try:
-        cutoff_7d_atras = (ahora - timedelta(days=7)).isoformat()
-        cutoff_8d_atras = (ahora - timedelta(days=8)).isoformat()
+        # Snapshot representativo de hace 7 días: el último snapshot del
+        # día calendario que está exactamente 7 días atrás.
+        cutoff_7d_atras = (ahora - timedelta(days=7))
+        cutoff_8d_atras = (ahora - timedelta(days=8))
         with archive._conn() as c:
-            rows = c.execute("""
-                SELECT AVG(score_global) as avg_score, COUNT(*) as n
+            row = c.execute("""
+                SELECT id, generado
                 FROM snapshots
-                WHERE generado >= ? AND generado < ? AND score_global IS NOT NULL
-            """, (cutoff_8d_atras, cutoff_7d_atras)).fetchall()
-        if not rows or rows[0]["n"] == 0:
-            return {"delta_7d": 0, "arrow": "→", "etiqueta": "SIN HISTÓRICO"}
-        # Aproximación: el EDI hace 7 días era inversamente proporcional al score
-        score_promedio_pasado = rows[0]["avg_score"]
-        # Score alto país = EDI bajo; aproximamos invirtiéndolo
-        edi_aproximado_7d = round(100 - score_promedio_pasado * 0.7, 1)
-        delta = score_actual - edi_aproximado_7d
+                WHERE generado >= ? AND generado < ?
+                ORDER BY generado DESC
+                LIMIT 1
+            """, (cutoff_8d_atras.isoformat(), cutoff_7d_atras.isoformat())).fetchone()
+            if not row:
+                return {"delta_7d": 0, "arrow": "→", "etiqueta": "SIN HISTÓRICO"}
+
+            snap_id_pasado = row["id"]
+            generado_pasado = row["generado"]
+
+            # Reconstruir matriz_riesgo de ese snapshot
+            matriz_rows = c.execute("""
+                SELECT factor_id, nombre, score
+                FROM factores WHERE snapshot_id = ?
+            """, (snap_id_pasado,)).fetchall()
+            matriz_pasada = [
+                {"id": m["factor_id"], "nombre": m["nombre"], "score": m["score"]}
+                for m in matriz_rows
+            ]
+
+            # Alertas únicas en ventana 7 días que TERMINA hace 7 días
+            # (es decir, de hace 14 días a hace 7 días)
+            ventana_inicio = (cutoff_7d_atras - timedelta(days=7)).isoformat()
+            ventana_fin = cutoff_7d_atras.isoformat()
+            alertas_rows = c.execute("""
+                SELECT regla, nivel, titulo
+                FROM alertas
+                WHERE timestamp >= ? AND timestamp < ?
+            """, (ventana_inicio, ventana_fin)).fetchall()
+            # Dedup
+            vistos = {}
+            for r in alertas_rows:
+                key = f"{r['regla'] or ''}::{(r['titulo'] or '').lower().strip()[:80]}"
+                if key not in vistos:
+                    vistos[key] = dict(r)
+            alertas_pasadas = list(vistos.values())
+
+        # Recalcular sub-componentes con los datos de hace 7 días
+        snap_pasado = {"matriz_riesgo": matriz_pasada}
+        sub_ij = _score_subcomponente("independencia_judicial", snap_pasado, alertas_pasadas)
+        sub_cc = _score_subcomponente("capacidad_control", snap_pasado, alertas_pasadas)
+        sub_en = _score_subcomponente("estabilidad_normativa", snap_pasado, alertas_pasadas)
+        sub_cv = _score_convergencia(snap_pasado, {"convergencias": [], "indicators_warnings": {}})
+        edi_pasado = (
+            PESOS_SUBCOMPONENTES["independencia_judicial"] * sub_ij["score"] +
+            PESOS_SUBCOMPONENTES["capacidad_control"] * sub_cc["score"] +
+            PESOS_SUBCOMPONENTES["estabilidad_normativa"] * sub_en["score"] +
+            PESOS_SUBCOMPONENTES["convergencia_crisis"] * sub_cv["score"]
+        )
+        edi_pasado = round(edi_pasado, 1)
+
+        delta = round(score_actual - edi_pasado, 1)
         if delta >= 4:
             arrow, etiqueta = "↑", "MEJORA"
         elif delta <= -4:
@@ -288,13 +368,15 @@ def _calcular_tendencia(archive, ahora, score_actual: float) -> dict:
         else:
             arrow, etiqueta = "→", "ESTABLE"
         return {
-            "delta_7d": round(delta, 1),
+            "delta_7d": delta,
             "arrow": arrow,
             "etiqueta": etiqueta,
-            "edi_aproximado_7d_atras": edi_aproximado_7d,
+            "edi_real_7d_atras": edi_pasado,
+            "snapshot_pasado_generado": generado_pasado,
         }
-    except Exception:
-        return {"delta_7d": 0, "arrow": "→", "etiqueta": "ESTABLE"}
+    except Exception as e:
+        return {"delta_7d": 0, "arrow": "→", "etiqueta": "ESTABLE",
+                "error": str(e)[:120]}
 
 
 def _etiqueta_edi(score: float) -> tuple[str, str]:
