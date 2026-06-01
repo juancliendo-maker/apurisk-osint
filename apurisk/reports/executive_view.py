@@ -634,6 +634,22 @@ CORREDORES = [
             [-16.40, -71.54], [-17.00, -72.10],
         ],
     },
+    {
+        "id": "carretera_marginal_selva",
+        "nombre": "Carretera Marginal de la Selva (PE-5N)",
+        "descripcion": ("Huánuco → Tingo María → Tocache → Tarapoto → "
+                         "Moyobamba → Rioja → Bagua. Eje selva norte central."),
+        "color": "#10b981",
+        "coords": [
+            [-9.930, -76.240],   # Huánuco
+            [-9.296, -75.997],   # Tingo María
+            [-8.184, -76.518],   # Tocache
+            [-6.487, -76.364],   # Tarapoto
+            [-6.034, -76.970],   # Moyobamba
+            [-6.057, -77.167],   # Rioja
+            [-5.640, -78.535],   # Bagua
+        ],
+    },
 ]
 
 # Emoji + estilo por tipo de hotspot
@@ -674,19 +690,31 @@ def _render_hotspot_map(hotspots: list) -> str:
             except (TypeError, ValueError):
                 continue
 
-    # Leyenda enriquecida — hotspots activos + capas estratégicas
-    leyenda_hotspots = ""
+    # Sub-pestañas de hotspots activos: cada tipo se puede aislar visualmente.
+    # El primer botón "Todos" muestra los markers de todas las capas activas.
+    total_markers = len(markers_data)
+    leyenda_hotspots = f"""
+    <button class="hotspot-tab hotspot-tab--active"
+            data-hotspot="__all__"
+            onclick="apuriskFiltroHotspot(this, '__all__')">
+      <span class="legend-icon" style="background: rgba(59,130,246,0.18); border-color: var(--accent);">⊕</span>
+      <span class="legend-label">Todos los hotspots</span>
+      <span class="legend-count">{total_markers}</span>
+    </button>
+    """
     for h in hotspots:
         tipo = h.get("tipo", "")
         cfg = ICONOS_HOTSPOT.get(tipo, {"emoji": "●", "color": "#3b82f6", "label": ""})
         leyenda_hotspots += f"""
-        <div class="legend-item">
+        <button class="hotspot-tab"
+                data-hotspot="{_esc(tipo)}"
+                onclick="apuriskFiltroHotspot(this, '{_esc(tipo)}')">
           <span class="legend-icon" style="background: {cfg["color"]}22; border-color: {cfg["color"]};">
             {cfg["emoji"]}
           </span>
           <span class="legend-label">{_esc(str(h.get("label", "")))}</span>
           <span class="legend-count">{h.get("n_eventos", 0)}</span>
-        </div>
+        </button>
         """
 
     leyenda_zonas = ""
@@ -772,37 +800,37 @@ def _render_hotspot_map(hotspots: list) -> str:
             maxZoom: 13,
           }});
 
-          // Tile base oscuro CartoDB dark_nolabels (sin {{r}} retina que
-          // a veces da 404). Usa subdomain explicito 'abcd'.
-          const cartoUrl = 'https://{{s}}.basemaps.cartocdn.com/dark_nolabels/{{z}}/{{x}}/{{y}}.png';
-          const tileDark = L.tileLayer(cartoUrl, {{
+          // Tile base CartoDB Voyager (claro pero con relieve sutil,
+          // adecuado para sala de situacion sin verse lugubre).
+          const cartoUrl = 'https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{{z}}/{{x}}/{{y}}.png';
+          const tileBase = L.tileLayer(cartoUrl, {{
             subdomains: 'abcd',
             attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OSM',
-            maxZoom: 13,
+            maxZoom: 14,
           }});
-          tileDark.addTo(map);
+          tileBase.addTo(map);
 
           // FALLBACK: si CartoDB falla, cambiar a OSM tile estandar
           let cartoFailed = false;
-          tileDark.on('tileerror', function(e) {{
+          tileBase.on('tileerror', function(e) {{
             if (!cartoFailed) {{
               cartoFailed = true;
               console.warn('[APURISK Map] CartoDB tiles fallaron, fallback a OpenStreetMap');
-              map.removeLayer(tileDark);
+              map.removeLayer(tileBase);
               L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                maxZoom: 13,
+                maxZoom: 14,
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
               }}).addTo(map);
             }}
           }});
 
-          // Capa de labels SOBRE las zonas (sutiles, para no saturar)
+          // Capa de labels sobre las zonas (Voyager labels)
           const tileLabels = L.tileLayer(
-            'https://{{s}}.basemaps.cartocdn.com/dark_only_labels/{{z}}/{{x}}/{{y}}.png',
+            'https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{{z}}/{{x}}/{{y}}.png',
             {{
               subdomains: 'abcd',
-              maxZoom: 13,
-              opacity: 0.75,
+              maxZoom: 14,
+              opacity: 0.95,
               attribution: '',
             }}
           );
@@ -847,7 +875,10 @@ def _render_hotspot_map(hotspots: list) -> str:
           tileLabels.addTo(map);
 
           // ========== MARKERS DE EVENTOS (DivIcon con emoji) ==========
+          // Cada marker recibe data-tipo para soportar el filtro por sub-pestaña.
           const layerMarkers = L.featureGroup();
+          // Mapa de markers agrupados por tipo para filtrado eficiente
+          window._apuriskMarkersPorTipo = {{ '__all__': [] }};
           markers.forEach(m => {{
             const divIcon = L.divIcon({{
               className: 'apurisk-marker',
@@ -859,6 +890,7 @@ def _render_hotspot_map(hotspots: list) -> str:
               popupAnchor: [0, -18],
             }});
             const mk = L.marker([m.lat, m.lon], {{ icon: divIcon }});
+            mk._apuriskTipo = m.tipo;
             mk.bindPopup(
               `<div class="apurisk-popup">
                 <div class="pp-label" style="color:${{m.color}};">${{m.emoji}} ${{m.label}}</div>
@@ -868,8 +900,38 @@ def _render_hotspot_map(hotspots: list) -> str:
               {{ maxWidth: 300, className: 'apurisk-popup-wrapper' }}
             );
             mk.addTo(layerMarkers);
+            // Indexar para filtro
+            window._apuriskMarkersPorTipo['__all__'].push(mk);
+            if (!window._apuriskMarkersPorTipo[m.tipo]) {{
+              window._apuriskMarkersPorTipo[m.tipo] = [];
+            }}
+            window._apuriskMarkersPorTipo[m.tipo].push(mk);
           }});
           layerMarkers.addTo(map);
+          window._apuriskLayerMarkers = layerMarkers;
+          window._apuriskMap = map;
+
+          // Función global de filtro (invocada desde las sub-pestañas)
+          window.apuriskFiltroHotspot = function(btnEl, tipoId) {{
+            // Toggle estilo activo
+            document.querySelectorAll('.hotspot-tab').forEach(b => {{
+              b.classList.remove('hotspot-tab--active');
+            }});
+            btnEl.classList.add('hotspot-tab--active');
+            // Limpiar el layer y agregar solo los markers del tipo seleccionado
+            window._apuriskLayerMarkers.clearLayers();
+            const seleccionados = window._apuriskMarkersPorTipo[tipoId] || [];
+            seleccionados.forEach(mk => mk.addTo(window._apuriskLayerMarkers));
+            // Ajustar zoom a los markers filtrados (si hay)
+            if (seleccionados.length > 0) {{
+              try {{
+                const bounds = window._apuriskLayerMarkers.getBounds().pad(0.15);
+                if (bounds.isValid()) {{
+                  window._apuriskMap.fitBounds(bounds, {{ maxZoom: 8 }});
+                }}
+              }} catch (e) {{}}
+            }}
+          }};
 
           // ========== Control de capas ==========
           L.control.layers(
@@ -1604,7 +1666,7 @@ section { margin-bottom: var(--gap-xl); }
 .map-canvas {
   width: 100%;
   height: 100%;
-  background: #0a1626;
+  background: #e8edf3;  /* Gris claro mientras carga, encaja con tile Voyager */
   position: relative;
 }
 .map-legend {
@@ -1643,6 +1705,37 @@ section { margin-bottom: var(--gap-xl); }
 .legend-item--zone, .legend-item--route {
   align-items: flex-start;
   padding: 7px 0;
+}
+
+/* Sub-pestañas de hotspots activos (clickeables para filtrar) */
+.hotspot-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  margin: 2px 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--txt-1);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  font-family: inherit;
+}
+.hotspot-tab:hover {
+  background: var(--bg-2);
+  border-color: var(--bg-3);
+}
+.hotspot-tab--active {
+  background: rgba(59,130,246,0.12);
+  border-color: var(--accent);
+}
+.hotspot-tab--active .legend-label {
+  color: var(--txt-0);
+  font-weight: 600;
 }
 .legend-icon {
   width: 26px;
@@ -1725,20 +1818,20 @@ section { margin-bottom: var(--gap-xl); }
   line-height: 1;
 }
 
-/* Popups */
+/* Popups (estilo claro para armonizar con tile Voyager) */
 .apurisk-popup-wrapper .leaflet-popup-content-wrapper {
-  background: #1e293b;
-  color: #f1f5f9;
+  background: #ffffff;
+  color: #1e293b;
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.55);
-  border: 1px solid #334155;
+  box-shadow: 0 4px 16px rgba(15,23,42,0.25);
+  border: 1px solid #cbd5e1;
 }
 .apurisk-popup-wrapper .leaflet-popup-tip {
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
 }
 .apurisk-popup-wrapper .leaflet-popup-close-button {
-  color: #94a3b8;
+  color: #475569;
 }
 .apurisk-popup {
   padding: 4px 6px;
@@ -1755,29 +1848,29 @@ section { margin-bottom: var(--gap-xl); }
 .pp-title {
   font-size: 13px;
   font-weight: 600;
-  color: #f8fafc;
+  color: #0f172a;
   margin-bottom: 8px;
   line-height: 1.45;
 }
 .pp-meta {
   font-size: 10.5px;
-  color: #94a3b8;
+  color: #475569;
   line-height: 1.6;
-  border-top: 1px solid #334155;
+  border-top: 1px solid #e2e8f0;
   padding-top: 6px;
 }
 
-/* Tooltip de zonas y corredores */
+/* Tooltip de zonas y corredores (estilo claro) */
 .apurisk-tip {
-  background: #1e293b !important;
-  color: #f1f5f9 !important;
-  border: 1px solid #334155 !important;
+  background: #ffffff !important;
+  color: #1e293b !important;
+  border: 1px solid #cbd5e1 !important;
   border-radius: 4px !important;
   font-size: 11px !important;
   padding: 6px 10px !important;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+  box-shadow: 0 2px 8px rgba(15,23,42,0.2) !important;
 }
-.apurisk-tip::before { border-top-color: #1e293b !important; }
+.apurisk-tip::before { border-top-color: #ffffff !important; }
 
 /* Control de capas */
 .leaflet-control-layers {
@@ -2029,13 +2122,13 @@ def render_executive_home(brief: dict) -> str:
   {_render_header(brief)}
   {errores_html}
   {_render_status_bar(status)}
-  {_render_edi(brief.get("edi", {}))}
   {_render_executive_insight(insight)}
   {_render_threat_panel(amenazas)}
   {_render_critical_alerts(alerts)}
   {_render_hotspot_map(hotspots)}
   {_render_implicancias(impl)}
   {_render_outlook(outlook)}
+  {_render_edi(brief.get("edi", {}))}
   <footer class="exec-footer">
     APURISK Intelligence Platform · OSINT Strategic Risk Monitoring · Perú
   </footer>

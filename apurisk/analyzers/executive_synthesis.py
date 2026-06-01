@@ -496,6 +496,22 @@ def _alertas_como_hotspots(snapshot: dict) -> list[dict]:
         }:
             coords = (-12.0464, -77.0428)  # Lima centro
 
+        # Fallback frontera/migración: por defecto Tumbes (frontera norte
+        # con Ecuador, la más cubierta por la prensa). Si el título tiene
+        # pistas de otra frontera (Tacna/Chile, Puno/Bolivia), priorizar.
+        if not coords and regla in {"TENSIONES_FRONTERIZAS", "CRISIS_MIGRATORIA"}:
+            t_low = titulo.lower()
+            if "chile" in t_low or "tacna" in t_low or "arica" in t_low:
+                coords = (-18.0146, -70.2536)  # Tacna (frontera sur con Chile)
+            elif "bolivia" in t_low or "puno" in t_low or "desaguadero" in t_low:
+                coords = (-16.5667, -69.0333)  # Desaguadero (frontera Bolivia)
+            elif "brasil" in t_low or "iñapari" in t_low or "inapari" in t_low:
+                coords = (-11.0089, -69.5784)  # Iñapari (frontera Brasil)
+            elif "colombia" in t_low or "leticia" in t_low or "santa rosa" in t_low:
+                coords = (-3.4836, -70.0319)  # Santa Rosa (frontera Colombia)
+            else:
+                coords = (-3.5660, -80.4520)  # Tumbes (frontera Ecuador - default)
+
         lat = coords[0] if coords and len(coords) >= 2 else None
         lon = coords[1] if coords and len(coords) >= 2 else None
 
