@@ -875,10 +875,11 @@ def _render_hotspot_map(hotspots: list) -> str:
           tileLabels.addTo(map);
 
           // ========== MARKERS DE EVENTOS (DivIcon con emoji) ==========
-          // Cada marker recibe data-tipo para soportar el filtro por sub-pestaña.
-          const layerMarkers = L.featureGroup();
-          // Mapa de markers agrupados por tipo para filtrado eficiente
-          window._apuriskMarkersPorTipo = {{ '__all__': [] }};
+          // Refactor robusto: UN featureGroup separado POR cada tipo de
+          // hotspot. El filtro conecta/desconecta layers enteros del
+          // mapa (más confiable que clearLayers+addTo con DivIcons).
+          window._apuriskLayersPorTipo = {{}};
+
           markers.forEach(m => {{
             const divIcon = L.divIcon({{
               className: 'apurisk-marker',
@@ -890,7 +891,6 @@ def _render_hotspot_map(hotspots: list) -> str:
               popupAnchor: [0, -18],
             }});
             const mk = L.marker([m.lat, m.lon], {{ icon: divIcon }});
-            mk._apuriskTipo = m.tipo;
             mk.bindPopup(
               `<div class="apurisk-popup">
                 <div class="pp-label" style="color:${{m.color}};">${{m.emoji}} ${{m.label}}</div>
@@ -899,37 +899,62 @@ def _render_hotspot_map(hotspots: list) -> str:
               </div>`,
               {{ maxWidth: 300, className: 'apurisk-popup-wrapper' }}
             );
-            mk.addTo(layerMarkers);
-            // Indexar para filtro
-            window._apuriskMarkersPorTipo['__all__'].push(mk);
-            if (!window._apuriskMarkersPorTipo[m.tipo]) {{
-              window._apuriskMarkersPorTipo[m.tipo] = [];
+            // Asegurar que existe el featureGroup para este tipo
+            if (!window._apuriskLayersPorTipo[m.tipo]) {{
+              window._apuriskLayersPorTipo[m.tipo] = L.featureGroup();
             }}
-            window._apuriskMarkersPorTipo[m.tipo].push(mk);
+            mk.addTo(window._apuriskLayersPorTipo[m.tipo]);
           }});
-          layerMarkers.addTo(map);
-          window._apuriskLayerMarkers = layerMarkers;
+
+          // Inicialmente: TODAS las capas activas sobre el mapa
+          Object.values(window._apuriskLayersPorTipo).forEach(lg => {{
+            lg.addTo(map);
+          }});
+
+          // Layer agregador para usar con bounds en modo "Todos"
           window._apuriskMap = map;
 
           // Función global de filtro (invocada desde las sub-pestañas)
           window.apuriskFiltroHotspot = function(btnEl, tipoId) {{
-            // Toggle estilo activo
+            // Toggle estilo activo en los botones
             document.querySelectorAll('.hotspot-tab').forEach(b => {{
               b.classList.remove('hotspot-tab--active');
             }});
             btnEl.classList.add('hotspot-tab--active');
-            // Limpiar el layer y agregar solo los markers del tipo seleccionado
-            window._apuriskLayerMarkers.clearLayers();
-            const seleccionados = window._apuriskMarkersPorTipo[tipoId] || [];
-            seleccionados.forEach(mk => mk.addTo(window._apuriskLayerMarkers));
-            // Ajustar zoom a los markers filtrados (si hay)
-            if (seleccionados.length > 0) {{
-              try {{
-                const bounds = window._apuriskLayerMarkers.getBounds().pad(0.15);
-                if (bounds.isValid()) {{
-                  window._apuriskMap.fitBounds(bounds, {{ maxZoom: 8 }});
+
+            const mapRef = window._apuriskMap;
+            const layers = window._apuriskLayersPorTipo;
+            const layersVisibles = [];
+
+            // Conectar el(los) layer(s) deseado(s) al mapa;
+            // desconectar los demás.
+            Object.entries(layers).forEach(([tipo, lg]) => {{
+              const debeMostrarse = (tipoId === '__all__' || tipo === tipoId);
+              if (debeMostrarse) {{
+                if (!mapRef.hasLayer(lg)) lg.addTo(mapRef);
+                layersVisibles.push(lg);
+              }} else {{
+                if (mapRef.hasLayer(lg)) mapRef.removeLayer(lg);
+              }}
+            }});
+
+            // Auto-zoom a los markers visibles (combinar bounds de todos
+            // los layers que están mostrándose)
+            try {{
+              if (layersVisibles.length > 0) {{
+                let combined = null;
+                layersVisibles.forEach(lg => {{
+                  const b = lg.getBounds();
+                  if (b && b.isValid()) {{
+                    combined = combined ? combined.extend(b) : L.latLngBounds(b.getSouthWest(), b.getNorthEast());
+                  }}
+                }});
+                if (combined && combined.isValid()) {{
+                  mapRef.fitBounds(combined.pad(0.15), {{ maxZoom: 8 }});
                 }}
-              }} catch (e) {{}}
+              }}
+            }} catch (e) {{
+              console.warn('[APURISK Map] fitBounds error:', e);
             }}
           }};
 
