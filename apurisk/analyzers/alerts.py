@@ -245,8 +245,10 @@ REGLAS = [
             "paso bloqueado", "tránsito interrumpido",
             "ruta del cobre", "carretera central",
         ],
-        # Descartar accidentes de tránsito (no son bloqueos políticos).
+        # Descartar accidentes de tránsito (no son bloqueos políticos)
+        # y movilizaciones POLÍTICAS/ELECTORALES (esas van a PROCESO_ELECTORAL).
         "patrones_negacion": [
+            # Accidentes de tránsito
             "choque frontal", "choque entre", "accidente de tránsito",
             "accidente de transito", "accidente vehicular",
             "volcadura", "volcamiento", "carambola",
@@ -256,6 +258,23 @@ REGLAS = [
             "heridos en accidente", "fallecidos en accidente",
             "obras en la carretera", "obras viales",
             "fluidez vehicular", "fluidez del tránsito",
+            # Movilizaciones políticas/electorales específicas en actor
+            # (no genéricas para evitar over-blocking de paros reales)
+            "contra keiko", "contra fujimori",
+            "contra castillo", "contra boluarte", "contra dina boluarte",
+            "contra el congreso", "contra la jnj",
+            "contra el gobierno", "contra el presidente",
+            "contra el ejecutivo", "contra la presidenta",
+            "marcha electoral", "marcha política", "marcha politica",
+            "marcha ciudadana", "marcha por la democracia",
+            "movilización política", "movilizacion politica",
+            "movilización electoral", "movilizacion electoral",
+            "plantón frente al congreso", "planton frente al congreso",
+            "plantón frente al palacio", "planton frente al palacio",
+            "plantón frente al jne", "planton frente al jne",
+            # Indicadores electorales explícitos
+            "segunda vuelta", "balotaje", "campaña electoral",
+            "candidato presidencial",
         ],
         "categoria": "Conflictos sociales",
         "accion": "Alertar operaciones logísticas y mineras en zona afectada.",
@@ -432,6 +451,30 @@ REGLAS = [
         "id": "PARO_REGIONAL",
         "nivel": "ALTA",
         "patrones": ["paro regional", "paro indefinido", "paro agrario", "paralización", "paralizacion", "frente de defensa", "movilización", "movilizacion"],
+        # Descartar movilizaciones POLÍTICAS/ELECTORALES específicas
+        # (esas van a PROCESO_ELECTORAL). Negaciones específicas en el
+        # actor político para NO over-blockear paros operacionales reales.
+        "patrones_negacion": [
+            # Marchas contra actores políticos específicos
+            "contra keiko", "contra fujimori",
+            "contra castillo", "contra boluarte", "contra dina boluarte",
+            "contra el congreso", "contra la jnj",
+            "contra el gobierno", "contra el presidente",
+            "contra el ejecutivo", "contra la presidenta",
+            # Marchas explícitamente electorales/políticas
+            "marcha electoral", "movilización electoral", "movilizacion electoral",
+            "marcha política", "marcha politica",
+            "movilización política", "movilizacion politica",
+            "marcha por la democracia", "marcha ciudadana",
+            "plantón frente al congreso", "planton frente al congreso",
+            "plantón frente al palacio", "planton frente al palacio",
+            "plantón frente al jne", "planton frente al jne",
+            "plantón frente al tc", "planton frente al tc",
+            # Indicadores electorales explícitos
+            "segunda vuelta", "balotaje",
+            "campaña electoral", "campana electoral",
+            "candidato presidencial",
+        ],
         "categoria": "Conflictos sociales",
         "accion": "Monitoreo cada 4h. Activar contacto con autoridades regionales.",
     },

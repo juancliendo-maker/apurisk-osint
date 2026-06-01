@@ -1426,6 +1426,10 @@ def generar_dashboard_html(
     # También excluimos items demo para que no contaminen el mapa.
     MAPA_VENTANA_HORAS = 48
     map_markers = []
+    # Dedup por (URL ó título normalizado) — evita que la misma nota
+    # aparezca en dos capas distintas (ej: una marcha electoral aparecía
+    # como "bloqueo" Y como "político" duplicando el marker).
+    _urls_vistas_alertas = set()
     for a in alertas:
         # Filtro temporal estricto
         h_ago = a.get("hours_ago", 999)
@@ -1453,6 +1457,16 @@ def generar_dashboard_html(
         LIMA_CENTRO = (-12.0464, -77.0428)
 
         regla = a.get("regla", "") or ""
+        # Dedup defensivo: si la URL/título ya fue visto, descartar
+        # (evita que la misma nota aparezca en distintas capas)
+        _url = (a.get("url") or "").strip().lower()
+        _titulo = (a.get("titulo") or "").strip().lower()[:80]
+        _dedup_key = _url or _titulo
+        if _dedup_key and _dedup_key in _urls_vistas_alertas:
+            continue
+        if _dedup_key:
+            _urls_vistas_alertas.add(_dedup_key)
+
         coords = None
         if a.get("region"):
             coords = buscar_coords(a["region"])
