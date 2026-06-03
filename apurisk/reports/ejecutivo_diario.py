@@ -525,7 +525,9 @@ def generar_ejecutivo_pdf(output_path: str, snapshot: dict, snapshot_dir: str) -
         output_path, pagesize=A4,
         leftMargin=1.8*cm, rightMargin=1.8*cm,
         topMargin=1.5*cm, bottomMargin=1.5*cm,
-        title="APURISK · Reporte Ejecutivo Diario", author="APURISK 1.0",
+        title="APURISK OSINT · Reporte Ejecutivo Diario",
+        author="APURISK OSINT · THALOS",
+        creator="THALOS — Strategic Intelligence for Complex Decisions",
     )
 
     ss = getSampleStyleSheet()
@@ -569,9 +571,15 @@ def generar_ejecutivo_pdf(output_path: str, snapshot: dict, snapshot_dir: str) -
 
     tend = _aggregate_tendencias(snapshot_dir)
 
-    # ====== HEADER ======
+    # ====== HEADER con logo THALOS ======
+    try:
+        from .branding import thalos_header_block
+    except ImportError:
+        from apurisk.reports.branding import thalos_header_block
+    for f in thalos_header_block(width=170, align="left"):
+        story.append(f)
     story.append(Paragraph(
-        f'<font color="#0F172A">APURISK 1.0</font> '
+        f'<font color="#0F172A">APURISK OSINT</font> '
         f'<font color="#1E40AF" size="14"> · Reporte Ejecutivo Diario</font>',
         s_title
     ))

@@ -32,3 +32,9 @@ pypdf==5.1.0
 # pasan 'proxies=' al constructor de httpx.Client(), parámetro que
 # httpx>=0.28 ya no acepta (rompe con TypeError en runtime).
 anthropic>=0.49.0,<1.0.0
+
+# svglib: convierte SVG a ReportLab Drawings para insertar el logo
+# corporativo THALOS en headers/footers de los PDFs generados.
+# Ligero (~100KB), sin dependencias nativas. Si no carga, el código
+# tiene fallback automático a header de texto.
+svglib==1.5.1

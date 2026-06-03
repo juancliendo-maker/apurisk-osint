@@ -540,7 +540,15 @@ def _portada(analisis, styles):
     s0 = analisis.get("seccion_0_hallazgos_criticos", {})
 
     items = []
-    items.append(Spacer(1, 1.2 * cm))
+    # Logo THALOS destacado en portada (reporte premium)
+    try:
+        from .branding import thalos_header_block
+    except ImportError:
+        from apurisk.reports.branding import thalos_header_block
+    items.append(Spacer(1, 0.6 * cm))
+    for f in thalos_header_block(width=220, align="center"):
+        items.append(f)
+    items.append(Spacer(1, 0.4 * cm))
     items.append(Paragraph("INFORME EJECUTIVO · SEMANAL", styles["sub_portada"]))
     items.append(Paragraph("Análisis de Riesgo Político<br/>del Sector Minero",
                             styles["h1_portada"]))
@@ -1494,9 +1502,10 @@ def generar_reporte_minera_pdf(output_path: str, analisis: dict) -> str:
         pagesize=A4,
         leftMargin=2 * cm, rightMargin=2 * cm,
         topMargin=2.2 * cm, bottomMargin=2.2 * cm,
-        title=f"APURISK Riesgo Minero {meta.get('semana_iso', '?')}-{meta.get('año', '')}",
-        author="APURISK · OSINT Riesgo Político Perú",
-        subject="Reporte semanal de riesgo político sector minero",
+        title=f"APURISK OSINT · Riesgo Minero {meta.get('semana_iso', '?')}-{meta.get('año', '')}",
+        author="APURISK OSINT · THALOS",
+        creator="THALOS — Strategic Intelligence for Complex Decisions",
+        subject="Reporte de riesgo político sector minero Perú",
     )
 
     story = []

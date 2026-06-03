@@ -114,10 +114,17 @@ def generar_reporte_diario_pdf(output_path: str, snapshot: dict) -> str:
     fecha_gen = snapshot.get("generado", datetime.now().isoformat())
     modo = snapshot.get("modo", "live")
 
-    # ===== Cabecera =====
-    story.append(Paragraph("APURISK · Reporte Diario de Riesgo Político", e["title"]))
+    # ===== Cabecera con logo THALOS =====
+    try:
+        from .branding import thalos_header_block
+    except ImportError:
+        from apurisk.reports.branding import thalos_header_block
+    for f in thalos_header_block(width=170, align="left"):
+        story.append(f)
+    story.append(Paragraph("APURISK OSINT · Reporte Diario de Riesgo Político", e["title"]))
     story.append(Paragraph(
-        f"Plataforma OSINT · Perú · Generado: {_fmt_dt_full(fecha_gen)} · Modo: {modo}",
+        f"Strategic Intelligence for Complex Decisions · Powered by <b>THALOS</b><br/>"
+        f"Generado: {_fmt_dt_full(fecha_gen)} · Modo: {modo}",
         e["subtitle"]
     ))
 
@@ -341,9 +348,17 @@ def generar_reporte_semanal_pdf(output_path: str, snapshots_dir: str) -> str:
     desde = datetime.now() - timedelta(days=7)
     hasta = datetime.now()
 
-    story.append(Paragraph("APURISK · Reporte Semanal de Riesgo Político", e["title"]))
+    # Cabecera con logo THALOS
+    try:
+        from .branding import thalos_header_block
+    except ImportError:
+        from apurisk.reports.branding import thalos_header_block
+    for f in thalos_header_block(width=170, align="left"):
+        story.append(f)
+    story.append(Paragraph("APURISK OSINT · Reporte Semanal de Riesgo Político", e["title"]))
     story.append(Paragraph(
-        f"Plataforma OSINT · Perú · Período: {desde.strftime('%d %b %Y')} → {hasta.strftime('%d %b %Y')}",
+        f"Strategic Intelligence for Complex Decisions · Powered by <b>THALOS</b><br/>"
+        f"Período: {desde.strftime('%d %b %Y')} → {hasta.strftime('%d %b %Y')}",
         e["subtitle"]
     ))
 

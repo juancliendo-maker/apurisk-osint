@@ -112,10 +112,19 @@ def generar_reporte_caso_pdf(output_path: str, analisis: dict) -> str:
         output_path, pagesize=A4,
         leftMargin=1.8*cm, rightMargin=1.8*cm,
         topMargin=1.5*cm, bottomMargin=1.5*cm,
-        title="APURISK · Reporte OSINT de Riesgo Político", author="APURISK 1.0",
+        title="APURISK OSINT · Reporte OSINT de Riesgo Político",
+        author="APURISK OSINT · THALOS",
+        creator="THALOS — Strategic Intelligence for Complex Decisions",
     )
     e = _styles()
     story = []
+    # Header con logo THALOS
+    try:
+        from .branding import thalos_header_block
+    except ImportError:
+        from apurisk.reports.branding import thalos_header_block
+    for f in thalos_header_block(width=170, align="left"):
+        story.append(f)
 
     inp = analisis.get("input", {})
     caso = inp.get("caso", "")
@@ -127,7 +136,7 @@ def generar_reporte_caso_pdf(output_path: str, analisis: dict) -> str:
 
     # ============== CABECERA ==============
     story.append(Paragraph(
-        f'<font color="#0F172A">APURISK 1.0</font> '
+        f'<font color="#0F172A">APURISK OSINT</font> '
         f'<font color="#1E40AF" size="13"> · Reporte OSINT de Riesgo Político</font>',
         e["title"]))
     story.append(Paragraph(f"República del Perú · Análisis estructurado de un caso", e["subtitle"]))
