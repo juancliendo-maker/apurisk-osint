@@ -1193,90 +1193,206 @@ def _scan_descargas(output_dir: str | None) -> dict:
 
 
 def _render_descargas(descargas: dict) -> str:
-    """HTML del panel de descargas — versión simplificada (mayo 2026).
+    """HTML del panel de descargas — arquitectura de dos capas (junio 2026).
 
-    Cambios estructurales:
-      - ELIMINADAS las secciones que listaban archivos legacy del scheduler antiguo
-        (ejecutivo_diario, diarios, semanales, alertas, 24h en HTML/DOCX repetidos
-        cada 30 min). El scheduler ya NO genera esos archivos automáticamente.
-      - Mantiene SOLO los botones "Generar AHORA" para creación bajo demanda
-        (PDF y Word) — son los que el usuario realmente usa.
-      - La sección "🕕 Reportes Diarios Automáticos" se renderiza aparte vía
-        JS asíncrono (consulta /api/reportes-diarios).
+    Doctrina: separar visual y conceptualmente los productos en dos capas:
+
+      🔍 OSINT REPORTS (capa 1)
+        Para audiencia técnica/operativa (analistas, equipos de monitoreo).
+        Densos en hechos, evidencias, tablas, fuentes.
+        Pregunta que responden: "¿Qué pasó?"
+
+      ⚡ STRATEGIC INTELLIGENCE (capa 2)
+        Para audiencia ejecutiva (C-level, board, decisores).
+        Narrativa LLM, interpretación, escenarios, recomendaciones.
+        Pregunta que responden: "¿Qué significa? ¿Qué viene? ¿Qué hacer?"
+
+      📚 Archivo histórico (colapsable)
+        Retención 90 días con purge automático.
+        Acceso para compliance y auditoría.
     """
 
-    # ===== Botones "Generar AHORA" — el corazón de la pestaña =====
-    instant_html = """
-    <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); border: 1px solid var(--accent); margin-bottom: 18px;'>
-      <h4>⚡ Generar reporte AHORA <span class='count-badge' style='background: var(--accent); color: var(--bg-0);'>al instante</span></h4>
-      <div style='color: var(--txt-1); font-size: 13px; line-height: 1.6; margin-bottom: 12px;'>
-        Genera cualquier reporte <strong>al momento</strong> con los datos más recientes
-        del scheduler. El archivo se descarga inmediatamente en el formato que elijas
-        (<strong>PDF o Word/DOCX</strong>).
+    # ============== INTRO ==============
+    intro_html = """
+    <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); border: 1px solid var(--bg-3); margin-bottom: 18px;'>
+      <h4 style='margin-bottom: 8px;'>📥 Reportes — Arquitectura de dos capas</h4>
+      <div style='color: var(--txt-1); font-size: 12.5px; line-height: 1.65;'>
+        Los productos están organizados en <strong style='color: var(--accent);'>dos capas
+        complementarias</strong> según audiencia y propósito:
+        <ul style='margin: 8px 0 0 18px; padding: 0;'>
+          <li><strong>OSINT REPORTS</strong> — para analistas técnicos: hechos, evidencias, datos.</li>
+          <li><strong>STRATEGIC INTELLIGENCE</strong> — para C-level: narrativa interpretativa, escenarios, recomendaciones.</li>
+        </ul>
       </div>
-      <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;'>
-        <a href='/api/reporte/ejecutivo/pdf' target='_blank' class='dl-btn-instant' style='background: #DC2626;'>
-          📄 Ejecutivo PDF<br><small>≤3 págs · foco tendencias</small>
+    </div>
+    """
+
+    # ============== CAPA 1: OSINT REPORTS ==============
+    osint_html = """
+    <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), rgba(56,189,248,0.04)); border: 1px solid var(--accent); border-left: 4px solid var(--accent); margin-bottom: 18px;'>
+      <h4 style='color: var(--accent); margin-bottom: 4px;'>
+        🔍 OSINT REPORTS <span style='font-size:10px; color: var(--txt-3); letter-spacing: 1.5px; margin-left: 8px;'>CAPA 1 — DATOS Y EVIDENCIAS</span>
+      </h4>
+      <div style='color: var(--txt-1); font-size: 12px; margin-bottom: 14px; line-height: 1.6;'>
+        Para equipos operativos · analistas técnicos · risk officers.
+        Densidad de datos · evidencias · fuentes trazables.
+      </div>
+      <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px;'>
+        <a href='/api/reporte/diario/pdf' target='_blank' class='dl-btn-instant' style='background: #38BDF8;'>
+          📊 Daily OSINT Brief · PDF<br><small>detalle completo del día · hechos + evidencias</small>
         </a>
-        <a href='/api/reporte/ejecutivo/docx' target='_blank' class='dl-btn-instant' style='background: #1E40AF;'>
-          📝 Ejecutivo Word<br><small>≤3 págs · editable</small>
+        <a href='/api/reporte/semanal/pdf' target='_blank' class='dl-btn-instant' style='background: #38BDF8;'>
+          📅 Weekly OSINT Brief · PDF<br><small>agregado semanal · tendencias 7 días</small>
         </a>
-        <a href='/api/reporte/24h/html' target='_blank' class='dl-btn-instant' style='background: #38BDF8;'>
-          📰 Reporte 24h HTML<br><small>imprimible · web</small>
+        <a href='/api/reporte/24h/html' target='_blank' class='dl-btn-instant' style='background: #0EA5E9;'>
+          📰 24h Coverage · HTML<br><small>imprimible · feed último día</small>
         </a>
-        <a href='/api/reporte/24h/docx' target='_blank' class='dl-btn-instant' style='background: #1E40AF;'>
-          📝 Reporte 24h Word<br><small>completo · editable</small>
+        <a href='/api/reporte/24h/docx' target='_blank' class='dl-btn-instant' style='background: #0284C7;'>
+          📝 24h Coverage · Word<br><small>editable · listo para anexos</small>
         </a>
-        <a href='/api/reporte/alertas/html' target='_blank' class='dl-btn-instant' style='background: #EA580C;'>
-          🚨 Alertas HTML<br><small>feed crítico</small>
+        <a href='/api/reporte/alertas/html' target='_blank' class='dl-btn-instant' style='background: #0EA5E9;'>
+          🚨 Alert Feed · HTML<br><small>feed crítico + acciones</small>
         </a>
-        <a href='/api/reporte/alertas/docx' target='_blank' class='dl-btn-instant' style='background: #DC2626;'>
-          🚨 Alertas Word<br><small>con acciones</small>
+        <a href='/api/reporte/alertas/docx' target='_blank' class='dl-btn-instant' style='background: #0284C7;'>
+          🚨 Alert Feed · Word<br><small>con acciones recomendadas</small>
         </a>
-        <a href='/api/reporte/diario/pdf' target='_blank' class='dl-btn-instant' style='background: #A78BFA;'>
-          📊 Diario PDF<br><small>detalle completo</small>
-        </a>
-        <a href='/api/reporte/semanal/pdf' target='_blank' class='dl-btn-instant' style='background: #A78BFA;'>
-          📅 Semanal PDF<br><small>tendencias 7 días</small>
+        <a href='#' onclick='alert("Caso OSINT Analysis: usa la pestaña Análisis de Caso para generar uno con tu hipótesis."); return false;' class='dl-btn-instant' style='background: #0369A1;'>
+          🔬 Caso OSINT Analysis<br><small>on-demand · ver pestaña Análisis</small>
         </a>
       </div>
     </div>
     """
 
-    # Snapshot técnico minimalista (solo último snapshot JSON y dashboard HTML
-    # para debug — sin todas las históricas que saturaban la pantalla).
-    snaps = descargas.get("snapshots", [])[:2]
-    dashes = descargas.get("dashboards", [])[:2]
+    # ============== CAPA 2: STRATEGIC INTELLIGENCE ==============
+    strategic_html = """
+    <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), rgba(168,85,247,0.04)); border: 1px solid #A855F7; border-left: 4px solid #A855F7; margin-bottom: 18px;'>
+      <h4 style='color: #A855F7; margin-bottom: 4px;'>
+        ⚡ STRATEGIC INTELLIGENCE <span style='font-size:10px; color: var(--txt-3); letter-spacing: 1.5px; margin-left: 8px;'>CAPA 2 — SÍNTESIS Y ESCENARIOS</span>
+      </h4>
+      <div style='color: var(--txt-1); font-size: 12px; margin-bottom: 14px; line-height: 1.6;'>
+        Para C-level · board · decisores. Narrativa interpretativa con motor LLM ·
+        escenarios · implicancias operacionales · recomendaciones accionables.
+      </div>
+      <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px;'>
+        <a href='#' onclick='alert("Strategic Daily Brief PDF — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
+          🌟 Strategic Daily Brief · PDF<br><small>próximamente · narrativa C-level + EDI</small>
+        </a>
+        <a href='#' onclick='alert("Strategic Weekly Outlook — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
+          📈 Strategic Weekly Outlook<br><small>próximamente · convergencias + escenarios 30d</small>
+        </a>
+        <a href='#' onclick='alert("Strategic Monthly Assessment — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
+          📊 Strategic Monthly Assessment<br><small>próximamente · EDI histórico + tendencias estructurales</small>
+        </a>
+        <a href='#' onclick='alert("Quarterly Forward Look — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
+          🔮 Quarterly Forward Look<br><small>próximamente · escenarios 90 días + agenda</small>
+        </a>
+        <a href='#' onclick='alert("Crisis Brief on-demand — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
+          🚨 Crisis Brief · on-demand<br><small>próximamente · 2-3 págs · respuesta express</small>
+        </a>
+        <a href='#' onclick='document.querySelector("[data-tab=\\"riesgo_minero\\"]").click(); return false;' class='dl-btn-instant' style='background: #A855F7;'>
+          ⛏ Riesgo Minero Sectorial<br><small>disponible · ver pestaña Riesgo Minero</small>
+        </a>
+      </div>
+      <div style='margin-top: 12px; padding: 8px 12px; background: rgba(168,85,247,0.08); border-radius: 6px; font-size: 11px; color: var(--txt-2); line-height: 1.5;'>
+        💡 <strong style='color: #A855F7;'>Roadmap:</strong> El primer producto Strategic en
+        construcción será el <strong>Strategic Daily Brief PDF</strong>, derivado del motor
+        Executive ya operativo en la pestaña <a href='/executive' target='_blank' style='color: var(--accent);'>/executive</a>.
+        Los demás productos Strategic se irán habilitando progresivamente.
+      </div>
+    </div>
+    """
 
-    def _mini_item(it, fmt, color):
-        return f"""
-        <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:var(--bg-2); border-radius:6px; margin-bottom:6px;'>
-          <div>
-            <div style='font-size:12.5px; color:var(--txt-1);'>{_esc(it["name"])}</div>
-            <div style='font-size:10.5px; color:var(--txt-2);'>🕒 {_esc(it["mtime_str"])} · {_esc(it["size"])} · {fmt}</div>
+    # ============== ARCHIVO HISTÓRICO (colapsable) ==============
+    # Junta TODOS los archivos PDF/DOCX/HTML del scheduler de los últimos 90 días.
+    # Se muestra colapsado por default para no saturar la vista.
+    archivo_items = []
+    for key, label in [
+        ("diarios_pdf", "Daily Brief PDF"),
+        ("semanales_pdf", "Weekly Brief PDF"),
+        ("ejecutivo_diario_pdf", "Executive Daily PDF (legacy)"),
+        ("ejecutivo_diario_docx", "Executive Daily Word (legacy)"),
+        ("diarios_docx", "Daily Brief Word"),
+        ("diarios_html", "Daily Brief HTML"),
+        ("alertas_pdf", "Alertas PDF"),
+        ("alertas_docx", "Alertas Word"),
+        ("alertas_html", "Alertas HTML"),
+        ("ejecutivo_docx", "Ejecutivo Word"),
+    ]:
+        for it in descargas.get(key, []):
+            archivo_items.append((it, label))
+    # Ordenar por mtime descendente
+    archivo_items.sort(key=lambda x: x[0].get("mtime"), reverse=True)
+
+    archivo_html = ""
+    if archivo_items:
+        rows = ""
+        for it, label in archivo_items[:50]:  # cap a 50 entradas visibles
+            rows += f"""
+            <div style='display:flex; justify-content:space-between; align-items:center; padding:7px 12px; background:var(--bg-2); border-radius:5px; margin-bottom:5px; font-size:12px;'>
+              <div>
+                <div style='color:var(--txt-1);'>{_esc(it["name"])}</div>
+                <div style='color:var(--txt-3); font-size:10px;'>🕒 {_esc(it["mtime_str"])} · {_esc(it["size"])} · <span style='color: var(--accent);'>{_esc(label)}</span></div>
+              </div>
+              <a href='{_esc(it["path"])}' download style='background:var(--bg-3); color:var(--txt-0); padding:4px 10px; border-radius:4px; font-size:10px; text-decoration:none; font-weight:600;'>⬇</a>
+            </div>
+            """
+        n_total = len(archivo_items)
+        n_mostrados = min(50, n_total)
+        archivo_html = f"""
+        <details class='download-section' style='border: 1px solid var(--bg-3); margin-top: 18px;'>
+          <summary style='cursor: pointer; padding: 8px; font-weight: 600; color: var(--txt-1);'>
+            📚 Archivo histórico ({n_total} archivos · retención automática 90 días)
+            <span style='font-size: 10px; color: var(--txt-3); font-weight: 400; margin-left: 8px;'>
+              · Click para expandir · Mostrando últimos {n_mostrados}
+            </span>
+          </summary>
+          <div style='margin-top: 12px; padding: 12px; background: var(--bg-1); border-radius: 6px; max-height: 480px; overflow-y: auto;'>
+            <div style='font-size: 11px; color: var(--txt-2); margin-bottom: 10px; line-height: 1.5;'>
+              ℹ Archivos generados por el scheduler automático y reportes manuales anteriores.
+              Acceso disponible para compliance y auditoría. Purge automático tras 90 días.
+            </div>
+            {rows}
           </div>
-          <a href='{_esc(it["path"])}' download style='background:{color}; color:var(--bg-0); padding:5px 12px; border-radius:5px; font-size:11px; text-decoration:none; font-weight:600;'>⬇ DESCARGAR</a>
-        </div>
+        </details>
         """
 
+    # ============== ARCHIVOS TÉCNICOS (snapshot/JSON) ==============
+    snaps = descargas.get("snapshots", [])[:3]
+    dashes = descargas.get("dashboards", [])[:3]
     debug_html = ""
     if snaps or dashes:
-        items_snap = "".join(_mini_item(s, "JSON", "var(--bajo)") for s in snaps)
-        items_dash = "".join(_mini_item(d, "HTML", "var(--accent)") for d in dashes)
+        def _mini_item(it, fmt, color):
+            return f"""
+            <div style='display:flex; justify-content:space-between; align-items:center; padding:7px 12px; background:var(--bg-2); border-radius:5px; margin-bottom:5px; font-size:11.5px;'>
+              <div>
+                <div style='color:var(--txt-1);'>{_esc(it["name"])}</div>
+                <div style='color:var(--txt-3); font-size:10px;'>🕒 {_esc(it["mtime_str"])} · {_esc(it["size"])} · {fmt}</div>
+              </div>
+              <a href='{_esc(it["path"])}' download style='background:{color}; color:var(--bg-0); padding:4px 10px; border-radius:4px; font-size:10px; text-decoration:none; font-weight:600;'>⬇</a>
+            </div>
+            """
+        items_snap = "".join(_mini_item(s, "JSON crudo", "var(--bajo)") for s in snaps)
+        items_dash = "".join(_mini_item(d, "HTML auditoría", "var(--accent)") for d in dashes)
         debug_html = f"""
-        <div class='download-section' style='border:1px dashed var(--bg-3); margin-top:18px; padding:14px;'>
-          <h4 style='color:var(--txt-2); font-size:13px;'>🔧 Archivos técnicos (debug)</h4>
-          <div style='color:var(--txt-2); font-size:11px; margin-bottom:10px;'>
-            Snapshot JSON y dashboard HTML más recientes (para uso técnico de auditoría).
-            Estos se regeneran cada 30 min y son los únicos archivos automáticos que el
-            sistema almacena en disco.
+        <details class='download-section' style='border: 1px dashed var(--bg-3); margin-top: 14px;'>
+          <summary style='cursor: pointer; padding: 8px; color: var(--txt-2); font-size: 12px;'>
+            🔧 Archivos técnicos · debug y auditoría
+            <span style='font-size: 10px; color: var(--txt-3); margin-left: 8px;'>
+              · Snapshot JSON y dashboard HTML
+            </span>
+          </summary>
+          <div style='margin-top: 12px; padding: 10px;'>
+            <div style='font-size: 11px; color: var(--txt-2); margin-bottom: 10px;'>
+              Materia prima cruda: snapshot JSON con todo lo recolectado (input para
+              integraciones del cliente con sus sistemas) y dashboard HTML estático.
+            </div>
+            {items_snap}
+            {items_dash}
           </div>
-          {items_snap}
-          {items_dash}
-        </div>
+        </details>
         """
 
-    return instant_html + debug_html
+    return intro_html + osint_html + strategic_html + archivo_html + debug_html
 
 
 def _render_fuentes_estado(articulos, conflictos, proyectos, tweets) -> str:
