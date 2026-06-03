@@ -1147,8 +1147,8 @@ body {
 .brand-thalos-mark {
   width: 44px;
   height: 44px;
-  color: var(--accent);
   flex-shrink: 0;
+  /* El SVG oficial trae el globo en blanco/#eeeeee; en fondo navy se ve perfecto */
 }
 .brand-by {
   font-size: 10px;
@@ -2102,10 +2102,9 @@ section { margin-bottom: var(--gap-xl); }
   padding: 8px 0;
 }
 .footer-thalos-logo {
-  width: 280px;
-  max-width: 70vw;
+  width: 360px;
+  max-width: 80vw;
   height: auto;
-  color: var(--txt-1);
   opacity: 0.92;
 }
 .footer-meta { color: var(--txt-3); }

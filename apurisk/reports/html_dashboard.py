@@ -2862,7 +2862,7 @@ python -m http.server 8080 --directory output
 <footer>
   <div style="display:flex; flex-direction:column; align-items:center; gap:14px; padding:18px 0;">
     <img src="/static/thalos-logo.svg" alt="THALOS — Strategic Intelligence for Complex Decisions"
-         style="width:280px; max-width:70vw; height:auto; color:var(--txt-1); opacity:0.92;" />
+         style="width:360px; max-width:80vw; height:auto; opacity:0.92;" />
     <div>
       <strong>APURISK OSINT</strong> · Strategic Intelligence for Complex Decisions ·
       Powered by <strong>THALOS</strong> · Próximamente: <em>APURISK SIM-CRISIS</em>
