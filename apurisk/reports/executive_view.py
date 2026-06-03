@@ -117,10 +117,11 @@ def _render_header(brief: dict) -> str:
     return f"""
     <header class="exec-header">
       <div class="brand">
-        <div class="brand-mark">◆</div>
+        <img src="/static/thalos-mark.svg" alt="THALOS" class="brand-thalos-mark" />
         <div class="brand-text">
-          <div class="brand-name">APURISK</div>
-          <div class="brand-tagline">Intelligence Platform · Perú</div>
+          <div class="brand-name">APURISK OSINT</div>
+          <div class="brand-tagline">Strategic Intelligence for Complex Decisions</div>
+          <div class="brand-by">by <strong>THALOS</strong></div>
         </div>
       </div>
       <div class="header-meta">
@@ -1143,6 +1144,19 @@ body {
   color: var(--accent);
   line-height: 1;
 }
+.brand-thalos-mark {
+  width: 44px;
+  height: 44px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.brand-by {
+  font-size: 10px;
+  color: var(--txt-3);
+  letter-spacing: 1.2px;
+  margin-top: 2px;
+}
+.brand-by strong { color: var(--accent); letter-spacing: 1.5px; }
 .brand-name {
   font-size: 18px;
   font-weight: 700;
@@ -2070,13 +2084,31 @@ section { margin-bottom: var(--gap-xl); }
 /* ===== FOOTER ===== */
 .exec-footer {
   border-top: 1px solid var(--bg-2);
-  padding: var(--gap-md) 0;
+  padding: var(--gap-lg) 0;
   margin-top: var(--gap-xl);
   font-size: 11px;
   color: var(--txt-3);
   text-align: center;
   letter-spacing: 0.5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--gap-md);
 }
+.footer-brand {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 8px 0;
+}
+.footer-thalos-logo {
+  width: 280px;
+  max-width: 70vw;
+  height: auto;
+  color: var(--txt-1);
+  opacity: 0.92;
+}
+.footer-meta { color: var(--txt-3); }
 
 /* ===== RESPONSIVE ===== */
 @media (max-width: 1100px) {
@@ -2134,7 +2166,8 @@ def render_executive_home(brief: dict) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>APURISK Intelligence — Executive Brief</title>
+<title>APURISK OSINT · Executive Brief — Strategic Intelligence for Complex Decisions</title>
+<link rel="icon" type="image/svg+xml" href="/static/thalos-mark.svg" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <!-- Leaflet JS CARGADO EN EL HEAD para que window.L este disponible antes
      de cualquier script inline en el body. Si esto se mueve al final del
@@ -2155,7 +2188,13 @@ def render_executive_home(brief: dict) -> str:
   {_render_outlook(outlook)}
   {_render_edi(brief.get("edi", {}))}
   <footer class="exec-footer">
-    APURISK Intelligence Platform · OSINT Strategic Risk Monitoring · Perú
+    <div class="footer-brand">
+      <img src="/static/thalos-logo.svg" alt="THALOS — Strategic Intelligence for Complex Decisions" class="footer-thalos-logo"/>
+    </div>
+    <div class="footer-meta">
+      <strong>APURISK OSINT</strong> · Strategic Intelligence for Complex Decisions ·
+      Powered by <strong>THALOS</strong> · Próximamente: <em>APURISK SIM-CRISIS</em>
+    </div>
   </footer>
 </div>
 <script>

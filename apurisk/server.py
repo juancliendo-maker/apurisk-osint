@@ -78,7 +78,7 @@ PORT = int(os.getenv("PORT", "8080"))
 SERVER_VERSION = "1.0.0"
 
 app = FastAPI(
-    title="APURISK 1.0 — OSINT Riesgos Políticos del Perú",
+    title="APURISK OSINT — Strategic Intelligence for Complex Decisions (Powered by THALOS)",
     description=(
         "Plataforma de monitoreo en tiempo real. Auto-refresh cada "
         f"{REFRESH_SECONDS//60} minutos. Genera reportes on-demand en PDF, DOCX y HTML."
@@ -88,6 +88,11 @@ app = FastAPI(
 
 # Servir archivos estáticos del dashboard (HTML, JSON, PDFs, DOCX)
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
+
+# Servir assets de la marca (logo THALOS, favicons, etc.)
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 # Estado interno del scheduler
@@ -283,7 +288,7 @@ async def dashboard():
         return HTMLResponse(
             content=(
                 "<html><body style='font-family: sans-serif; padding: 40px;'>"
-                "<h1>APURISK 1.0 está iniciando…</h1>"
+                "<h1>APURISK OSINT está iniciando…</h1>"
                 "<p>El primer ciclo del scheduler aún no completa. "
                 "Recarga en unos segundos.</p>"
                 "<p><a href='/api/status'>Ver estado del scheduler</a></p>"
@@ -322,7 +327,9 @@ async def status():
         }
 
     return {
-        "service": "APURISK 1.0 — OSINT Perú",
+        "service": "APURISK OSINT — Strategic Intelligence for Complex Decisions",
+        "powered_by": "THALOS",
+        "future_product": "APURISK SIM-CRISIS",
         "version": SERVER_VERSION,
         "now": now_pe_iso(),
         "refresh_seconds": REFRESH_SECONDS,

@@ -84,6 +84,9 @@ a:hover { text-decoration: underline; }
 .app-header { display:flex; align-items:center; justify-content:space-between; padding: 14px 28px; border-bottom: 1px solid var(--bg-3); background: linear-gradient(180deg,#0c1220 0%, var(--bg-1) 100%); position:sticky; top:0; z-index:1000;}
 .brand { display:flex; align-items:center; gap:14px;}
 .brand .logo { width:38px; height:38px; border-radius:8px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display:flex; align-items:center; justify-content:center; font-weight:800; color:#0a0e1a; font-size:18px;}
+.brand .brand-thalos-mark { width: 42px; height: 42px; color: var(--accent); flex-shrink: 0; }
+.brand-by-dash { font-size: 9px; color: var(--txt-3); letter-spacing: 1.5px; margin-top: 2px; text-transform: uppercase; }
+.brand-by-dash strong { color: var(--accent); }
 .brand .name { font-weight:700; letter-spacing:.5px; font-size:16px;}
 .brand .sub { font-size:11px; color:var(--txt-2); letter-spacing:1px; text-transform:uppercase;}
 .live-status { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--txt-2);}
@@ -2024,7 +2027,8 @@ def generar_dashboard_html(
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="refresh" content="{refresh_seconds}" />
-<title>APURISK 1.0 — Plataforma OSINT de Riesgos Políticos · Perú</title>
+<title>APURISK OSINT · Analyst Dashboard — Strategic Intelligence for Complex Decisions</title>
+<link rel="icon" type="image/svg+xml" href="/static/thalos-mark.svg" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 <!-- Chart.js v4 (UMD bundle) -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -2038,10 +2042,11 @@ def generar_dashboard_html(
 
 <header class="app-header">
   <div class="brand">
-    <div class="logo">A</div>
+    <img src="/static/thalos-mark.svg" alt="THALOS" class="brand-thalos-mark" />
     <div>
-      <div class="name">APURISK 1.0</div>
-      <div class="sub">Plataforma OSINT · Riesgos Políticos · Perú</div>
+      <div class="name">APURISK OSINT</div>
+      <div class="sub">Strategic Intelligence for Complex Decisions</div>
+      <div class="brand-by-dash">by <strong>THALOS</strong></div>
     </div>
   </div>
   <div class="refresh-mod">
@@ -2855,8 +2860,18 @@ python -m http.server 8080 --directory output
 </div>
 
 <footer>
-  APURISK 1.0 · Construido como prototipo de consultoría política · Fuentes: medios peruanos, portales del Estado (Defensoría, Congreso, JNE),
-  Twitter/X (API v2) y datasets internacionales (GDELT/ACLED) · Mapa: OpenStreetMap · En modo demo se utilizan datos sintéticos representativos.
+  <div style="display:flex; flex-direction:column; align-items:center; gap:14px; padding:18px 0;">
+    <img src="/static/thalos-logo.svg" alt="THALOS — Strategic Intelligence for Complex Decisions"
+         style="width:280px; max-width:70vw; height:auto; color:var(--txt-1); opacity:0.92;" />
+    <div>
+      <strong>APURISK OSINT</strong> · Strategic Intelligence for Complex Decisions ·
+      Powered by <strong>THALOS</strong> · Próximamente: <em>APURISK SIM-CRISIS</em>
+    </div>
+    <div style="font-size: 10px; color: var(--txt-3); max-width: 760px; text-align: center; line-height: 1.5;">
+      Fuentes: medios peruanos, portales del Estado (SUTRAN/MTC, Defensoría, Congreso, JNE),
+      Twitter/X (API v2) y datasets internacionales (GDELT/ACLED) · Mapa: CartoDB / OpenStreetMap
+    </div>
+  </div>
 </footer>
 
 <script>

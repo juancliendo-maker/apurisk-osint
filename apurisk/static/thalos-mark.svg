@@ -1,0 +1,10 @@
+<!-- THALOS · Mark (solo globo, sin texto). Para favicons, iconos pequeños y avatares. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="THALOS">
+  <circle cx="60" cy="60" r="56" fill="currentColor"/>
+  <g fill="none" stroke="#0f172a" stroke-width="4" stroke-linecap="round">
+    <path d="M 18 44 Q 60 22 102 44"/>
+    <path d="M 16 60 Q 60 38 104 60"/>
+    <path d="M 16 76 Q 60 100 104 76"/>
+    <path d="M 18 92 Q 60 116 102 92"/>
+  </g>
+</svg>

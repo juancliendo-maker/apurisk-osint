@@ -106,7 +106,7 @@ def generar_reporte_diario_pdf(output_path: str, snapshot: dict) -> str:
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm,
-        title="APURISK · Reporte Diario", author="APURISK 1.0",
+        title="APURISK · Reporte Diario", author="APURISK OSINT · THALOS",
     )
     e = _styles()
     story = []
@@ -332,7 +332,7 @@ def generar_reporte_semanal_pdf(output_path: str, snapshots_dir: str) -> str:
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm,
-        title="APURISK · Reporte Semanal", author="APURISK 1.0",
+        title="APURISK · Reporte Semanal", author="APURISK OSINT · THALOS",
     )
     e = _styles()
     story = []

@@ -1,0 +1,36 @@
+<!--
+  THALOS · Strategic Intelligence for Complex Decisions
+  Logo principal (horizontal). Versión SVG inline para uso web y reportes.
+
+  IMPORTANTE: Este archivo es una aproximación SVG al diseño oficial.
+  Si tienes el archivo definitivo (PNG/SVG con el globo y ondas),
+  reemplaza el contenido de este archivo manteniendo el viewBox.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" role="img" aria-label="THALOS — Strategic Intelligence for Complex Decisions">
+  <!-- Fondo transparente; se usa con CSS color: white o color: var(--brand) -->
+  <g fill="currentColor">
+    <!-- THAL -->
+    <text x="20" y="105" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+          font-size="105" font-weight="900" letter-spacing="2">THAL</text>
+
+    <!-- Globo (orbe en lugar de la O) -->
+    <circle cx="425" cy="73" r="48" fill="currentColor"/>
+    <g fill="none" stroke="#0f172a" stroke-width="3.5" stroke-linecap="round">
+      <!-- Ondas/meridianos -->
+      <path d="M 380 60 Q 425 40 470 60"/>
+      <path d="M 378 73 Q 425 55 472 73"/>
+      <path d="M 378 86 Q 425 105 472 86"/>
+      <path d="M 380 96 Q 425 115 470 96"/>
+    </g>
+
+    <!-- S -->
+    <text x="478" y="105" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+          font-size="105" font-weight="900" letter-spacing="2">S</text>
+
+    <!-- Tagline -->
+    <text x="20" y="160" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+          font-size="26" font-weight="400" letter-spacing="0.5">
+      Strategic Intelligence for Complex Decisions
+    </text>
+  </g>
+</svg>
