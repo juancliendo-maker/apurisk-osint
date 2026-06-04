@@ -628,6 +628,66 @@ def _esc_html(s: str) -> str:
     return escape(str(s))
 
 
+# =====================================================================
+# STRATEGIC DAILY BRIEF PDF — Producto C-level Capa 2 (Strategic Intelligence)
+# =====================================================================
+@app.get("/api/strategic/daily-brief/pdf")
+async def strategic_daily_brief_pdf(
+    force: bool = Query(False, description="Forzar regeneración del brief subyacente"),
+):
+    """Strategic Daily Brief PDF — primer producto Capa 2 (Strategic Intelligence).
+
+    Genera un PDF C-level de 4 páginas derivado del Executive Brief
+    (mismo motor que /executive HTML). Si el cache 4h está fresco lo usa;
+    si no, regenera. Con `?force=true` ignora el cache.
+
+    Estructura del PDF:
+      1) Portada: Score Nacional + EDI + tendencias
+      2) Executive Insight + Status nacional ampliado
+      3) Top 5 Amenazas Prioritarias con narrativa LLM
+      4) Outlook 30 días + Implicancias operacionales
+    """
+    try:
+        # 1. Obtener brief (cache o regenerar)
+        if force or not _executive_cache_es_fresca():
+            brief = _generar_executive_brief_fresh()
+        else:
+            with open(EXECUTIVE_CACHE_FILE, encoding="utf-8") as f:
+                brief = json.load(f)
+
+        # 2. Generar PDF
+        try:
+            from .reports.strategic_daily_brief import generar_strategic_daily_brief_pdf
+        except ImportError:
+            from apurisk.reports.strategic_daily_brief import generar_strategic_daily_brief_pdf
+
+        fecha_str = (brief.get("generado_en", "") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
+        fecha_compact = fecha_str.replace("-", "")
+        filename = f"strategic-daily-brief-peru-{fecha_compact}.pdf"
+        output_path = os.path.join(REPORTS_DIR, filename)
+
+        generar_strategic_daily_brief_pdf(output_path, brief)
+
+        return FileResponse(
+            output_path,
+            media_type="application/pdf",
+            filename=filename,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error_msg": str(e),
+                "traceback": tb.splitlines()[-15:],
+            }
+        )
+
+
 @app.get("/api/edi/snapshot")
 async def edi_snapshot():
     """Estado de Derecho Index (EDI) — snapshot actual.

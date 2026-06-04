@@ -1292,8 +1292,8 @@ def _render_descargas(descargas: dict) -> str:
         escenarios · implicancias operacionales · recomendaciones accionables.
       </div>
       <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px;'>
-        <a href='#' onclick='alert("Strategic Daily Brief PDF — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
-          🌟 Strategic Daily Brief · PDF<br><small>próximamente · narrativa C-level + EDI</small>
+        <a href='/api/strategic/daily-brief/pdf' class='dl-btn-instant' style='background: linear-gradient(135deg, #A855F7 0%, #6366F1 100%);' download>
+          🌟 Reporte Diario de Riesgo Político · PDF<br><small>disponible · 2 págs · velocímetro + EDI + insight + amenazas políticas</small>
         </a>
         <a href='#' onclick='alert("Strategic Weekly Outlook — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
           📈 Strategic Weekly Outlook<br><small>próximamente · convergencias + escenarios 30d</small>
@@ -1312,10 +1312,12 @@ def _render_descargas(descargas: dict) -> str:
         </a>
       </div>
       <div style='margin-top: 12px; padding: 8px 12px; background: rgba(168,85,247,0.08); border-radius: 6px; font-size: 11px; color: var(--txt-2); line-height: 1.5;'>
-        💡 <strong style='color: #A855F7;'>Roadmap:</strong> El primer producto Strategic en
-        construcción será el <strong>Strategic Daily Brief PDF</strong>, derivado del motor
-        Executive ya operativo en la pestaña <a href='/executive' target='_blank' style='color: var(--accent);'>/executive</a>.
-        Los demás productos Strategic se irán habilitando progresivamente.
+        💡 <strong style='color: #A855F7;'>Roadmap:</strong> El primer producto Strategic real
+        — <strong>Reporte Diario de Riesgo Político · Perú</strong> — ya está disponible.
+        Deriva del motor Executive operativo en la pestaña <a href='/executive' target='_blank' style='color: var(--accent);'>/executive</a>
+        y entrega 2 páginas C-level con foco político-institucional (Congreso · JNJ · TC ·
+        gobernabilidad + crimen organizado). Los demás productos Strategic se irán habilitando
+        progresivamente.
       </div>
     </div>
     """
