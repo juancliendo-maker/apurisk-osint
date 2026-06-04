@@ -663,8 +663,9 @@ async def strategic_daily_brief_pdf(
 
         fecha_str = (brief.get("generado_en", "") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
         fecha_compact = fecha_str.replace("-", "")
-        filename = f"strategic-daily-brief-peru-{fecha_compact}.pdf"
-        output_path = os.path.join(REPORTS_DIR, filename)
+        filename = f"reporte-diario-riesgo-politico-peru-{fecha_compact}.pdf"
+        REPORTES_DIARIOS_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = str(REPORTES_DIARIOS_DIR / filename)
 
         generar_strategic_daily_brief_pdf(output_path, brief)
 
