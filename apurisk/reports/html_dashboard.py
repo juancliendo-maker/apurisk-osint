@@ -1212,22 +1212,31 @@ def _render_descargas(descargas: dict) -> str:
         Acceso para compliance y auditoría.
     """
 
-    # ============== INTRO ==============
-    intro_html = """
-    <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); border: 1px solid var(--bg-3); margin-bottom: 18px;'>
-      <h4 style='margin-bottom: 8px;'>📥 Reportes — Arquitectura de dos capas</h4>
-      <div style='color: var(--txt-1); font-size: 12.5px; line-height: 1.65;'>
-        Los productos están organizados en <strong style='color: var(--accent);'>dos capas
-        complementarias</strong> según audiencia y propósito:
-        <ul style='margin: 8px 0 0 18px; padding: 0;'>
-          <li><strong>OSINT REPORTS</strong> — para analistas técnicos: hechos, evidencias, datos.</li>
-          <li><strong>STRATEGIC INTELLIGENCE</strong> — para C-level: narrativa interpretativa, escenarios, recomendaciones.</li>
-        </ul>
-      </div>
+    # ============== TÍTULO PRINCIPAL — Centro de Descargas ==============
+    titulo_html = """
+    <div style='text-align: center; margin: 8px 0 32px 0;'>
+      <h1 style='
+        font-size: 44px;
+        font-weight: 800;
+        color: #ffffff;
+        letter-spacing: 2px;
+        margin: 0;
+        text-shadow: 0 2px 12px rgba(59,130,246,0.35);
+        text-transform: uppercase;
+      '>Centro de Descargas</h1>
+      <div style='
+        width: 80px;
+        height: 3px;
+        background: linear-gradient(90deg, var(--accent), #A855F7);
+        margin: 14px auto 0;
+        border-radius: 2px;
+      '></div>
     </div>
     """
 
     # ============== CAPA 1: OSINT REPORTS ==============
+    # Se eliminan los botones de 24h Coverage HTML y Alert Feed HTML
+    # (innecesarios — los formatos Word cubren el caso de uso).
     osint_html = """
     <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), rgba(56,189,248,0.04)); border: 1px solid var(--accent); border-left: 4px solid var(--accent); margin-bottom: 18px;'>
       <h4 style='color: var(--accent); margin-bottom: 4px;'>
@@ -1244,14 +1253,8 @@ def _render_descargas(descargas: dict) -> str:
         <a href='/api/reporte/semanal/pdf' target='_blank' class='dl-btn-instant' style='background: #38BDF8;'>
           📅 Weekly OSINT Brief · PDF<br><small>agregado semanal · tendencias 7 días</small>
         </a>
-        <a href='/api/reporte/24h/html' target='_blank' class='dl-btn-instant' style='background: #0EA5E9;'>
-          📰 24h Coverage · HTML<br><small>imprimible · feed último día</small>
-        </a>
         <a href='/api/reporte/24h/docx' target='_blank' class='dl-btn-instant' style='background: #0284C7;'>
           📝 24h Coverage · Word<br><small>editable · listo para anexos</small>
-        </a>
-        <a href='/api/reporte/alertas/html' target='_blank' class='dl-btn-instant' style='background: #0EA5E9;'>
-          🚨 Alert Feed · HTML<br><small>feed crítico + acciones</small>
         </a>
         <a href='/api/reporte/alertas/docx' target='_blank' class='dl-btn-instant' style='background: #0284C7;'>
           🚨 Alert Feed · Word<br><small>con acciones recomendadas</small>
@@ -1259,6 +1262,21 @@ def _render_descargas(descargas: dict) -> str:
         <a href='#' onclick='alert("Caso OSINT Analysis: usa la pestaña Análisis de Caso para generar uno con tu hipótesis."); return false;' class='dl-btn-instant' style='background: #0369A1;'>
           🔬 Caso OSINT Analysis<br><small>on-demand · ver pestaña Análisis</small>
         </a>
+      </div>
+    </div>
+    """
+
+    # ============== INTRO (descriptivo, ahora va DESPUÉS de las dos capas) ==============
+    intro_html = """
+    <div class='download-section' style='background: linear-gradient(135deg, var(--bg-1), var(--bg-2)); border: 1px solid var(--bg-3); margin-top: 24px; margin-bottom: 18px;'>
+      <h4 style='margin-bottom: 8px;'>📥 Arquitectura de dos capas</h4>
+      <div style='color: var(--txt-1); font-size: 12.5px; line-height: 1.65;'>
+        Los productos están organizados en <strong style='color: var(--accent);'>dos capas
+        complementarias</strong> según audiencia y propósito:
+        <ul style='margin: 8px 0 0 18px; padding: 0;'>
+          <li><strong>OSINT REPORTS</strong> — para analistas técnicos: hechos, evidencias, datos.</li>
+          <li><strong>STRATEGIC INTELLIGENCE</strong> — para C-level: narrativa interpretativa, escenarios, recomendaciones.</li>
+        </ul>
       </div>
     </div>
     """
@@ -1392,7 +1410,12 @@ def _render_descargas(descargas: dict) -> str:
         </details>
         """
 
-    return intro_html + osint_html + strategic_html + archivo_html + debug_html
+    # ORDEN FINAL pedido por el usuario:
+    # 1. Título grande "Centro de Descargas"
+    # 2. Capa OSINT
+    # 3. Capa Strategic Intelligence
+    # 4. Todo lo demás (intro descriptivo, archivo histórico, archivos técnicos)
+    return titulo_html + osint_html + strategic_html + intro_html + archivo_html + debug_html
 
 
 def _render_fuentes_estado(articulos, conflictos, proyectos, tweets) -> str:
