@@ -56,28 +56,14 @@ def _fecha_estilizada(fecha_iso: str) -> tuple:
 
 def _cargar_logo_full(target_height_pt: float = 60):
     """Carga el wordmark THALOS completo (texto + globo + tagline).
-    Intenta SVG (svglib) primero; cae a PNG si no disponible.
-    Devuelve un Image/Drawing flowable o None si nada disponible.
+
+    Estrategia: PNG primero (predecible en cualquier entorno). svglib quedó
+    descartado tras observar en producción que renderizaba sólo el globo y
+    desconfiguraba el texto "THALOS".
     """
     base = PathLib(__file__).parent.parent / "static"
-    # 1) SVG vía svglib (calidad vectorial — funciona en Render)
-    try:
-        from svglib.svglib import svg2rlg
-        svg_path = base / "thalos-full-logo.svg"
-        if svg_path.exists():
-            d = svg2rlg(str(svg_path))
-            if d and d.width and d.height:
-                scale = target_height_pt / d.height
-                d.scale(scale, scale)
-                d.width *= scale
-                d.height *= scale
-                return d
-    except Exception:
-        pass
-    # 2) PNG fallback (sandbox / sin svglib)
     png_path = base / "thalos-full-logo.png"
     if png_path.exists():
-        # Calcular dimensiones manteniendo proporción
         try:
             from PIL import Image as PILImage
             with PILImage.open(str(png_path)) as im:
@@ -268,8 +254,35 @@ ACTORES_CANONICOS = [
     # Crimen organizado (institucional)
     {"canonico": "Policía Nacional", "rol": "PNP · Seguridad ciudadana",
      "aliases": ["pnp", "policía nacional", "policia nacional",
-                  "comandante general pnp"],
+                  "comandante general pnp", "operativo policial"],
      "tipo": "seguridad"},
+    # Actores genéricos (fallback cuando narrativas no nombran personas)
+    {"canonico": "Poder Ejecutivo", "rol": "Gobierno central",
+     "aliases": ["ejecutivo", "gobierno central", "gobierno nacional",
+                  "consejo de ministros", "palacio de gobierno"],
+     "tipo": "ejecutivo"},
+    {"canonico": "Congreso de la República", "rol": "Poder Legislativo",
+     "aliases": ["congreso de la república", "congreso de la republica",
+                  "pleno del congreso", "bancadas opositoras",
+                  "mayoría parlamentaria", "mayoria parlamentaria",
+                  "comisión permanente", "comision permanente"],
+     "tipo": "congreso"},
+    {"canonico": "Sector Energía y Minas", "rol": "MINEM · Sector extractivo",
+     "aliases": ["sector minero", "sector energético", "sector energetico",
+                  "operadores mineros", "concesiones mineras"],
+     "tipo": "ejecutivo"},
+    {"canonico": "Comunidades del Corredor Sur",
+     "rol": "Federaciones campesinas · Sur",
+     "aliases": ["comunidades", "federaciones campesinas", "corredor sur",
+                  "rondas campesinas", "dirigentes comunales"],
+     "tipo": "social"},
+    {"canonico": "SUNARP", "rol": "Registro de propiedad",
+     "aliases": ["sunarp", "registros públicos", "registros publicos"],
+     "tipo": "regulatorio"},
+    {"canonico": "Minería ilegal", "rol": "Actor delictivo",
+     "aliases": ["minería ilegal", "mineria ilegal", "minería informal",
+                  "mineros informales", "minería artesanal"],
+     "tipo": "delictivo"},
 ]
 
 # Orden de severidad para color del badge "Exposición"
@@ -855,13 +868,14 @@ def _pagina_1_diagnostico(brief, styles):
 
     # ========== TABLA ACTORES POLÍTICOS (24h) ==========
     actores = _extraer_actores_politicos(brief, top_n=6)
+    # Siempre mostramos la sección (con mensaje si no hay matches en narrativas)
+    elems.append(Spacer(1, 0.35 * cm))
+    elems.append(Paragraph("ACTORES POLÍTICOS EN RIESGO", styles["section_label"]))
+    elems.append(Paragraph(
+        "Principales actores vinculados a las amenazas de las últimas 24 h",
+        styles["section_title"]
+    ))
     if actores:
-        elems.append(Spacer(1, 0.35 * cm))
-        elems.append(Paragraph("👥 ACTORES POLÍTICOS EN RIESGO", styles["section_label"]))
-        elems.append(Paragraph(
-            "Principales actores vinculados a las amenazas de las últimas 24 h",
-            styles["section_title"]
-        ))
 
         nivel_color = {
             "CRÍTICA": CRITICO, "ALTO": ELEVADO,
@@ -919,6 +933,28 @@ def _pagina_1_diagnostico(brief, styles):
             ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ]))
         elems.append(actores_tbl)
+    else:
+        # Sin matches concretos — mensaje contextual
+        msg_card = Table(
+            [[Paragraph(
+                "<i>Sin actores nominales destacados en el ciclo de 24 h. "
+                "Las amenazas activas no identifican individuos concretos; "
+                "el análisis sigue centrado en dinámicas institucionales y "
+                "estructurales (ver Top 5 amenazas en página 2).</i>",
+                ParagraphStyle("noact", fontSize=9, leading=12,
+                                 textColor=TXT_SECONDARY, alignment=TA_LEFT)
+            )]],
+            colWidths=[17 * cm],
+        )
+        msg_card.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), BG_LIGHT),
+            ("BOX", (0, 0), (-1, -1), 0.3, BORDER),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        elems.append(msg_card)
 
     elems.append(PageBreak())
     return elems
@@ -946,17 +982,54 @@ def _pagina_2_lectura(brief, styles):
     status = brief.get("status_nacional", {}) or {}
 
     def _dim_card(label, data, accent=ACCENT):
+        """Card de dimensión — usa tabla interna para evitar overlap entre el
+        número grande y los textos circundantes."""
         sc = _fmt_num(data.get("score"), 1)
         et = data.get("etiqueta", "—")
         col = _color(data.get("color"))
         sub = data.get("sublabel", "")
-        return Paragraph(
-            f"<font color='#475569' size='7'><b>{label.upper()}</b></font><br/>"
-            f"<font color='{col.hexval()}' size='18'><b>{sc}</b></font>"
-            f"  <font color='{col.hexval()}' size='9'><b>{et}</b></font><br/>"
-            f"<font color='#94a3b8' size='7'>{sub}</font>",
-            ParagraphStyle("dim", fontSize=8, leading=11, alignment=TA_LEFT)
-        )
+
+        # Tabla interna 3 filas verticales con leading propio
+        rows = [
+            [Paragraph(
+                f"<font color='#475569'><b>{label.upper()}</b></font>",
+                ParagraphStyle("dl1", fontSize=7, leading=9, alignment=TA_LEFT)
+            )],
+            # Fila valor: número grande + etiqueta lado a lado en sub-tabla
+            [Table(
+                [[
+                    Paragraph(
+                        f"<font color='{col.hexval()}'><b>{sc}</b></font>",
+                        ParagraphStyle("dl2a", fontSize=18, leading=20, alignment=TA_LEFT)
+                    ),
+                    Paragraph(
+                        f"<font color='{col.hexval()}'><b>{et}</b></font>",
+                        ParagraphStyle("dl2b", fontSize=10, leading=12, alignment=TA_LEFT)
+                    ),
+                ]],
+                colWidths=[1.7 * cm, 4.5 * cm],
+                style=TableStyle([
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ])
+            )],
+            [Paragraph(
+                f"<font color='#94a3b8'>{sub}</font>",
+                ParagraphStyle("dl3", fontSize=7, leading=9, alignment=TA_LEFT)
+            )],
+        ]
+        return Table(rows, colWidths=[6.3 * cm], style=TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (0, 0), 0),
+            ("BOTTOMPADDING", (0, 0), (0, 0), 0),
+            ("TOPPADDING", (0, 1), (0, 1), 1),
+            ("BOTTOMPADDING", (0, 1), (0, 1), 1),
+        ]))
 
     op = status.get("operacional_nacional", {}) or {}
     minero = status.get("minero", {}) or {}
@@ -971,7 +1044,7 @@ def _pagina_2_lectura(brief, styles):
              _dim_card("Criminal · Seguridad", crim)],
         ],
         colWidths=[8.5 * cm, 8.5 * cm],
-        rowHeights=[1.85 * cm, 1.85 * cm],
+        rowHeights=[2.2 * cm, 2.2 * cm],
     )
     grid.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), BG_LIGHT),
@@ -1021,14 +1094,19 @@ def _pagina_2_lectura(brief, styles):
                 f"<font color='#475569' size='8.5'>{narr}</font>",
                 ParagraphStyle("a_body", fontSize=8.5, leading=11)
             ),
+            # Score: nowrap garantiza que entero + decimal van juntos
             Paragraph(
-                f"<font color='{col.hexval()}' size='15'><b>{score}</b></font>",
-                ParagraphStyle("a_score", alignment=TA_CENTER, fontSize=15)
+                f"<font color='{col.hexval()}' size='13'><b>{score}</b></font>",
+                ParagraphStyle("a_score", alignment=TA_CENTER,
+                                 fontSize=13, leading=15,
+                                 wordWrap=None, allowOrphans=1,
+                                 allowWidows=1)
             ),
         ])
 
     if rows:
-        amen_tbl = Table(rows, colWidths=[0.9 * cm, 14.6 * cm, 1.5 * cm])
+        # Columna score más ancha (2.2cm) — clave para que el decimal no salte
+        amen_tbl = Table(rows, colWidths=[0.9 * cm, 13.9 * cm, 2.2 * cm])
         amen_tbl.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("ROWBACKGROUNDS", (0, 0), (-1, -1), [BG_LIGHT, colors.white]),
