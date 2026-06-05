@@ -445,8 +445,9 @@ class GaugeRiesgo(Flowable):
     def draw(self):
         d = Drawing(self.width, self.height)
         cx = self.width / 2
-        cy = self.height * 0.30  # centro hacia abajo (semicírculo arriba)
-        r_outer = min(self.width / 2 * 0.88, self.height * 0.95)
+        # Centro del arco más arriba para dejar espacio al score+etiqueta debajo
+        cy = self.height * 0.45
+        r_outer = min(self.width / 2 * 0.85, self.height * 0.50)
         r_inner = r_outer * 0.62
 
         # 5 bandas de 36° cada una (de 180° a 0°)
@@ -490,17 +491,15 @@ class GaugeRiesgo(Flowable):
         d.add(Circle(cx, cy, 0.18 * cm, fillColor=NAVY_BRAND,
                        strokeColor=colors.white, strokeWidth=1.2))
 
-        # Texto central: score grande + etiqueta
+        # Score y etiqueta DEBAJO del semicírculo (no encima)
         score_color = self._color_by_score()
-        d.add(String(cx, cy - 0.85 * cm, f"{self.score:.0f}",
-                       fontName="Helvetica-Bold", fontSize=24,
+        # Score: a 0.65cm desde abajo
+        d.add(String(cx, 0.65 * cm, f"{self.score:.0f}",
+                       fontName="Helvetica-Bold", fontSize=22,
                        fillColor=score_color, textAnchor="middle"))
-        d.add(String(cx, cy - 1.35 * cm, f"/ 100",
-                       fontName="Helvetica", fontSize=8,
-                       fillColor=TXT_TERTIARY, textAnchor="middle"))
-        # Etiqueta debajo del gauge (más abajo)
-        d.add(String(cx, 0.25 * cm, self.etiqueta.upper(),
-                       fontName="Helvetica-Bold", fontSize=11,
+        # Etiqueta: en la base, claramente separada
+        d.add(String(cx, 0.10 * cm, self.etiqueta.upper(),
+                       fontName="Helvetica-Bold", fontSize=8,
                        fillColor=score_color, textAnchor="middle"))
 
         d.drawOn(self.canv, 0, 0)
@@ -649,11 +648,11 @@ def _build_styles():
             fontName="Helvetica-Bold", alignment=TA_LEFT, spaceAfter=2,
             spaceBefore=8,
         ),
-        # TÍTULOS DE SECCIÓN — 14pt NAVY_BRAND (azul navy visible)
+        # TÍTULOS DE SECCIÓN — 13pt NAVY_BRAND (azul navy visible)
         "section_title": ParagraphStyle(
             "section_title", parent=base["Heading2"],
-            fontSize=14, leading=17, textColor=NAVY_BRAND,
-            fontName="Helvetica-Bold", alignment=TA_LEFT, spaceAfter=4,
+            fontSize=13, leading=15, textColor=NAVY_BRAND,
+            fontName="Helvetica-Bold", alignment=TA_LEFT, spaceAfter=3,
         ),
         "body": ParagraphStyle(
             "body", parent=base["BodyText"],
@@ -679,10 +678,10 @@ def _build_styles():
 def _header_compacto(styles, fecha_iso: str):
     """Logo full a la izquierda; fecha estilizada (06:00 hrs · DÍA · DD MES AAAA)
     en card navy a la derecha."""
-    # Logo completo (SVG si svglib; PNG fallback; texto procedural último recurso)
-    logo = _cargar_logo_full(target_height_pt=48)
+    # Logo completo — más grande y visible (PNG oficial del wordmark)
+    logo = _cargar_logo_full(target_height_pt=65)
     if logo is None:
-        logo = ThalosTextLogo(font_size=20, color=NAVY)
+        logo = ThalosTextLogo(font_size=24, color=NAVY)
 
     # Fecha estilizada en card navy (compacta)
     hora, dia, fecha_larga = _fecha_estilizada(fecha_iso)
@@ -759,7 +758,7 @@ def _pagina_1_diagnostico(brief, styles):
     score = float(op.get("score") or 0)
     etiqueta = str(op.get("etiqueta", "—"))
 
-    gauge = GaugeRiesgo(score, etiqueta, ancho=7.2 * cm, alto=4.4 * cm)
+    gauge = GaugeRiesgo(score, etiqueta, ancho=5.0 * cm, alto=3.8 * cm)
 
     # Cards derechas: tendencia país + EDI
     tp = status.get("tendencia_pais", {}) or {}
@@ -782,16 +781,14 @@ def _pagina_1_diagnostico(brief, styles):
     delta_sign = "+" if delta > 0 else ("" if delta == 0 else "")
     tendencia_card_rows = [
         [_p(f"<font color='#94a3b8'><b>RIESGO POLÍTICO · PERÚ</b></font>",
-            dict(fontSize=7, leading=9, alignment=TA_LEFT))],
-        [_p(f"<font color='#475569'>Tendencia 4 semanas</font>",
-            dict(fontSize=8, leading=10, alignment=TA_LEFT, spaceAfter=2))],
+            dict(fontSize=6.5, leading=8, alignment=TA_LEFT))],
         # Fila valor: flecha + delta lado a lado (tabla interna)
         [Table(
             [[_p(f"<font color='{t_color.hexval()}'><b>{arrow}</b></font>",
-                  dict(fontSize=26, leading=28, alignment=TA_CENTER)),
+                  dict(fontSize=20, leading=22, alignment=TA_CENTER)),
               _p(f"<font color='{t_color.hexval()}'><b>{delta_sign}{delta:.1f}</b></font>",
-                  dict(fontSize=18, leading=20, alignment=TA_LEFT))]],
-            colWidths=[1.5 * cm, 4.5 * cm],
+                  dict(fontSize=15, leading=17, alignment=TA_LEFT))]],
+            colWidths=[1.1 * cm, 3.4 * cm],
             style=TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -800,59 +797,55 @@ def _pagina_1_diagnostico(brief, styles):
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
             ])
         )],
-        [_p(f"<font color='{t_color.hexval()}'><b>{tp.get('etiqueta', '—')}</b></font>",
-            dict(fontSize=9, leading=11, alignment=TA_LEFT, spaceBefore=2))],
-        [_p(f"<font color='#94a3b8'>↑ Mayor = mayor riesgo</font>",
-            dict(fontSize=7, leading=9, alignment=TA_LEFT, spaceBefore=2))],
+        [_p(f"<font color='{t_color.hexval()}'><b>{tp.get('etiqueta', '—')}</b></font>  "
+            f"<font color='#94a3b8' size='7'>↑ Mayor = mayor riesgo</font>",
+            dict(fontSize=8.5, leading=10, alignment=TA_LEFT, spaceBefore=1))],
     ]
-    tendencia_card = Table(tendencia_card_rows, colWidths=[6 * cm])
+    tendencia_card = Table(tendencia_card_rows, colWidths=[5 * cm])
     tendencia_card.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), BG_LIGHT),
         ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-        ("TOPPADDING", (0, 0), (0, 0), 8),
-        ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (0, 0), 5),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 5),
     ]))
 
     # === CARD EDI (filas separadas) ===
     if edi_score is not None:
         edi_card_rows = [
             [_p(f"<font color='#a855f7'><b>ESTADO DE DERECHO · EDI</b></font>",
-                dict(fontSize=7, leading=9, alignment=TA_LEFT))],
-            [_p(f"<font color='#475569'>Salud institucional</font>",
-                dict(fontSize=8, leading=10, alignment=TA_LEFT, spaceAfter=2))],
-            # Fila valor: número grande + /100
+                dict(fontSize=6.5, leading=8, alignment=TA_LEFT))],
+            # Fila valor: número grande + /100 + etiqueta inline
             [Table(
                 [[_p(f"<font color='{edi_color.hexval()}'><b>{edi_score:.0f}</b></font>",
-                      dict(fontSize=26, leading=28, alignment=TA_LEFT)),
-                  _p(f"<font color='#94a3b8'>/ 100</font>",
-                      dict(fontSize=10, leading=12, alignment=TA_LEFT))]],
-                colWidths=[1.6 * cm, 4.4 * cm],
+                      dict(fontSize=20, leading=22, alignment=TA_LEFT)),
+                  _p(f"<font color='#94a3b8'>/100</font>  "
+                     f"<font color='{edi_color.hexval()}'><b>{edi_etiq}</b></font>",
+                      dict(fontSize=9, leading=11, alignment=TA_LEFT))]],
+                colWidths=[1.2 * cm, 3.3 * cm],
                 style=TableStyle([
-                    ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 0),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 0),
                     ("TOPPADDING", (0, 0), (-1, -1), 0),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
                 ])
             )],
-            [_p(f"<font color='{edi_color.hexval()}'><b>{edi_etiq}</b></font>  "
-                f"<font color='#475569'>{edi_arrow} {edi_delta:+.1f} (7d)</font>",
-                dict(fontSize=9, leading=11, alignment=TA_LEFT, spaceBefore=2))],
-            [_p(f"<font color='#94a3b8'>↑ Mayor = mejor</font>",
-                dict(fontSize=7, leading=9, alignment=TA_LEFT, spaceBefore=2))],
+            [_p(f"<font color='#475569'>{edi_arrow} {edi_delta:+.1f} (7d)</font>  "
+                f"<font color='#94a3b8' size='7'>↑ Mayor = mejor</font>",
+                dict(fontSize=8.5, leading=10, alignment=TA_LEFT, spaceBefore=1))],
         ]
-        edi_card = Table(edi_card_rows, colWidths=[6 * cm])
+        edi_card = Table(edi_card_rows, colWidths=[5 * cm])
         edi_card.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5f3ff")),
             ("BOX", (0, 0), (-1, -1), 0.5, PROSPECTIVO),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 12),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-            ("TOPPADDING", (0, 0), (0, 0), 8),
-            ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (0, 0), 5),
+            ("BOTTOMPADDING", (0, -1), (-1, -1), 5),
         ]))
     else:
         edi_card = Paragraph(
@@ -863,21 +856,21 @@ def _pagina_1_diagnostico(brief, styles):
     # Apilar las dos cards verticalmente
     cards_right = Table(
         [[tendencia_card], [edi_card]],
-        colWidths=[7.5 * cm],
+        colWidths=[5.5 * cm],
     )
     cards_right.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (0, 0), 0),
-        ("TOPPADDING", (0, 1), (0, 1), 6),
+        ("TOPPADDING", (0, 1), (0, 1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
 
-    # Tabla principal: velocímetro + cards
+    # Tabla principal: velocímetro + cards (compacta)
     main_block = Table(
         [[gauge, cards_right]],
-        colWidths=[7.5 * cm, 9.5 * cm],
+        colWidths=[5.3 * cm, 11.7 * cm],
     )
     main_block.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -902,19 +895,19 @@ def _pagina_1_diagnostico(brief, styles):
 
     insight_card = Table(
         [[Paragraph(f"<i>{texto}</i>",
-                     ParagraphStyle("insight_t", fontSize=10.5, leading=14,
+                     ParagraphStyle("insight_t", fontSize=10, leading=13,
                                      textColor=NAVY, fontName="Helvetica",
                                      alignment=TA_JUSTIFY,
-                                     leftIndent=8, rightIndent=8))]],
+                                     leftIndent=6, rightIndent=6))]],
         colWidths=[17 * cm],
     )
     insight_card.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), BG_INSIGHT),
-        ("LINEBEFORE", (0, 0), (0, 0), 3, ACCENT),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LINEBEFORE", (0, 0), (0, 0), 3, NAVY_BRAND),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
     elems.append(insight_card)
 
@@ -922,21 +915,24 @@ def _pagina_1_diagnostico(brief, styles):
     cats = insight.get("categorias_detectadas", []) or []
     if cats:
         chips = "  ".join(
-            f"<font color='{ACCENT.hexval()}' size='8'>● {c}</font>"
+            f"<font color='{NAVY_BRAND.hexval()}' size='7.5'>● {c}</font>"
             for c in cats[:6]
         )
-        elems.append(Spacer(1, 0.15 * cm))
+        elems.append(Spacer(1, 0.1 * cm))
         elems.append(Paragraph(
             f"<font size='7' color='#94a3b8'><b>SEÑALES ANALÍTICAS</b></font>  {chips}",
             styles["meta"]
         ))
 
     # ========== TABLA ACTORES POLÍTICOS (24h) ==========
-    actores = _extraer_actores_politicos(brief, top_n=6)
-    # Siempre mostramos la sección (con mensaje si no hay matches en narrativas)
-    elems.append(Spacer(1, 0.35 * cm))
-    elems.append(Paragraph("ACTORES POLÍTICOS EN RIESGO", styles["section_label"]))
-    elems.append(Paragraph(
+    # Usamos KeepTogether para que el bloque completo (label+título+tabla)
+    # no se rompa entre páginas dejando filas huérfanas.
+    from reportlab.platypus import KeepTogether
+    actores = _extraer_actores_politicos(brief, top_n=5)
+    elems.append(Spacer(1, 0.2 * cm))
+    actores_block = []
+    actores_block.append(Paragraph("ACTORES POLÍTICOS EN RIESGO", styles["section_label"]))
+    actores_block.append(Paragraph(
         "Principales actores vinculados a las amenazas de las últimas 24 h",
         styles["section_title"]
     ))
@@ -947,16 +943,16 @@ def _pagina_1_diagnostico(brief, styles):
             "MEDIO": MODERADO, "BAJO": BAJO,
         }
 
-        # Header
+        # Header — tamaños y wordings que no se parten en 2 líneas
         header_row = [
-            Paragraph("<font color='#94a3b8' size='7'><b>ACTOR</b></font>",
-                       ParagraphStyle("h1", fontSize=7, alignment=TA_LEFT)),
-            Paragraph("<font color='#94a3b8' size='7'><b>ROL INSTITUCIONAL</b></font>",
-                       ParagraphStyle("h2", fontSize=7, alignment=TA_LEFT)),
-            Paragraph("<font color='#94a3b8' size='7'><b>VINCULADO A</b></font>",
-                       ParagraphStyle("h3", fontSize=7, alignment=TA_LEFT)),
-            Paragraph("<font color='#94a3b8' size='7'><b>EXPOSICIÓN</b></font>",
-                       ParagraphStyle("h4", fontSize=7, alignment=TA_CENTER)),
+            Paragraph("<font color='#94a3b8' size='6.5'><b>ACTOR</b></font>",
+                       ParagraphStyle("h1", fontSize=6.5, alignment=TA_LEFT)),
+            Paragraph("<font color='#94a3b8' size='6.5'><b>ROL</b></font>",
+                       ParagraphStyle("h2", fontSize=6.5, alignment=TA_LEFT)),
+            Paragraph("<font color='#94a3b8' size='6.5'><b>VINCULADO A</b></font>",
+                       ParagraphStyle("h3", fontSize=6.5, alignment=TA_LEFT)),
+            Paragraph("<font color='#94a3b8' size='6.5'><b>RIESGO</b></font>",
+                       ParagraphStyle("h4", fontSize=6.5, alignment=TA_CENTER)),
         ]
         rows = [header_row]
         for a in actores:
@@ -983,21 +979,21 @@ def _pagina_1_diagnostico(brief, styles):
 
         actores_tbl = Table(
             rows,
-            colWidths=[4.0 * cm, 4.5 * cm, 6.5 * cm, 2.0 * cm],
+            colWidths=[3.9 * cm, 4.2 * cm, 6.4 * cm, 2.5 * cm],
         )
         actores_tbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), BG_CARD),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [BG_LIGHT, colors.white]),
             ("BOX", (0, 0), (-1, -1), 0.4, BORDER),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.5, ACCENT),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, NAVY_BRAND),
             ("LINEBELOW", (0, 1), (-1, -2), 0.3, BORDER),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("LEFTPADDING", (0, 0), (-1, -1), 8),
             ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ]))
-        elems.append(actores_tbl)
+        actores_block.append(actores_tbl)
     else:
         # Sin matches concretos — mensaje contextual
         msg_card = Table(
@@ -1019,7 +1015,10 @@ def _pagina_1_diagnostico(brief, styles):
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
-        elems.append(msg_card)
+        actores_block.append(msg_card)
+
+    # KeepTogether garantiza que el bloque label+título+tabla no se parte
+    elems.append(KeepTogether(actores_block))
 
     elems.append(PageBreak())
     return elems
