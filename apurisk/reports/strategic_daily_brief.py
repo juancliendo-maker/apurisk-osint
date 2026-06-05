@@ -289,39 +289,104 @@ ACTORES_CANONICOS = [
 NIVEL_ORDEN = {"CRÍTICA": 5, "ALTO": 4, "MEDIO": 3, "BAJO": 2, "": 1}
 
 
+# Mapeo de categoría de amenaza → actores inferidos por defecto
+# Si una amenaza pertenece a una categoría conocida, sus actores quedan vinculados
+# aunque la narrativa no los nombre explícitamente.
+CATEGORIA_A_ACTORES = {
+    # Conflictos sociales / comunidades
+    "conflictos sociales": ["Comunidades del Corredor Sur", "Sector Energía y Minas"],
+    "conflicto social": ["Comunidades del Corredor Sur", "Sector Energía y Minas"],
+    "conflictos sociales / corredor sur": ["Comunidades del Corredor Sur"],
+    # Estabilidad gubernamental / política
+    "estabilidad gubernamental": ["Poder Ejecutivo", "Congreso de la República"],
+    "estabilidad gubernamental / seguridad": ["Poder Ejecutivo", "Policía Nacional"],
+    "política": ["Poder Ejecutivo", "Congreso de la República"],
+    "politica": ["Poder Ejecutivo", "Congreso de la República"],
+    "gobernabilidad": ["Poder Ejecutivo", "Congreso de la República"],
+    # Conflicto institucional
+    "conflicto institucional": ["Congreso de la República", "Poder Ejecutivo"],
+    # Seguridad
+    "seguridad": ["Policía Nacional", "Ministerio del Interior"],
+    "seguridad ciudadana": ["Policía Nacional", "Ministerio del Interior"],
+    # Crimen organizado
+    "crimen organizado": ["Policía Nacional", "Minería ilegal"],
+    "narco": ["Policía Nacional"],
+    # Constitucional / Judicial
+    "constitucional": ["Tribunal Constitucional", "Congreso de la República"],
+    "judicial": ["Junta Nacional de Justicia", "Poder Judicial"],
+    # Regulatorio
+    "regulatorio": ["SUNARP", "Sector Energía y Minas"],
+    # Electoral
+    "electoral": ["JNE", "Congreso de la República"],
+}
+
+
+def _actor_canonico_por_nombre(nombre: str) -> dict:
+    """Devuelve el dict canónico de ACTORES_CANONICOS por nombre."""
+    for ad in ACTORES_CANONICOS:
+        if ad["canonico"] == nombre:
+            return ad
+    return None
+
+
 def _extraer_actores_politicos(brief: dict, top_n: int = 6) -> list:
-    """Extrae actores políticos mencionados en las amenazas del brief.
+    """Extrae actores políticos vinculados a las amenazas del brief.
+
+    Doble estrategia:
+      1) Match por alias en nombre+narrativa (preciso — pesa más en ranking)
+      2) Match por categoría de la amenaza (inferencia — garantiza cobertura
+         cuando las narrativas LLM hablan en abstracto)
 
     Returns:
-        Lista de dicts con {canonico, rol, vinculado_a, nivel, n_menciones}.
-        Ordenada por (peor nivel, n_menciones).
+        Lista de dicts {canonico, rol, peor_amenaza, peor_nivel, n_menciones}.
     """
     amenazas = brief.get("amenazas_prioritarias", []) or []
-    contador = {}  # canonico -> {info, peor_amenaza, n_menciones, peor_nivel}
+    contador = {}
+
+    def _bump(canonico: str, info: dict, nivel: str, nombre_amen: str,
+              peso: int = 1):
+        if canonico not in contador:
+            contador[canonico] = {
+                "canonico": canonico,
+                "rol": info["rol"] if info else canonico,
+                "tipo": info["tipo"] if info else "ejecutivo",
+                "n_menciones": 0,
+                "peor_nivel": "",
+                "peor_amenaza": "",
+            }
+        contador[canonico]["n_menciones"] += peso
+        score = NIVEL_ORDEN.get(nivel, 0)
+        if score > NIVEL_ORDEN.get(contador[canonico]["peor_nivel"], 0):
+            contador[canonico]["peor_nivel"] = nivel or "MEDIO"
+            contador[canonico]["peor_amenaza"] = nombre_amen[:60]
 
     for a in amenazas:
-        blob = f"{a.get('nombre', '')} {a.get('narrativa', '')}".lower()
+        nombre = str(a.get("nombre", ""))
+        narrativa = str(a.get("narrativa", ""))
+        categoria = str(a.get("categoria", "")).lower().strip()
         nivel = str(a.get("nivel", "")).upper()
-        score_nivel = NIVEL_ORDEN.get(nivel, 0)
+        blob = f"{nombre} {narrativa}".lower()
 
+        # Estrategia 1 — alias directo (peso 2, más confiable)
         for actor_def in ACTORES_CANONICOS:
             if any(alias in blob for alias in actor_def["aliases"]):
-                key = actor_def["canonico"]
-                if key not in contador:
-                    contador[key] = {
-                        "canonico": key,
-                        "rol": actor_def["rol"],
-                        "tipo": actor_def["tipo"],
-                        "n_menciones": 0,
-                        "peor_nivel": "",
-                        "peor_amenaza": "",
-                    }
-                contador[key]["n_menciones"] += 1
-                if score_nivel > NIVEL_ORDEN.get(contador[key]["peor_nivel"], 0):
-                    contador[key]["peor_nivel"] = nivel or "MEDIO"
-                    contador[key]["peor_amenaza"] = str(a.get("nombre", ""))[:60]
+                _bump(actor_def["canonico"], actor_def, nivel, nombre, peso=2)
 
-    # Ordenar por (severidad, n_menciones)
+        # Estrategia 2 — inferencia por categoría (peso 1)
+        # Probar match exacto de categoría y también palabras clave en categoría
+        cat_matches = []
+        if categoria in CATEGORIA_A_ACTORES:
+            cat_matches = CATEGORIA_A_ACTORES[categoria]
+        else:
+            # Match parcial (ej: "Estabilidad gubernamental / Seguridad")
+            for key, val in CATEGORIA_A_ACTORES.items():
+                if key in categoria:
+                    cat_matches.extend(val)
+        # Dedup
+        for actor_canonico in set(cat_matches):
+            info = _actor_canonico_por_nombre(actor_canonico)
+            _bump(actor_canonico, info, nivel, nombre, peso=1)
+
     items = list(contador.values())
     items.sort(
         key=lambda x: (NIVEL_ORDEN.get(x["peor_nivel"], 0), x["n_menciones"]),
@@ -694,7 +759,7 @@ def _pagina_1_diagnostico(brief, styles):
     score = float(op.get("score") or 0)
     etiqueta = str(op.get("etiqueta", "—"))
 
-    gauge = GaugeRiesgo(score, etiqueta, ancho=9 * cm, alto=5.6 * cm)
+    gauge = GaugeRiesgo(score, etiqueta, ancho=7.2 * cm, alto=4.4 * cm)
 
     # Cards derechas: tendencia país + EDI
     tp = status.get("tendencia_pais", {}) or {}
@@ -812,7 +877,7 @@ def _pagina_1_diagnostico(brief, styles):
     # Tabla principal: velocímetro + cards
     main_block = Table(
         [[gauge, cards_right]],
-        colWidths=[9.2 * cm, 7.8 * cm],
+        colWidths=[7.5 * cm, 9.5 * cm],
     )
     main_block.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
