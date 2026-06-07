@@ -1293,7 +1293,10 @@ def _render_descargas(descargas: dict) -> str:
       </div>
       <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px;'>
         <a href='/api/strategic/daily-brief/pdf' class='dl-btn-instant' style='background: linear-gradient(135deg, #A855F7 0%, #6366F1 100%);' download>
-          🌟 Reporte Diario de Riesgo Político · PDF<br><small>disponible · 2 págs · velocímetro + EDI + insight + amenazas políticas</small>
+          🌟 Reporte Diario de Riesgo Político · PDF<br><small>06:00 hrs · 2 págs · velocímetro + EDI + insight + amenazas políticas</small>
+        </a>
+        <a href='/api/strategic/last-24h/pdf' class='dl-btn-instant' style='background: linear-gradient(135deg, #EC4899 0%, #A855F7 100%);' download>
+          ⏱ Reporte 24h On-Demand · PDF<br><small>cualquier hora · sin cache · ventana móvil últimas 24 h</small>
         </a>
         <a href='#' onclick='alert("Strategic Weekly Outlook — en construcción. Próximamente."); return false;' class='dl-btn-instant' style='background: #6B7280; opacity: 0.7;'>
           📈 Strategic Weekly Outlook<br><small>próximamente · convergencias + escenarios 30d</small>

@@ -675,33 +675,41 @@ def _build_styles():
 # =====================================================================
 # HEADER COMPACTO — Logo THALOS completo izquierda + fecha estilizada derecha
 # =====================================================================
-def _header_compacto(styles, fecha_iso: str):
-    """Logo full a la izquierda; fecha estilizada (06:00 hrs · DÍA · DD MES AAAA)
-    en card navy a la derecha."""
-    # Logo completo — más grande y visible (PNG oficial del wordmark)
-    logo = _cargar_logo_full(target_height_pt=65)
+def _header_compacto(styles, fecha_iso: str, etiqueta_corte: str = "FECHA DE CORTE"):
+    """Logo full a la izquierda; fecha estilizada en card navy a la derecha.
+
+    Header balanceado: logo y card de fecha tienen altura visual equivalente
+    (~70pt = ~2.5 cm), alineados al centro vertical, con tamaños proporcionados.
+
+    Args:
+        etiqueta_corte: label superior del card de fecha. Por defecto "FECHA DE CORTE"
+                       (reporte 06:00 AM). El reporte 24h on-demand usa "GENERADO".
+    """
+    # Logo: altura 70pt — proporcionada con la card de fecha
+    logo = _cargar_logo_full(target_height_pt=70)
     if logo is None:
         logo = ThalosTextLogo(font_size=24, color=NAVY)
 
-    # Fecha estilizada en card navy (compacta)
+    # Fecha estilizada en card navy — alturas alineadas con el logo
     hora, dia, fecha_larga = _fecha_estilizada(fecha_iso)
     fecha_card = Table(
         [
             [Paragraph(
-                f"<font color='#94a3b8' size='6.5'><b>FECHA DE CORTE</b></font>",
-                ParagraphStyle("fc1", fontSize=6.5, leading=8, alignment=TA_CENTER)
+                f"<font color='#cbd5e1'><b>{etiqueta_corte}</b></font>",
+                ParagraphStyle("fc1", fontSize=7, leading=9, alignment=TA_CENTER)
             )],
             [Paragraph(
-                f"<font color='#ffffff' size='14'><b>{hora}</b></font>  "
-                f"<font color='#a3a3a3' size='9'>· {dia}</font>",
-                ParagraphStyle("fc2", fontSize=14, leading=16, alignment=TA_CENTER)
+                f"<font color='#ffffff'><b>{hora}</b></font>  "
+                f"<font color='#cbd5e1'>· {dia}</font>",
+                ParagraphStyle("fc2", fontSize=13, leading=15, alignment=TA_CENTER)
             )],
             [Paragraph(
-                f"<font color='#ffffff' size='11'><b>{fecha_larga}</b></font>",
+                f"<font color='#ffffff'><b>{fecha_larga}</b></font>",
                 ParagraphStyle("fc4", fontSize=11, leading=13, alignment=TA_CENTER)
             )],
         ],
         colWidths=[6 * cm],
+        rowHeights=[0.55 * cm, 0.7 * cm, 0.65 * cm],  # alto total ~1.9cm ≈ 70pt
     )
     fecha_card.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), NAVY_BRAND),
@@ -709,18 +717,19 @@ def _header_compacto(styles, fecha_iso: str):
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 8),
         ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (0, 0), 6),
-        ("BOTTOMPADDING", (0, 0), (0, 0), 0),
-        ("TOPPADDING", (0, -1), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, -1), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
     ]))
 
+    # Header: ambos elementos centrados verticalmente al medio del rowHeight
     header = Table(
         [[logo, fecha_card]],
-        colWidths=[11 * cm, 6 * cm],
+        colWidths=[10.5 * cm, 6.5 * cm],
+        rowHeights=[2.0 * cm],   # forzar misma altura visual para ambos
     )
     header.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (0, 0), "LEFT"),
         ("ALIGN", (1, 0), (1, 0), "RIGHT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
@@ -733,23 +742,34 @@ def _header_compacto(styles, fecha_iso: str):
 # =====================================================================
 # PÁGINA 1 — DIAGNÓSTICO
 # =====================================================================
-def _pagina_1_diagnostico(brief, styles):
+def _pagina_1_diagnostico(brief, styles, modo: str = "diario"):
+    """Página 1 del reporte.
+
+    Args:
+        modo: "diario" (Reporte 06:00 — header dice FECHA DE CORTE) o
+              "on_demand_24h" (Reporte 24h — header dice GENERADO + hora real)
+    """
     elems = []
 
     fecha = (brief.get("generado_en", "") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
 
     # Header compacto (logo full + fecha card)
-    elems.append(_header_compacto(styles, fecha))
+    etiqueta = "GENERADO" if modo == "on_demand_24h" else "FECHA DE CORTE"
+    elems.append(_header_compacto(styles, fecha, etiqueta_corte=etiqueta))
     elems.append(Spacer(1, 0.15 * cm))
     # Línea separadora — NAVY_BRAND azul navy reconocible
     elems.append(HRFlowable(width="100%", color=NAVY_BRAND, thickness=1.5,
                               spaceBefore=0, spaceAfter=4))
 
-    # Título principal + subtítulo NAVY grande
-    elems.append(Paragraph("Reporte Diario de Riesgo Político · Perú",
-                            styles["report_title"]))
-    elems.append(Paragraph("Inteligencia Estratégica · Producto C-Level",
-                            styles["report_subtitle"]))
+    # Título principal + subtítulo NAVY grande (cambian según modo)
+    if modo == "on_demand_24h":
+        titulo = "Reporte 24 h de Riesgo Político · Perú"
+        subtitulo = "Inteligencia Estratégica · On-Demand · Producto C-Level"
+    else:
+        titulo = "Reporte Diario de Riesgo Político · Perú"
+        subtitulo = "Inteligencia Estratégica · Producto C-Level"
+    elems.append(Paragraph(titulo, styles["report_title"]))
+    elems.append(Paragraph(subtitulo, styles["report_subtitle"]))
     elems.append(Spacer(1, 0.15 * cm))
 
     # ========== VELOCÍMETRO + CARDS DERECHA ==========
@@ -1247,49 +1267,89 @@ def _pagina_2_lectura(brief, styles):
 # =====================================================================
 # FUNCIÓN PRINCIPAL
 # =====================================================================
-def generar_strategic_daily_brief_pdf(output_path: str, brief: dict) -> str:
-    """Genera el Reporte Diario de Riesgo Político · Perú (2 páginas A4).
+def generar_strategic_daily_brief_pdf(
+    output_path: str,
+    brief: dict,
+    modo: str = "diario",
+) -> str:
+    """Genera el Reporte de Riesgo Político · Perú (2 páginas A4).
 
     Args:
         output_path: ruta absoluta del PDF de salida.
         brief: dict del Executive Brief (sintetizar_executive_brief).
+        modo: "diario" — Reporte 06:00 AM (default)
+              "on_demand_24h" — Reporte 24h on-demand (etiqueta GENERADO + hora)
 
     Returns:
         output_path para encadenar.
     """
-    fecha = (brief.get("generado_en", "") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
+    generado_en = brief.get("generado_en", "") or datetime.now().isoformat()
+    fecha = generado_en[:10] or datetime.now().strftime("%Y-%m-%d")
+
+    # Hora real para el footer (solo se usa cuando es on_demand_24h)
+    try:
+        hora_real = datetime.fromisoformat(generado_en.replace("Z", "")).strftime("%H:%M")
+    except Exception:
+        hora_real = datetime.now().strftime("%H:%M")
 
     try:
         from .branding import thalos_pdf_metadata, BRAND_COMPANY, BRAND_TAGLINE
     except ImportError:
         from apurisk.reports.branding import thalos_pdf_metadata, BRAND_COMPANY, BRAND_TAGLINE
 
+    if modo == "on_demand_24h":
+        titulo_pdf = f"Reporte 24h de Riesgo Político · Perú · {fecha} {hora_real}"
+        subject_pdf = f"Inteligencia Estratégica On-Demand — {fecha} {hora_real}"
+        footer_marca = "REPORTE 24H ON-DEMAND"
+    else:
+        titulo_pdf = f"Reporte Diario de Riesgo Político · Perú · {fecha}"
+        subject_pdf = f"Inteligencia Estratégica — {fecha}"
+        footer_marca = "REPORTE DIARIO 06:00"
+
     meta = thalos_pdf_metadata()
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         leftMargin=2 * cm, rightMargin=2 * cm,
         topMargin=1.6 * cm, bottomMargin=1.4 * cm,
-        title=f"Reporte Diario de Riesgo Político · Perú · {fecha}",
+        title=titulo_pdf,
         author=meta["author"],
         creator=meta["creator"],
-        subject=f"Inteligencia Estratégica — {fecha}",
+        subject=subject_pdf,
     )
 
     styles = _build_styles()
     story = []
-    story.extend(_pagina_1_diagnostico(brief, styles))
+    story.extend(_pagina_1_diagnostico(brief, styles, modo=modo))
     story.extend(_pagina_2_lectura(brief, styles))
 
+    # ===== FOOTER CORPORATIVO FIJO =====
+    # Mismo footer en TODAS las páginas — identifica producto, marca y confidencialidad
     def _on_page(canvas, doc):
         canvas.saveState()
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(TXT_TERTIARY)
-        footer = (
-            f"{BRAND_COMPANY} · {BRAND_TAGLINE}  ·  "
-            f"Página {doc.page} de 2  ·  "
-            f"Generado {fecha} · CONFIDENCIAL · USO INTERNO"
+        # Línea separadora superior del footer
+        canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
+        canvas.setLineWidth(0.4)
+        canvas.line(2 * cm, 1.25 * cm, A4[0] - 2 * cm, 1.25 * cm)
+        # Texto del footer en dos líneas para mejor legibilidad
+        canvas.setFont("Helvetica-Bold", 7)
+        canvas.setFillColor(TXT_SECONDARY)
+        canvas.drawCentredString(
+            A4[0] / 2, 1.0 * cm,
+            f"THALOS · Strategic Intelligence for Complex Decisions"
         )
-        canvas.drawCentredString(A4[0] / 2, 0.8 * cm, footer)
+        canvas.setFont("Helvetica", 6.5)
+        canvas.setFillColor(TXT_TERTIARY)
+        if modo == "on_demand_24h":
+            linea_inf = (
+                f"{footer_marca}  ·  Página {doc.page} de 2  ·  "
+                f"Generado {fecha} {hora_real} hrs  ·  CONFIDENCIAL · USO INTERNO"
+            )
+        else:
+            linea_inf = (
+                f"{footer_marca}  ·  Página {doc.page} de 2  ·  "
+                f"Generado {fecha}  ·  CONFIDENCIAL · USO INTERNO"
+            )
+        canvas.drawCentredString(A4[0] / 2, 0.55 * cm, linea_inf)
         canvas.restoreState()
 
     doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)

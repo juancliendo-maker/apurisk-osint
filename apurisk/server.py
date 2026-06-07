@@ -689,6 +689,62 @@ async def strategic_daily_brief_pdf(
         )
 
 
+# =====================================================================
+# REPORTE 24H ON-DEMAND PDF — Capa 2 Strategic, sin cache, manual
+# =====================================================================
+@app.get("/api/strategic/last-24h/pdf")
+async def strategic_last_24h_pdf():
+    """Reporte 24 h de Riesgo Político · Perú — On-demand manual.
+
+    Diferencias respecto al Reporte 06:00 AM:
+      - Siempre regenera el brief (sin cache), datos frescos del momento
+      - Cabecera dice "GENERADO HH:MM" en lugar de "FECHA DE CORTE 06:00"
+      - Título: "Reporte 24h de Riesgo Político · Perú"
+      - Footer: REPORTE 24H ON-DEMAND
+      - Mismo motor LLM + misma plantilla visual (consistencia de marca)
+
+    Caso de uso: briefing express durante el día sin esperar al ciclo siguiente.
+    """
+    try:
+        # SIEMPRE regenerar — sin cache (es la diferencia clave con el Daily)
+        brief = _generar_executive_brief_fresh()
+
+        try:
+            from .reports.strategic_daily_brief import generar_strategic_daily_brief_pdf
+        except ImportError:
+            from apurisk.reports.strategic_daily_brief import generar_strategic_daily_brief_pdf
+
+        now = datetime.now()
+        fecha_compact = now.strftime("%Y%m%d-%H%M")
+        filename = f"reporte-24h-riesgo-politico-peru-{fecha_compact}.pdf"
+        REPORTES_DIARIOS_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = str(REPORTES_DIARIOS_DIR / filename)
+
+        # Asegurar que el brief lleva la hora actual de generación (para cabecera)
+        brief["generado_en"] = now.isoformat()
+
+        generar_strategic_daily_brief_pdf(output_path, brief, modo="on_demand_24h")
+
+        return FileResponse(
+            output_path,
+            media_type="application/pdf",
+            filename=filename,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error_msg": str(e),
+                "traceback": tb.splitlines()[-15:],
+            }
+        )
+
+
 @app.get("/api/edi/snapshot")
 async def edi_snapshot():
     """Estado de Derecho Index (EDI) — snapshot actual.
