@@ -662,11 +662,30 @@ def ejecutar_score_paralelo(
     }
 
 
+def _dict_a_namespace(d):
+    """Convierte un dict a un objeto con atributos accesibles via dot notation.
+
+    El motor v1 (calcular_riesgo_global) accede a a.title, a.summary, c.raw
+    como atributos. El snapshot de producción los guarda como dicts. Esta
+    función hace la conversión en O(1) sin copiar estructuras anidadas.
+    """
+    import types
+    if d is None:
+        return types.SimpleNamespace()
+    if not isinstance(d, dict):
+        return d  # ya es objeto, devolvemos tal cual
+    return types.SimpleNamespace(**d)
+
+
 def _calcular_v1_desde_snapshot(snapshot: dict, config: dict | None) -> dict | None:
     """Intenta invocar calcular_riesgo_global (v1) usando datos del snapshot.
 
-    Si el snapshot no trae los inputs necesarios (artículos + temas +
-    conflictos + pesos), devuelve None y la comparación se hace sin v1.
+    El snapshot de producción serializa los artículos y conflictos como
+    listas de DICTS, pero v1 espera objetos con atributos (a.title, c.raw).
+    Por eso convertimos a SimpleNamespace antes de invocar.
+
+    Si el snapshot no trae los inputs necesarios, devuelve None y la
+    comparación paralela se hace sin v1.
     """
     try:
         try:
@@ -674,14 +693,29 @@ def _calcular_v1_desde_snapshot(snapshot: dict, config: dict | None) -> dict | N
         except ImportError:
             from apurisk.analyzers.risk_score import calcular_riesgo_global
 
-        articulos = (
+        # Artículos: dicts → SimpleNamespace para que a.title funcione
+        articulos_raw = (
             snapshot.get("articulos")
             or snapshot.get("articles")
             or snapshot.get("noticias")
             or []
         )
+        articulos = [_dict_a_namespace(a) for a in articulos_raw]
+
         temas = snapshot.get("temas") or {"conteos": {}}
-        conflictos = snapshot.get("conflictos") or []
+
+        # Conflictos: dicts → SimpleNamespace para que c.raw funcione.
+        # Si el conflicto no trae campo `raw`, lo agregamos vacío.
+        conflictos_raw = snapshot.get("conflictos") or []
+        conflictos = []
+        for c in conflictos_raw:
+            if isinstance(c, dict):
+                if "raw" not in c:
+                    c = {**c, "raw": {}}
+                conflictos.append(_dict_a_namespace(c))
+            else:
+                conflictos.append(c)
+
         cfg = config or {}
         pesos = cfg.get("indicadores_riesgo", {
             "estabilidad_gobierno": 0.16,
@@ -698,7 +732,14 @@ def _calcular_v1_desde_snapshot(snapshot: dict, config: dict | None) -> dict | N
             "presion_economica": 0.03,
         })
         return calcular_riesgo_global(articulos, temas, conflictos, pesos)
-    except Exception:
+    except Exception as e:
+        # Log silencioso pero NO consumimos el error: lo logueamos por print
+        # para que aparezca en stdout de Render y podamos diagnosticar futuras
+        # incompatibilidades del schema del snapshot.
+        try:
+            print(f"  [v2.comparacion] v1 falló: {type(e).__name__}: {e}")
+        except Exception:
+            pass
         return None
 
 
