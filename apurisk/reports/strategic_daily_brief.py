@@ -743,193 +743,94 @@ def _header_compacto(styles, fecha_iso: str, etiqueta_corte: str = "FECHA DE COR
 # PÁGINA 1 — DIAGNÓSTICO
 # =====================================================================
 def _pagina_1_diagnostico(brief, styles, modo: str = "diario"):
-    """Página 1 del reporte.
+    """Página 1 del reporte — usa componentes de Plantilla Madre v1.0.
 
     Args:
         modo: "diario" (Reporte 06:00 — header dice FECHA DE CORTE) o
               "on_demand_24h" (Reporte 24h — header dice GENERADO + hora real)
     """
+    # Import de la Plantilla Madre (componentes canónicos)
+    try:
+        from .plantilla_madre import (
+            header_canonico, linea_separadora_navy,
+            bloque_visual_riesgo, card_insight as pm_card_insight,
+            estilos_canonicos, label_bloque_visual, color_por_token,
+        )
+    except ImportError:
+        from apurisk.reports.plantilla_madre import (
+            header_canonico, linea_separadora_navy,
+            bloque_visual_riesgo, card_insight as pm_card_insight,
+            estilos_canonicos, label_bloque_visual, color_por_token,
+        )
+
     elems = []
-
     fecha = (brief.get("generado_en", "") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
+    pm_styles = estilos_canonicos()
 
-    # Header compacto (logo full + fecha card)
+    # ============== HEADER CANÓNICO ==============
     etiqueta = "GENERADO" if modo == "on_demand_24h" else "FECHA DE CORTE"
-    elems.append(_header_compacto(styles, fecha, etiqueta_corte=etiqueta))
+    elems.append(header_canonico(fecha, etiqueta_corte=etiqueta))
     elems.append(Spacer(1, 0.15 * cm))
-    # Línea separadora — NAVY_BRAND azul navy reconocible
-    elems.append(HRFlowable(width="100%", color=NAVY_BRAND, thickness=1.5,
-                              spaceBefore=0, spaceAfter=4))
+    elems.append(linea_separadora_navy(thickness=1.5,
+                                          space_before=0, space_after=4))
 
-    # Título principal + subtítulo NAVY grande (cambian según modo)
+    # ============== TÍTULO H1 + SUBTÍTULO H2 ==============
     if modo == "on_demand_24h":
-        titulo = "Reporte 24 h de Riesgo Político · Perú"
-        subtitulo = "Inteligencia Estratégica · On-Demand · Producto C-Level"
+        titulo = "Reporte 24h de Riesgo Político · Perú"
+        subtitulo = "Inteligencia Estratégica · On Demand"
     else:
         titulo = "Reporte Diario de Riesgo Político · Perú"
         subtitulo = "Inteligencia Estratégica · Producto C-Level"
-    elems.append(Paragraph(titulo, styles["report_title"]))
-    elems.append(Paragraph(subtitulo, styles["report_subtitle"]))
-    elems.append(Spacer(1, 0.15 * cm))
+    elems.append(Paragraph(titulo, pm_styles["h1"]))
+    elems.append(Paragraph(subtitulo, pm_styles["h2"]))
+    elems.append(Spacer(1, 0.2 * cm))
 
-    # ========== VELOCÍMETRO + CARDS DERECHA ==========
+    # ============== ESCENARIO DE RIESGO — Bloque Visual ==============
+    # SIEMPRE va antes del Insight: el cliente VE antes de LEER
+    producto = "on_demand_24h" if modo == "on_demand_24h" else "daily"
+    elems.append(Paragraph(
+        f"◇ {label_bloque_visual(producto)}",
+        pm_styles["label"]
+    ))
+    elems.append(Paragraph("Visualización ejecutiva del ciclo actual",
+                             pm_styles["h3"]))
+
+    # Extraer datos del brief
     status = brief.get("status_nacional", {}) or {}
     op = status.get("operacional_nacional", {}) or {}
     score = float(op.get("score") or 0)
-    etiqueta = str(op.get("etiqueta", "—"))
+    score_etiq = str(op.get("etiqueta", "—"))
+    score_color = color_por_token(op.get("color"))
 
-    gauge = GaugeRiesgo(score, etiqueta, ancho=5.0 * cm, alto=3.8 * cm)
-
-    # Cards derechas: tendencia país + EDI
     tp = status.get("tendencia_pais", {}) or {}
-    delta = tp.get("delta", 0) or 0
-    arrow = str(tp.get("arrow", "→"))
-    t_color = _color(tp.get("color"))
-
     edi = brief.get("edi", {}) or {}
-    edi_score = edi.get("edi")
-    edi_etiq = edi.get("etiqueta", "—")
-    edi_color = _color(edi.get("color"))
     edi_t = edi.get("tendencia", {}) or {}
-    edi_delta = edi_t.get("delta_7d", 0)
-    edi_arrow = edi_t.get("arrow", "→")
 
-    # === CARD TENDENCIA (filas separadas, sin overlap) ===
-    def _p(text, style_kwargs):
-        return Paragraph(text, ParagraphStyle("p", **style_kwargs))
-
-    delta_sign = "+" if delta > 0 else ("" if delta == 0 else "")
-    tendencia_card_rows = [
-        [_p(f"<font color='#94a3b8'><b>RIESGO POLÍTICO · PERÚ</b></font>",
-            dict(fontSize=6.5, leading=8, alignment=TA_LEFT))],
-        # Fila valor: flecha + delta lado a lado (tabla interna)
-        [Table(
-            [[_p(f"<font color='{t_color.hexval()}'><b>{arrow}</b></font>",
-                  dict(fontSize=20, leading=22, alignment=TA_CENTER)),
-              _p(f"<font color='{t_color.hexval()}'><b>{delta_sign}{delta:.1f}</b></font>",
-                  dict(fontSize=15, leading=17, alignment=TA_LEFT))]],
-            colWidths=[1.1 * cm, 3.4 * cm],
-            style=TableStyle([
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-            ])
-        )],
-        [_p(f"<font color='{t_color.hexval()}'><b>{tp.get('etiqueta', '—')}</b></font>  "
-            f"<font color='#94a3b8' size='7'>↑ Mayor = mayor riesgo</font>",
-            dict(fontSize=8.5, leading=10, alignment=TA_LEFT, spaceBefore=1))],
-    ]
-    tendencia_card = Table(tendencia_card_rows, colWidths=[5 * cm])
-    tendencia_card.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), BG_LIGHT),
-        ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (0, 0), 5),
-        ("BOTTOMPADDING", (0, -1), (-1, -1), 5),
-    ]))
-
-    # === CARD EDI (filas separadas) ===
-    if edi_score is not None:
-        edi_card_rows = [
-            [_p(f"<font color='#a855f7'><b>ESTADO DE DERECHO · EDI</b></font>",
-                dict(fontSize=6.5, leading=8, alignment=TA_LEFT))],
-            # Fila valor: número grande + /100 + etiqueta inline
-            [Table(
-                [[_p(f"<font color='{edi_color.hexval()}'><b>{edi_score:.0f}</b></font>",
-                      dict(fontSize=20, leading=22, alignment=TA_LEFT)),
-                  _p(f"<font color='#94a3b8'>/100</font>  "
-                     f"<font color='{edi_color.hexval()}'><b>{edi_etiq}</b></font>",
-                      dict(fontSize=9, leading=11, alignment=TA_LEFT))]],
-                colWidths=[1.2 * cm, 3.3 * cm],
-                style=TableStyle([
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                    ("TOPPADDING", (0, 0), (-1, -1), 0),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                ])
-            )],
-            [_p(f"<font color='#475569'>{edi_arrow} {edi_delta:+.1f} (7d)</font>  "
-                f"<font color='#94a3b8' size='7'>↑ Mayor = mejor</font>",
-                dict(fontSize=8.5, leading=10, alignment=TA_LEFT, spaceBefore=1))],
-        ]
-        edi_card = Table(edi_card_rows, colWidths=[5 * cm])
-        edi_card.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5f3ff")),
-            ("BOX", (0, 0), (-1, -1), 0.5, PROSPECTIVO),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 10),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-            ("TOPPADDING", (0, 0), (0, 0), 5),
-            ("BOTTOMPADDING", (0, -1), (-1, -1), 5),
-        ]))
-    else:
-        edi_card = Paragraph(
-            "<font color='#94a3b8' size='9'>EDI no disponible</font>",
-            ParagraphStyle("card_e2", fontSize=8, alignment=TA_LEFT)
-        )
-
-    # Apilar las dos cards verticalmente
-    cards_right = Table(
-        [[tendencia_card], [edi_card]],
-        colWidths=[5.5 * cm],
-    )
-    cards_right.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (0, 0), 0),
-        ("TOPPADDING", (0, 1), (0, 1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-    ]))
-
-    # Tabla principal: velocímetro + cards (compacta)
-    main_block = Table(
-        [[gauge, cards_right]],
-        colWidths=[5.3 * cm, 11.7 * cm],
-    )
-    main_block.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-    ]))
-    elems.append(main_block)
-
-    # ========== EXECUTIVE INSIGHT — protagonista de la mitad inferior ==========
+    elems.append(bloque_visual_riesgo(
+        score=score, etiqueta_riesgo=score_etiq, color_riesgo=score_color,
+        tendencia_arrow=str(tp.get("arrow", "→")),
+        tendencia_delta=tp.get("delta", 0) or 0,
+        tendencia_label=str(tp.get("etiqueta", "—")),
+        tendencia_color=color_por_token(tp.get("color")),
+        edi_score=int(edi.get("edi") or 0),
+        edi_etiqueta=str(edi.get("etiqueta", "—")),
+        edi_arrow=str(edi_t.get("arrow", "→")),
+        edi_delta=float(edi_t.get("delta_7d") or 0),
+        edi_color=color_por_token(edi.get("color")),
+    ))
     elems.append(Spacer(1, 0.4 * cm))
-    elems.append(Paragraph("⚡ LECTURA ESTRATÉGICA", styles["section_label"]))
-    elems.append(Paragraph("Insight del día", styles["section_title"]))
+
+    # ============== LECTURA ESTRATÉGICA — Card Insight canónico ==============
+    elems.append(Paragraph("⚡ LECTURA ESTRATÉGICA", pm_styles["label"]))
+    elems.append(Paragraph("Insight del día", pm_styles["h3"]))
 
     insight = brief.get("executive_insight", {}) or {}
     texto = insight.get("insight", "")
     if not texto:
         texto = ("Sin insight estratégico destacado en el ciclo actual. "
-                 "El cuadro político-institucional se mantiene dentro del baseline "
-                 "operativo de las últimas semanas.")
-
-    insight_card = Table(
-        [[Paragraph(f"<i>{texto}</i>",
-                     ParagraphStyle("insight_t", fontSize=10, leading=13,
-                                     textColor=NAVY, fontName="Helvetica",
-                                     alignment=TA_JUSTIFY,
-                                     leftIndent=6, rightIndent=6))]],
-        colWidths=[17 * cm],
-    )
-    insight_card.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), BG_INSIGHT),
-        ("LINEBEFORE", (0, 0), (0, 0), 3, NAVY_BRAND),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-    ]))
-    elems.append(insight_card)
+                 "El cuadro político-institucional se mantiene dentro del "
+                 "baseline operativo de las últimas semanas.")
+    elems.append(pm_card_insight(texto))
 
     # Chips de señales analíticas (compacto)
     cats = insight.get("categorias_detectadas", []) or []
