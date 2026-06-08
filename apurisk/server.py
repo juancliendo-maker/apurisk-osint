@@ -897,28 +897,38 @@ async def scores_paralelos_dashboard():
 def _render_scores_paralelos_html(rows: list) -> str:
     """Renderiza tabla HTML simple para revisión humana."""
     if not rows:
-        body_rows = ('<tr><td colspan="9" style="padding:24px;text-align:center;color:#94a3b8;">'
+        body_rows = ('<tr><td colspan="10" style="padding:24px;text-align:center;color:#94a3b8;">'
                      'Sin datos. Ejecuta <code>POST /api/diagnostico/scores-paralelos/calcular-hoy</code> '
                      'o espera al próximo ciclo del scheduler.</td></tr>')
     else:
         body_rows = ""
         for r in rows:
+            # Helpers de formato — evita format-specifier condicional inválido
+            def _fmt(v, fmt="{:.1f}"):
+                return fmt.format(v) if isinstance(v, (int, float)) else "—"
             delta = r.get("delta_v2_v1") or 0
             delta_color = "#22c55e" if delta < 0 else "#ef4444" if delta > 5 else "#f59e0b"
             decision = r.get("revision_decision") or "pendiente"
             decision_color = {"aprobado": "#22c55e", "rechazado": "#ef4444"}.get(decision, "#94a3b8")
             conf = r.get("confidence_v2") or 0
+            s_v1   = _fmt(r.get("score_v1"))
+            s_v2   = _fmt(r.get("score_v2"))
+            s_24h  = _fmt(r.get("score_v2_24h"))
+            s_7d   = _fmt(r.get("score_v2_7d"))
+            s_30d  = _fmt(r.get("score_v2_30d"))
+            s_90d  = _fmt(r.get("score_v2_90d"))
+            s_conf = _fmt(conf, "{:.0f}")
             body_rows += f"""
             <tr style='border-bottom:1px solid #1e293b;'>
               <td style='padding:8px;font-family:monospace;color:#cbd5e1;'>{r['fecha']}</td>
-              <td style='padding:8px;text-align:right;color:#fbbf24;'>{r['score_v1']:.1f if r['score_v1'] else '—'}</td>
-              <td style='padding:8px;text-align:right;color:#60a5fa;font-weight:bold;'>{r['score_v2']:.1f if r['score_v2'] else '—'}</td>
+              <td style='padding:8px;text-align:right;color:#fbbf24;'>{s_v1}</td>
+              <td style='padding:8px;text-align:right;color:#60a5fa;font-weight:bold;'>{s_v2}</td>
               <td style='padding:8px;text-align:right;color:{delta_color};'>{delta:+.1f}</td>
-              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_24h') or '—'}</td>
-              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_7d') or '—'}</td>
-              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_30d') or '—'}</td>
-              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_90d') or '—'}</td>
-              <td style='padding:8px;text-align:right;color:#a855f7;'>{conf:.0f if conf else 0}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{s_24h}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{s_7d}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{s_30d}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{s_90d}</td>
+              <td style='padding:8px;text-align:right;color:#a855f7;'>{s_conf}</td>
               <td style='padding:8px;color:{decision_color};text-align:center;'>{decision.upper()}</td>
             </tr>
             """
