@@ -793,9 +793,11 @@ async def scores_paralelos_calcular_hoy():
         with open(snap_path, encoding="utf-8") as f:
             snapshot = json.load(f)
 
-        # Cargar config
+        # Cargar config (ruta robusta al config.yaml en apurisk/)
         import yaml
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+        from pathlib import Path as _PathCfg
+        _cfg_path = _PathCfg(__file__).parent / "config.yaml"
+        with open(str(_cfg_path), encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         # EDI actual (para integración variable)
