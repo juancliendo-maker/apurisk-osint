@@ -123,6 +123,44 @@ CREATE INDEX IF NOT EXISTS idx_reportes_cliente ON reportes_caso(cliente);
 CREATE INDEX IF NOT EXISTS idx_reportes_fecha ON reportes_caso(fecha_generacion);
 CREATE INDEX IF NOT EXISTS idx_reportes_año_mes ON reportes_caso(año, mes);
 CREATE INDEX IF NOT EXISTS idx_reportes_semana ON reportes_caso(semana_iso, año);
+
+-- =================================================================
+-- Sprint 1.1 · Score Engine v2 (validación paralela)
+-- Tabla para correr v1 y v2 en paralelo durante 7 días y comparar
+-- antes de activar v2 oficialmente como motor de scoring.
+-- =================================================================
+CREATE TABLE IF NOT EXISTS scores_paralelos (
+    fecha           TEXT PRIMARY KEY,           -- YYYY-MM-DD
+    generado_en     TEXT NOT NULL,              -- ISO timestamp de cálculo
+
+    -- Sistema v1 (legacy)
+    score_v1        REAL,                       -- 0-100
+    nivel_v1        TEXT,                       -- BAJO/MEDIO/ALTO
+
+    -- Sistema v2 (nuevo)
+    score_v2        REAL,                       -- 0-100 (score nacional general)
+    nivel_v2        TEXT,                       -- semáforo 5 niveles
+    score_v2_24h    REAL,                       -- riesgo táctico 24h
+    score_v2_7d     REAL,                       -- presión coyuntural 7d
+    score_v2_30d    REAL,                       -- tendencia operativa 30d
+    score_v2_90d    REAL,                       -- riesgo estratégico 90d
+    confidence_v2   REAL,                       -- 0-100 confianza analítica
+
+    sub_scores_v2   TEXT,                       -- JSON con 5 dimensiones
+    modificadores_v2 TEXT,                      -- JSON con detalle de factores
+
+    -- Comparación
+    delta_v2_v1     REAL,                       -- score_v2 - score_v1
+    explicacion     TEXT,                       -- breve LLM del porqué de la diferencia
+
+    -- Revisión humana (durante validación 7 días)
+    revision_humana TEXT,                       -- nota del analista
+    revision_decision TEXT,                     -- 'aprobado' | 'rechazado' | 'pendiente'
+    revision_fecha  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_scores_paralelos_fecha ON scores_paralelos(fecha);
+CREATE INDEX IF NOT EXISTS idx_scores_paralelos_decision ON scores_paralelos(revision_decision);
 """
 
 

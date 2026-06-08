@@ -590,3 +590,89 @@ salida:
   generar_html: true
   generar_docx: true
   generar_json: true
+
+# =====================================================================
+# SCORE ENGINE — Motor de cálculo del Score Riesgo Político Nacional
+# =====================================================================
+# version: "v1"  → fórmula legacy (calcular_riesgo_global en risk_score.py)
+# version: "v2"  → nueva fórmula (calcular_score_nacional_v2 en risk_score_v2.py)
+# version: "parallel" → ejecuta AMBAS y guarda en tabla scores_paralelos
+#                       (modo validación 7 días antes de activar v2 oficialmente)
+#
+# Recomendación de roll-out:
+#   1. "v1"       → producción actual (cambia automáticamente al instalar)
+#   2. "parallel" → durante 7-14 días de validación (Sprint 1.7)
+#   3. "v2"       → después de validación humana exitosa (Sprint 1.8)
+# =====================================================================
+score_engine:
+  version: "v1"   # ← arranca conservador, no rompe nada en producción
+
+  # Pesos por dimensión (Score Nacional v2) — configurables sin tocar código.
+  # Suma debe ser 1.0 exacto. Cambios aquí se aplican al siguiente ciclo
+  # de generación sin necesidad de reiniciar el servicio.
+  pesos_dimension:
+    gobernabilidad:           0.25   # Crisis gabinete, vacancia, censura, TC, JNJ
+    conflictividad_social:    0.25   # Paros, bloqueos, conflictos mineros/agrarios
+    seguridad_crimen:         0.20   # Extorsión, sicariato, narcotráfico, minería ilegal
+    economia_politica:        0.15   # Regulatorio, fiscal, conflictos inversión privada
+    relaciones_exteriores:    0.15   # Diplomacia, frontera, migración, sanciones, DD.HH.
+
+  # Peso del EDI invertido (riesgo_estado_derecho = 100 - edi) por horizonte.
+  # El Estado de Derecho se mueve más lento que el riesgo coyuntural,
+  # por eso pesa poco en 24h y más en 90d.
+  peso_edi_por_horizonte:
+    h24:  0.05   # 5%
+    h7d:  0.10   # 10%
+    h30d: 0.15   # 15%
+    h90d: 0.20   # 20%
+
+  # Decay exponencial por horizonte (lambda diario).
+  # Un evento de hace N días pesa exp(-lambda * N) respecto a hoy.
+  decay_lambda_por_horizonte:
+    h24:  0.00   # 24h: sin decay (todos los eventos pesan igual)
+    h7d:  0.15   # 7d: a 7 días pesa ~35% (exp(-0.15*7))
+    h30d: 0.05   # 30d: a 30 días pesa ~22%
+    h90d: 0.02   # 90d: a 90 días pesa ~17%
+
+  # Score Nacional General = combinación ponderada de los 4 horizontes.
+  # 60% situación inmediata (24h+7d) + 40% tendencia estructural (30d+90d).
+  # Suma debe ser 1.0 exacto.
+  peso_composite_horizonte:
+    h24:  0.30   # alerta táctica inmediata
+    h7d:  0.30   # presión coyuntural acumulada
+    h30d: 0.25   # tendencia operativa mensual
+    h90d: 0.15   # riesgo estratégico estructural
+
+  # Ventanas temporales por horizonte (días hacia atrás desde hoy)
+  ventana_dias_por_horizonte:
+    h24:  1
+    h7d:  7
+    h30d: 30
+    h90d: 90
+
+  # Umbrales semáforo 5 niveles (en lugar de los 3 actuales)
+  umbrales_semaforo:
+    bajo:            24    # 0-24
+    moderado_bajo:   44    # 25-44
+    moderado_activo: 64    # 45-64
+    alto:            79    # 65-79
+    critico:         100   # 80-100
+
+  # Suavizado temporal: score_hoy = α * calculado_hoy + (1-α) * score_ayer
+  # Excepción: si hay evento crítico (Sprint 1.6), suavizado se omite.
+  suavizado_alpha: 0.65
+
+  # Sentimiento (reducido respecto a v1)
+  # Aporta como máximo 5 puntos (vs 15 en v1), solo si avg_sent < -0.25
+  sentimiento:
+    activar: true
+    umbral_activacion: -0.25
+    aporte_max: 5
+
+  # Confidence score — componentes (Sprint 1.7)
+  confidence_pesos:
+    calidad_fuentes:           0.30
+    confirmacion_independiente: 0.25
+    consistencia_narrativa:    0.20
+    datos_historicos:          0.15
+    baja_duplicacion:          0.10

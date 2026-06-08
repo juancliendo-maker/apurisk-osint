@@ -745,6 +745,230 @@ async def strategic_last_24h_pdf():
         )
 
 
+# =====================================================================
+# SCORE ENGINE v2 — Validación paralela (Sprint 1.8)
+# =====================================================================
+@app.get("/api/diagnostico/scores-paralelos")
+async def scores_paralelos_listado(dias: int = Query(14, ge=1, le=90)):
+    """Devuelve los últimos `dias` registros de la tabla scores_paralelos.
+
+    Útil para auditar la corrida v1 vs v2 día a día durante la validación.
+    """
+    try:
+        try:
+            from .analyzers.risk_score_v2 import leer_scores_paralelos
+        except ImportError:
+            from apurisk.analyzers.risk_score_v2 import leer_scores_paralelos
+        archive = _get_archive()
+        rows = leer_scores_paralelos(archive, dias=dias)
+        return {
+            "ok": True,
+            "dias_solicitados": dias,
+            "n_filas": len(rows),
+            "registros": rows,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/diagnostico/scores-paralelos/calcular-hoy")
+async def scores_paralelos_calcular_hoy():
+    """Trigger manual: calcula v1 y v2 con el último snapshot disponible
+    y guarda la comparación en scores_paralelos.
+
+    Para usar durante la fase de validación 7-14 días sin esperar al
+    scheduler. Idempotente: si ya hay registro de hoy, lo actualiza.
+    """
+    try:
+        try:
+            from .analyzers.risk_score_v2 import ejecutar_score_paralelo
+        except ImportError:
+            from apurisk.analyzers.risk_score_v2 import ejecutar_score_paralelo
+
+        # Cargar el último snapshot disponible
+        snap_path = _ultimo_snapshot_path()
+        if not snap_path:
+            raise HTTPException(status_code=404,
+                                  detail="No hay snapshots disponibles. Ejecuta /api/refresh primero.")
+        with open(snap_path, encoding="utf-8") as f:
+            snapshot = json.load(f)
+
+        # Cargar config
+        import yaml
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        # EDI actual (para integración variable)
+        try:
+            try:
+                from .analyzers.estado_derecho_index import calcular_edi
+            except ImportError:
+                from apurisk.analyzers.estado_derecho_index import calcular_edi
+            archive = _get_archive()
+            edi_data = calcular_edi(snapshot, archive=archive, intelligence_brief=None)
+            edi_actual = edi_data.get("edi") if isinstance(edi_data, dict) else None
+        except Exception:
+            edi_actual = None
+            archive = _get_archive()
+
+        # Ejecutar paralelo
+        resultado = ejecutar_score_paralelo(
+            snapshot=snapshot,
+            archive=archive,
+            edi_actual=edi_actual,
+            config=cfg,
+            persistir=True,
+        )
+        return {
+            "ok": True,
+            "score_v1": resultado["score_v1"],
+            "score_v2_resumen": {
+                "score_nacional": resultado["score_v2"]["score_nacional"],
+                "label": resultado["score_v2"]["label"],
+                "confidence": resultado["score_v2"]["confidence"]["score"],
+                "evento_critico": resultado["score_v2"]["evento_critico"]["detectado"],
+                "n_eventos": resultado["score_v2"]["n_eventos_dedupeados"],
+            },
+            "delta_v2_v1": resultado["comparacion"]["delta_v2_v1"],
+            "persistido": resultado["persistido"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_type": type(e).__name__,
+                "error_msg": str(e),
+                "traceback": traceback.format_exc().splitlines()[-12:],
+            }
+        )
+
+
+@app.post("/api/diagnostico/scores-paralelos/{fecha}/revision")
+async def scores_paralelos_revisar(
+    fecha: str,
+    decision: str = Query(..., description="aprobado | rechazado | pendiente"),
+    nota: str = Query("", description="comentario libre del analista"),
+):
+    """Marca un día de scores_paralelos como revisado por el analista."""
+    try:
+        try:
+            from .analyzers.risk_score_v2 import marcar_revision
+        except ImportError:
+            from apurisk.analyzers.risk_score_v2 import marcar_revision
+        archive = _get_archive()
+        ok = marcar_revision(archive, fecha=fecha, decision=decision, nota=nota)
+        if not ok:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No se encontró registro para fecha={fecha} (o decisión inválida)."
+            )
+        return {"ok": True, "fecha": fecha, "decision": decision, "nota": nota}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/diagnostico/scores-paralelos", response_class=HTMLResponse)
+async def scores_paralelos_dashboard():
+    """Dashboard HTML interno con comparación v1 vs v2 día a día."""
+    try:
+        try:
+            from .analyzers.risk_score_v2 import leer_scores_paralelos
+        except ImportError:
+            from apurisk.analyzers.risk_score_v2 import leer_scores_paralelos
+        archive = _get_archive()
+        rows = leer_scores_paralelos(archive, dias=14)
+        return HTMLResponse(content=_render_scores_paralelos_html(rows))
+    except Exception as e:
+        return HTMLResponse(
+            content=f"<html><body style='font-family:monospace;background:#0f172a;color:#f8fafc;padding:40px;'>"
+                    f"<h1 style='color:#ef4444;'>Scores Paralelos · Error</h1>"
+                    f"<p>{_esc_html(str(e))}</p></body></html>",
+            status_code=500,
+        )
+
+
+def _render_scores_paralelos_html(rows: list) -> str:
+    """Renderiza tabla HTML simple para revisión humana."""
+    if not rows:
+        body_rows = ('<tr><td colspan="9" style="padding:24px;text-align:center;color:#94a3b8;">'
+                     'Sin datos. Ejecuta <code>POST /api/diagnostico/scores-paralelos/calcular-hoy</code> '
+                     'o espera al próximo ciclo del scheduler.</td></tr>')
+    else:
+        body_rows = ""
+        for r in rows:
+            delta = r.get("delta_v2_v1") or 0
+            delta_color = "#22c55e" if delta < 0 else "#ef4444" if delta > 5 else "#f59e0b"
+            decision = r.get("revision_decision") or "pendiente"
+            decision_color = {"aprobado": "#22c55e", "rechazado": "#ef4444"}.get(decision, "#94a3b8")
+            conf = r.get("confidence_v2") or 0
+            body_rows += f"""
+            <tr style='border-bottom:1px solid #1e293b;'>
+              <td style='padding:8px;font-family:monospace;color:#cbd5e1;'>{r['fecha']}</td>
+              <td style='padding:8px;text-align:right;color:#fbbf24;'>{r['score_v1']:.1f if r['score_v1'] else '—'}</td>
+              <td style='padding:8px;text-align:right;color:#60a5fa;font-weight:bold;'>{r['score_v2']:.1f if r['score_v2'] else '—'}</td>
+              <td style='padding:8px;text-align:right;color:{delta_color};'>{delta:+.1f}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_24h') or '—'}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_7d') or '—'}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_30d') or '—'}</td>
+              <td style='padding:8px;text-align:right;color:#cbd5e1;'>{r.get('score_v2_90d') or '—'}</td>
+              <td style='padding:8px;text-align:right;color:#a855f7;'>{conf:.0f if conf else 0}</td>
+              <td style='padding:8px;color:{decision_color};text-align:center;'>{decision.upper()}</td>
+            </tr>
+            """
+    return f"""
+    <html><head><title>THALOS · Scores Paralelos</title>
+    <style>
+      body {{ font-family: -apple-system, sans-serif; background: #0f172a; color: #f8fafc;
+              padding: 32px; margin: 0; }}
+      h1 {{ color: #60a5fa; margin-bottom: 4px; }}
+      .subtitle {{ color: #94a3b8; margin-bottom: 24px; font-size: 13px; }}
+      table {{ width: 100%; border-collapse: collapse; background: #1e293b;
+                border-radius: 8px; overflow: hidden; }}
+      th {{ background: #1e3a8a; color: white; padding: 12px 8px; text-align: left;
+            font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }}
+      td {{ font-size: 13px; }}
+      .actions {{ margin-top: 24px; padding: 16px; background: #1e293b; border-radius: 8px; }}
+      code {{ background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #a855f7; }}
+    </style>
+    </head><body>
+      <h1>📊 Scores Paralelos · Validación v1 ↔ v2</h1>
+      <div class="subtitle">Comparación diaria del motor de scoring durante validación paralela. Marca cada día como aprobado/rechazado para liberar v2 a producción.</div>
+      <table>
+        <thead><tr>
+          <th>Fecha</th><th style='text-align:right;'>v1</th>
+          <th style='text-align:right;'>v2</th><th style='text-align:right;'>Δ</th>
+          <th style='text-align:right;'>24h</th><th style='text-align:right;'>7d</th>
+          <th style='text-align:right;'>30d</th><th style='text-align:right;'>90d</th>
+          <th style='text-align:right;'>Conf</th><th style='text-align:center;'>Revisión</th>
+        </tr></thead>
+        <tbody>{body_rows}</tbody>
+      </table>
+      <div class="actions">
+        <strong>Acciones disponibles:</strong><br>
+        · <code>POST /api/diagnostico/scores-paralelos/calcular-hoy</code> → trigger manual<br>
+        · <code>POST /api/diagnostico/scores-paralelos/{{fecha}}/revision?decision=aprobado&nota=...</code><br>
+        · <code>GET /api/diagnostico/scores-paralelos?dias=N</code> → JSON crudo
+      </div>
+    </body></html>
+    """
+
+
+def _get_archive():
+    """Devuelve la instancia singleton de ApuriskArchive."""
+    try:
+        from .storage.archive import ApuriskArchive
+    except ImportError:
+        from apurisk.storage.archive import ApuriskArchive
+    db_path = os.environ.get("APURISK_DB_PATH",
+                              str(Path(OUTPUT_DIR) / "apurisk_archive.db"))
+    return ApuriskArchive(db_path)
+
+
 @app.get("/api/edi/snapshot")
 async def edi_snapshot():
     """Estado de Derecho Index (EDI) — snapshot actual.
