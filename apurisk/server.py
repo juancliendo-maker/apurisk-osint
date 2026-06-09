@@ -970,6 +970,225 @@ def _render_scores_paralelos_html(rows: list) -> str:
     """
 
 
+# =====================================================================
+# MATRIZ P×I 7 DÍAS CONSOLIDADA · Vista semanal de factores de riesgo
+# =====================================================================
+@app.get("/api/matriz/consolidada-7d")
+async def matriz_consolidada_7d_api(
+    dias: int = Query(7, ge=1, le=30),
+    top_n: int | None = Query(None, ge=1, le=100),
+):
+    """Matriz consolidada de los últimos N días.
+
+    Para cada factor de riesgo único calcula:
+      · prob/impacto/score media + máx + percentil 90
+      · slope de regresión + etiqueta de tendencia
+      · velocidad (Δ último día)
+      · serie completa de scores día a día
+    """
+    try:
+        try:
+            from .analyzers.matriz_consolidada_7d import construir_matriz_consolidada_7d
+        except ImportError:
+            from apurisk.analyzers.matriz_consolidada_7d import construir_matriz_consolidada_7d
+        archive = _get_archive()
+        return construir_matriz_consolidada_7d(archive, dias=dias, top_n=top_n)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/matriz-7d", response_class=HTMLResponse)
+async def matriz_consolidada_7d_dashboard(dias: int = Query(7, ge=1, le=30)):
+    """Dashboard HTML visualmente atractivo con la matriz consolidada."""
+    try:
+        try:
+            from .analyzers.matriz_consolidada_7d import construir_matriz_consolidada_7d
+        except ImportError:
+            from apurisk.analyzers.matriz_consolidada_7d import construir_matriz_consolidada_7d
+        archive = _get_archive()
+        data = construir_matriz_consolidada_7d(archive, dias=dias)
+        return HTMLResponse(content=_render_matriz_7d_html(data))
+    except Exception as e:
+        return HTMLResponse(
+            content=f"<html><body style='font-family:monospace;background:#0f172a;color:#f8fafc;padding:40px;'>"
+                    f"<h1 style='color:#ef4444;'>Matriz 7d · Error</h1>"
+                    f"<p>{_esc_html(str(e))}</p></body></html>",
+            status_code=500,
+        )
+
+
+def _render_matriz_7d_html(data: dict) -> str:
+    """Renderiza la matriz como HTML con heatmap, sparklines y badges de tendencia."""
+    factores = data.get("factores", [])
+    periodo = data.get("periodo", {})
+    n_corridas = data.get("n_corridas", 0)
+    fechas = periodo.get("fechas", [])
+    error = data.get("error")
+
+    # Color por nivel consolidado (NAVY brand para el header)
+    COLOR_NIVEL = {
+        "CRÍTICO": "#ef4444",
+        "ALTO":    "#f97316",
+        "MEDIO":   "#f59e0b",
+        "BAJO":    "#84cc16",
+    }
+    # Color del slope (tendencia)
+    COLOR_TENDENCIA = {
+        "escalada": "#dc2626", "ascenso":  "#f97316",
+        "estable":  "#94a3b8", "descenso": "#22c55e",
+        "caida":    "#16a34a",
+    }
+
+    if error:
+        cuerpo_html = (f'<tr><td colspan="11" style="padding:32px;text-align:center;'
+                       f'color:#94a3b8;">⚠ {error}</td></tr>')
+    elif not factores:
+        cuerpo_html = (f'<tr><td colspan="11" style="padding:32px;text-align:center;'
+                       f'color:#94a3b8;">Sin factores de riesgo en los últimos {periodo.get("dias", 7)} días. '
+                       f'Espera a que el scheduler corra ciclos OSINT.</td></tr>')
+    else:
+        filas = []
+        for f in factores:
+            nivel = f.get("nivel_consolidado", "BAJO")
+            color_nivel = COLOR_NIVEL.get(nivel, "#94a3b8")
+            tendencia = f.get("tendencia_label", "estable")
+            color_t = COLOR_TENDENCIA.get(tendencia, "#94a3b8")
+            arrow = f.get("tendencia_arrow", "→")
+            serie = f.get("serie", [])
+            velocidad = f.get("velocidad", 0.0)
+            vel_color = "#ef4444" if velocidad > 2 else ("#22c55e" if velocidad < -2 else "#94a3b8")
+
+            # Sparkline SVG (mini gráfico de la serie de 7 días)
+            sparkline = ""
+            if serie and len(serie) >= 2:
+                vmin = min(serie)
+                vmax = max(serie)
+                rng = max(1.0, vmax - vmin)
+                w, h = 90, 28
+                puntos = []
+                for i, v in enumerate(serie):
+                    x = (i / (len(serie) - 1)) * (w - 2) + 1
+                    y = h - 2 - ((v - vmin) / rng) * (h - 4)
+                    puntos.append(f"{x:.1f},{y:.1f}")
+                path = " ".join(puntos)
+                ultimo_x = (w - 2) + 1
+                ultimo_y = h - 2 - ((serie[-1] - vmin) / rng) * (h - 4)
+                sparkline = (
+                    f'<svg width="{w}" height="{h}" style="display:block;">'
+                    f'<polyline points="{path}" fill="none" stroke="{color_nivel}" '
+                    f'stroke-width="1.6" stroke-linejoin="round"/>'
+                    f'<circle cx="{ultimo_x:.1f}" cy="{ultimo_y:.1f}" r="2.4" '
+                    f'fill="{color_nivel}"/></svg>'
+                )
+
+            categoria = (f.get("categoria") or "—")[:18]
+            filas.append(f"""
+            <tr style="border-bottom:1px solid #1e293b;">
+              <td style="padding:10px 8px;color:#f8fafc;font-weight:600;font-size:13px;">
+                {_esc_html(f.get("nombre", ""))}
+                <div style="color:#64748b;font-size:10px;margin-top:2px;text-transform:uppercase;letter-spacing:0.5px;">{_esc_html(categoria)}</div>
+              </td>
+              <td style="padding:10px 8px;text-align:center;">
+                <span style="background:{color_nivel};color:white;padding:3px 10px;border-radius:10px;font-size:10.5px;font-weight:700;letter-spacing:0.5px;">{nivel}</span>
+              </td>
+              <td style="padding:10px 8px;text-align:right;color:#fbbf24;font-size:14px;font-weight:600;">{f.get("score_media", 0)}</td>
+              <td style="padding:10px 8px;text-align:right;color:#cbd5e1;font-size:13px;">{f.get("score_max", 0)}</td>
+              <td style="padding:10px 8px;text-align:right;color:#94a3b8;font-size:12px;">{f.get("score_p90", 0)}</td>
+              <td style="padding:10px 8px;text-align:right;color:#a5b4fc;font-size:13px;">{f.get("prob_media", 0)}<span style="color:#475569;"> / {f.get("prob_max", 0)}</span></td>
+              <td style="padding:10px 8px;text-align:right;color:#fda4af;font-size:13px;">{f.get("impacto_media", 0)}</td>
+              <td style="padding:10px 8px;">{sparkline}</td>
+              <td style="padding:10px 8px;text-align:center;">
+                <span style="color:{color_t};font-size:16px;font-weight:bold;">{arrow}</span>
+                <div style="color:{color_t};font-size:9.5px;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;">{tendencia}</div>
+              </td>
+              <td style="padding:10px 8px;text-align:right;color:{vel_color};font-size:12px;font-weight:600;">{velocidad:+.1f}</td>
+              <td style="padding:10px 8px;text-align:center;color:#64748b;font-size:11px;">{f.get("n_apariciones", 0)}/{n_corridas}</td>
+            </tr>
+            """)
+        cuerpo_html = "".join(filas)
+
+    fechas_header = ""
+    if fechas:
+        fechas_header = (f'<span style="color:#64748b;font-size:12px;">'
+                         f'Periodo: {fechas[0]} → {fechas[-1]} · {n_corridas} corridas diarias</span>')
+
+    return f"""<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="UTF-8"/>
+<title>THALOS · Matriz P×I 7 días Consolidada</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+          background: #0f172a; color: #f8fafc; margin: 0; padding: 32px; }}
+  h1 {{ color: #60a5fa; margin: 0 0 4px 0; font-size: 22px; }}
+  .subtitle {{ color: #94a3b8; margin-bottom: 28px; font-size: 13px; }}
+  .stats {{ display: flex; gap: 20px; margin-bottom: 24px; }}
+  .stat {{ background: #1e293b; padding: 14px 20px; border-radius: 8px; border-left: 3px solid #60a5fa; }}
+  .stat-label {{ font-size: 10px; text-transform: uppercase;
+                  letter-spacing: 1px; color: #64748b; }}
+  .stat-value {{ font-size: 26px; color: #f8fafc; font-weight: 700; margin-top: 2px; }}
+  table {{ width: 100%; border-collapse: collapse; background: #1e293b;
+            border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.4); }}
+  thead th {{ background: #1e3a8a; color: white; padding: 14px 8px;
+              text-align: center; font-size: 10.5px; text-transform: uppercase;
+              letter-spacing: 0.8px; }}
+  thead th.left {{ text-align: left; }}
+  thead th.right {{ text-align: right; }}
+  .acciones {{ margin-top: 24px; padding: 16px; background: #1e293b;
+                border-radius: 8px; font-size: 12px; color: #94a3b8; }}
+  code {{ background: #0f172a; color: #a855f7; padding: 2px 6px; border-radius: 4px; }}
+  a {{ color: #60a5fa; }}
+</style>
+</head><body>
+
+<h1>🎯 Matriz P×I · Consolidada {periodo.get("dias", 7)} días</h1>
+<div class="subtitle">
+  Vista agregada de factores de riesgo del periodo. Score media + máx + percentil 90 + tendencia +
+  velocidad por factor. Insumo principal del Reporte Semanal y Strategic Weekly Outlook.<br>
+  {fechas_header}
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Factores</div>
+    <div class="stat-value">{data.get("n_factores", 0)}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Corridas diarias</div>
+    <div class="stat-value">{n_corridas}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Periodo</div>
+    <div class="stat-value" style="font-size:14px;line-height:32px;">{periodo.get("dias", 7)} días</div>
+  </div>
+</div>
+
+<table>
+  <thead><tr>
+    <th class="left">FACTOR · CATEGORÍA</th>
+    <th>NIVEL</th>
+    <th class="right">SCORE MEDIA</th>
+    <th class="right">SCORE MÁX</th>
+    <th class="right">P90</th>
+    <th class="right">PROB (μ/máx)</th>
+    <th class="right">IMPACTO</th>
+    <th>SERIE 7d</th>
+    <th>TENDENCIA</th>
+    <th class="right">VELOC</th>
+    <th>APARIC.</th>
+  </tr></thead>
+  <tbody>{cuerpo_html}</tbody>
+</table>
+
+<div class="acciones">
+  <strong>Endpoints relacionados:</strong><br>
+  · <code>GET /api/matriz/consolidada-7d?dias=N&amp;top_n=10</code> → JSON crudo<br>
+  · <code>GET /matriz-7d?dias=14</code> → este mismo dashboard con otro periodo<br>
+  · <a href="/diagnostico/scores-paralelos">/diagnostico/scores-paralelos</a> → validación v1 vs v2
+</div>
+
+</body></html>"""
+
+
 def _get_archive():
     """Devuelve la instancia singleton de ApuriskArchive."""
     try:
