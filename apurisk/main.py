@@ -249,13 +249,117 @@ def analizar(data: dict, config: dict) -> dict:
         riesgo["matriz_avg_top5"] = round(matrix_avg, 1)
         riesgo["alertas_criticas_bonus"] = round(bonus, 1)
 
-    print(f"  · Score global: {riesgo['global']} ({riesgo['nivel']})")
+    # =================================================================
+    # Camino B · Integración Score Engine v2 (validación paralela + flip)
+    # =================================================================
+    # Estrategia:
+    #   1. Calcular v2 SIEMPRE (para trazabilidad y corrida paralela)
+    #   2. Si flag activo es "v2", sobrescribir riesgo.global con score_v2
+    #      (preserva v1 reconciliado como riesgo.riesgo_v1_legacy)
+    #   3. Si flag es "v1" (default), no tocar el flujo visible
+    #   4. Si v2 falla por cualquier razón → fallback automático a v1
+    #   5. Persistir corrida en scores_paralelos para dashboard de validación
+    #
+    # Versión configurable en config.yaml score_engine.version: "v1" | "v2"
+    # =================================================================
+    version_engine = (config.get("score_engine") or {}).get("version", "v1")
+    score_v2_completo = None
+
+    try:
+        try:
+            from .analyzers.risk_score_v2 import calcular_score_nacional_v2
+        except ImportError:
+            from apurisk.analyzers.risk_score_v2 import calcular_score_nacional_v2
+
+        # Snapshot mínimo en formato dict (v2 lo prefiere así)
+        _articulos_dict = [a.to_dict() if hasattr(a, "to_dict") else a for a in art]
+        _conflictos_dict = [c.to_dict() if hasattr(c, "to_dict") else c
+                              for c in data["conflictos"]]
+        snapshot_para_v2 = {
+            "articulos": _articulos_dict,
+            "temas": temas,
+            "conflictos": _conflictos_dict,
+        }
+
+        # EDI actual (opcional — si falla, v2 lo ignora con peso_edi=0 en horizonte)
+        edi_actual = None
+        try:
+            try:
+                from .analyzers.estado_derecho_index import calcular_edi
+            except ImportError:
+                from apurisk.analyzers.estado_derecho_index import calcular_edi
+            edi_data = calcular_edi(snapshot_para_v2, archive=None,
+                                     intelligence_brief=None)
+            if isinstance(edi_data, dict):
+                edi_actual = edi_data.get("edi")
+        except Exception:
+            edi_actual = None
+
+        score_v2_completo = calcular_score_nacional_v2(
+            snapshot=snapshot_para_v2,
+            archive=None,
+            edi_actual=edi_actual,
+            config=config,
+        )
+        print(f"  · Score v2: {score_v2_completo['score_nacional']} "
+              f"({score_v2_completo['label']}) · "
+              f"confidence={score_v2_completo['confidence']['score']} · "
+              f"evento_crítico={score_v2_completo['evento_critico']['detectado']}")
+    except Exception as e:
+        print(f"  · ⚠ Score v2 falló: {type(e).__name__}: {e} — uso v1 (fallback)")
+        score_v2_completo = None
+
+    # Flip del motor si flag activo es "v2"
+    if version_engine == "v2" and score_v2_completo is not None:
+        # Preservar v1 reconciliado como referencia auditable
+        riesgo["riesgo_v1_legacy"] = {
+            "global": riesgo["global"],
+            "nivel": riesgo["nivel"],
+        }
+        # Activar v2 como score oficial
+        riesgo["global"] = score_v2_completo["score_nacional"]
+        riesgo["nivel"] = score_v2_completo["label"]
+        riesgo["motor"] = "v2"
+        riesgo["confidence"] = score_v2_completo["confidence"]["score"]
+        riesgo["evento_critico"] = score_v2_completo["evento_critico"]
+        print(f"  · 🟢 Motor activo: v2 (score {riesgo['global']} sobrescribió v1 legacy {riesgo['riesgo_v1_legacy']['global']})")
+    else:
+        riesgo["motor"] = "v1"
+        if version_engine == "v2" and score_v2_completo is None:
+            print(f"  · ⚠ flag='v2' pero v2 no disponible → fallback automático a v1")
+
+    # Corrida paralela siempre persistida (alimenta dashboard /diagnostico)
+    try:
+        try:
+            from .analyzers.risk_score_v2 import ejecutar_score_paralelo
+            from .storage.archive import ApuriskArchive
+        except ImportError:
+            from apurisk.analyzers.risk_score_v2 import ejecutar_score_paralelo
+            from apurisk.storage.archive import ApuriskArchive
+
+        if score_v2_completo is not None:
+            _db_path = Path(config.get("salida", {}).get("carpeta", "./output")) / "apurisk_archive.db"
+            _archive = ApuriskArchive(str(_db_path))
+            ejecutar_score_paralelo(
+                snapshot=snapshot_para_v2,
+                archive=_archive,
+                edi_actual=edi_actual,
+                config=config,
+                score_v1=None,  # se recalcula puro desde el snapshot
+                persistir=True,
+            )
+            print(f"  · ✓ Corrida paralela persistida en scores_paralelos")
+    except Exception as e:
+        print(f"  · ⚠ Corrida paralela falló: {type(e).__name__}: {e}")
+
+    print(f"  · Score global ({riesgo.get('motor', 'v1')}): {riesgo['global']} ({riesgo['nivel']})")
     print(f"  · Sentimiento: {riesgo['sentimiento_promedio']}")
     print(f"  · Factores de riesgo: {len(matriz)}  → top: {matriz[0]['nombre']} ({matriz[0]['score']})")
     print(f"  · Alertas activas: {len(alertas)}  ({len([a for a in alertas if a['nivel']=='CRÍTICA'])} críticas)")
     print(f"  · Twitter: {twitter_stats['n']} tweets · {twitter_stats['engagement_total']:,} engagement · {len(twitter_stats['virales'])} virales")
     return {"entidades": entidades, "temas": temas, "riesgo": riesgo,
-            "matriz": matriz, "alertas": alertas, "twitter_stats": twitter_stats}
+            "matriz": matriz, "alertas": alertas, "twitter_stats": twitter_stats,
+            "score_v2_completo": score_v2_completo}
 
 
 def _limpiar_archivos_viejos(out_dir: Path, retencion_snapshots: int = 5,
@@ -390,6 +494,9 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
         "matriz_riesgo": an["matriz"],
         "alertas": an["alertas"],
         "twitter_stats": an["twitter_stats"],
+        # Score v2 completo (Camino B) — 4 horizontes, confidence, evento crítico.
+        # Disponible siempre, motor activo se indica en riesgo.motor ("v1" | "v2").
+        "score_v2_completo": an.get("score_v2_completo"),
         "articulos": [a.to_dict() for a in data["todos"]],
         "conflictos": [c.to_dict() for c in data["conflictos"]],
         "proyectos": [p.to_dict() for p in data["proyectos"]],
