@@ -2272,6 +2272,12 @@ def generar_dashboard_html(
   <a class="tab" href="/intelligence" target="_blank" rel="noopener" style="text-decoration:none; color:inherit; background:linear-gradient(90deg, rgba(56,189,248,0.15), rgba(167,139,250,0.10));">
     🎯 Strategic Intelligence ↗
   </a>
+  <a class="tab" href="/matriz-retrospectiva-7d" target="_blank" rel="noopener" style="text-decoration:none; color:inherit; background:linear-gradient(90deg, rgba(244,114,182,0.15), rgba(168,85,247,0.10));">
+    📊 Matriz Retrospectiva 7d ↗
+  </a>
+  <a class="tab" href="/matriz-7d" target="_blank" rel="noopener" style="text-decoration:none; color:inherit; background:linear-gradient(90deg, rgba(96,165,250,0.15), rgba(34,197,94,0.10));">
+    📈 Matriz Consolidada 7d ↗
+  </a>
   <div class="tab" data-tab="r24h">Reporte 24h <span class="count">{kpi_articulos_24}</span></div>
   <div class="tab" data-tab="twitter">Twitter / X <span class="count">{kpi_tweets}</span></div>
   <div class="tab" data-tab="conflictos">Conflictos</div>

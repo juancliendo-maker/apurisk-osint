@@ -1189,6 +1189,376 @@ def _render_matriz_7d_html(data: dict) -> str:
 </body></html>"""
 
 
+# =====================================================================
+# MATRIZ RETROSPECTIVA 7D · Quadrant Chart con vectores de movimiento
+# =====================================================================
+@app.get("/api/matriz/retrospectiva-7d")
+async def matriz_retrospectiva_7d_api(dias: int = Query(7, ge=2, le=30)):
+    """Matriz retrospectiva con tendencia direccional (ΔP, ΔI, VT, CT, MC, STF)."""
+    try:
+        try:
+            from .analyzers.matriz_retrospectiva_7d import construir_matriz_retrospectiva_7d
+        except ImportError:
+            from apurisk.analyzers.matriz_retrospectiva_7d import construir_matriz_retrospectiva_7d
+        archive = _get_archive()
+        return construir_matriz_retrospectiva_7d(archive, dias=dias)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/matriz-retrospectiva-7d", response_class=HTMLResponse)
+async def matriz_retrospectiva_7d_dashboard(dias: int = Query(7, ge=2, le=30)):
+    """Dashboard HTML con Quadrant Chart P×I + trayectorias de movimiento."""
+    try:
+        try:
+            from .analyzers.matriz_retrospectiva_7d import construir_matriz_retrospectiva_7d
+        except ImportError:
+            from apurisk.analyzers.matriz_retrospectiva_7d import construir_matriz_retrospectiva_7d
+        archive = _get_archive()
+        data = construir_matriz_retrospectiva_7d(archive, dias=dias)
+        return HTMLResponse(content=_render_matriz_retrospectiva_html(data))
+    except Exception as e:
+        return HTMLResponse(
+            content=f"<html><body style='font-family:monospace;background:#0f172a;color:#f8fafc;padding:40px;'>"
+                    f"<h1 style='color:#ef4444;'>Matriz Retrospectiva · Error</h1>"
+                    f"<p>{_esc_html(str(e))}</p></body></html>",
+            status_code=500,
+        )
+
+
+def _render_matriz_retrospectiva_html(data: dict) -> str:
+    """Renderiza el dashboard con Quadrant Chart SVG nativo + vectores de movimiento."""
+    factores = data.get("factores", [])
+    periodo = data.get("periodo", {})
+    n_corridas = data.get("n_corridas", 0)
+    top_mov = data.get("top_movedores", {})
+    formulas = data.get("formulas", {})
+    error = data.get("error")
+
+    # === SVG Quadrant Chart ===
+    # ViewBox 1600x900 — más amplio para que las burbujas respiren.
+    # CSS hace que el SVG ocupe 100% del ancho disponible.
+    W, H = 1600, 900
+    PADX, PADY = 110, 100
+    plot_w = W - 2 * PADX
+    plot_h = 680
+
+    def px(p):  # probabilidad → x svg
+        return PADX + (p / 100.0) * plot_w
+    def py(i):  # impacto → y svg (invertido)
+        return PADY + plot_h - (i / 100.0) * plot_h
+
+    # Cuadrantes con tintes sutiles
+    quadrants = (
+        # Alto-Alto (rojo claro)
+        f'<rect x="{px(50)}" y="{py(100)}" width="{px(100)-px(50)}" height="{py(50)-py(100)}" fill="#fef2f2" fill-opacity="0.06"/>'
+        # Alto-Bajo (ambar claro)
+        f'<rect x="{px(50)}" y="{py(50)}" width="{px(100)-px(50)}" height="{py(0)-py(50)}" fill="#fef3c7" fill-opacity="0.04"/>'
+        # Bajo-Alto (naranja claro)
+        f'<rect x="{px(0)}" y="{py(100)}" width="{px(50)-px(0)}" height="{py(50)-py(100)}" fill="#ffedd5" fill-opacity="0.04"/>'
+        # Bajo-Bajo (verde claro)
+        f'<rect x="{px(0)}" y="{py(50)}" width="{px(50)-px(0)}" height="{py(0)-py(50)}" fill="#f0fdf4" fill-opacity="0.04"/>'
+    )
+    # Líneas divisorias
+    lineas = (
+        f'<line x1="{px(50)}" y1="{py(0)}" x2="{px(50)}" y2="{py(100)}" stroke="#475569" stroke-width="0.6" stroke-dasharray="3,3"/>'
+        f'<line x1="{px(0)}" y1="{py(50)}" x2="{px(100)}" y2="{py(50)}" stroke="#475569" stroke-width="0.6" stroke-dasharray="3,3"/>'
+    )
+    # Ejes
+    ejes = (
+        f'<line x1="{PADX}" y1="{py(0)}" x2="{px(100)}" y2="{py(0)}" stroke="#94a3b8" stroke-width="1.2"/>'
+        f'<line x1="{PADX}" y1="{py(0)}" x2="{PADX}" y2="{py(100)}" stroke="#94a3b8" stroke-width="1.2"/>'
+    )
+    # Marcas en ejes (más grandes para el viewBox ampliado)
+    marcas = ""
+    for v in (0, 25, 50, 75, 100):
+        marcas += f'<line x1="{px(v)}" y1="{py(0)}" x2="{px(v)}" y2="{py(0)+8}" stroke="#64748b" stroke-width="1.5"/>'
+        marcas += f'<text x="{px(v)}" y="{py(0)+32}" fill="#cbd5e1" font-size="18" font-weight="600" text-anchor="middle">{v}</text>'
+        marcas += f'<line x1="{PADX-8}" y1="{py(v)}" x2="{PADX}" y2="{py(v)}" stroke="#64748b" stroke-width="1.5"/>'
+        marcas += f'<text x="{PADX-14}" y="{py(v)+6}" fill="#cbd5e1" font-size="18" font-weight="600" text-anchor="end">{v}</text>'
+    # Etiquetas de ejes — más prominentes
+    etiq_ejes = (
+        f'<text x="{px(50)}" y="{py(0)+70}" fill="#f8fafc" font-size="20" font-weight="bold" text-anchor="middle">PROBABILIDAD →</text>'
+        f'<text transform="translate(35,{(py(0)+py(100))/2}) rotate(-90)" fill="#f8fafc" font-size="20" font-weight="bold" text-anchor="middle">IMPACTO →</text>'
+    )
+    # Cuadrante labels (esquinas) — más grandes y visibles
+    labels_cuadrantes = (
+        f'<text x="{px(98)}" y="{py(96)}" fill="#fca5a5" font-size="16" text-anchor="end" font-weight="bold" opacity="0.8">⚠ RIESGO CRÍTICO</text>'
+        f'<text x="{px(2)}" y="{py(96)}" fill="#fdba74" font-size="14" font-weight="600" opacity="0.7">Alto impacto · Baja probabilidad</text>'
+        f'<text x="{px(98)}" y="{py(4)+18}" fill="#fde68a" font-size="14" text-anchor="end" font-weight="600" opacity="0.7">Baja prob · Alto impacto</text>'
+        f'<text x="{px(2)}" y="{py(4)+18}" fill="#86efac" font-size="14" font-weight="600" opacity="0.7">✓ RIESGO BAJO</text>'
+    )
+
+    # Vectores de movimiento por factor — burbujas mucho más grandes
+    vectores = ""
+    burbujas = ""
+    etiquetas = ""
+    for f in factores:
+        p0, i0 = f["p_hace_7d"], f["i_hace_7d"]
+        p1, i1 = f["p_actual"], f["i_actual"]
+        color = f["tendencia_color"]
+        # Radio MUCHO más grande (12-42 px en viewBox 1600)
+        radio = max(18, min(48, 18 + abs(f["stf"]) / 2.5))
+
+        # Vector (cola) — más gruesa
+        if abs(p1 - p0) > 0.5 or abs(i1 - i0) > 0.5:
+            vectores += (
+                f'<line x1="{px(p0):.1f}" y1="{py(i0):.1f}" '
+                f'x2="{px(p1):.1f}" y2="{py(i1):.1f}" '
+                f'stroke="{color}" stroke-width="3.5" stroke-opacity="0.7" '
+                f'stroke-linecap="round" />'
+            )
+            # Punto origen
+            vectores += (
+                f'<circle cx="{px(p0):.1f}" cy="{py(i0):.1f}" r="6" '
+                f'fill="{color}" fill-opacity="0.35"/>'
+            )
+
+        # Burbuja actual
+        nombre_esc = _esc_html(f["nombre"])
+        cat_esc = _esc_html(f.get("categoria", ""))
+        burbujas += (
+            f'<g class="factor-group" data-factor-id="{_esc_html(f["factor_id"])}">'
+            f'<circle cx="{px(p1):.1f}" cy="{py(i1):.1f}" r="{radio}" '
+            f'fill="{color}" fill-opacity="0.88" stroke="#0f172a" stroke-width="3" '
+            f'data-nombre="{nombre_esc}" '
+            f'data-categoria="{cat_esc}" '
+            f'data-p-actual="{f["p_actual"]}" data-p-hace="{f["p_hace_7d"]}" data-delta-p="{f["delta_p"]:+}" '
+            f'data-i-actual="{f["i_actual"]}" data-i-hace="{f["i_hace_7d"]}" data-delta-i="{f["delta_i"]:+}" '
+            f'data-score-actual="{f["score_actual"]}" data-score-hace="{f["score_hace_7d"]}" '
+            f'data-mc="{f["mc"]:+}" data-vt="{f["vt"]:+.2f}" data-ct="{f["ct"]}" '
+            f'data-stf="{f["stf"]:+}" data-tendencia="{f["tendencia_label"]}" '
+            f'style="cursor:pointer; transition: r 0.2s, stroke-width 0.2s;"/>'
+            f'</g>'
+        )
+        # Etiqueta del factor
+        etiq_y = py(i1) - radio - 8
+        nombre_corto = f["nombre"][:28] + ("…" if len(f["nombre"]) > 28 else "")
+        etiquetas += (
+            f'<text x="{px(p1):.1f}" y="{etiq_y:.1f}" '
+            f'fill="#f8fafc" font-size="14" font-weight="700" '
+            f'text-anchor="middle" style="pointer-events:none; '
+            f'text-shadow: 0 0 4px #0f172a, 0 0 6px #0f172a;">{_esc_html(nombre_corto)}</text>'
+        )
+
+    chart_svg = f"""
+    <svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" id="chart-svg"
+         preserveAspectRatio="xMidYMid meet"
+         style="background:#1e293b; border-radius:12px; width:100%; height:auto; display:block;">
+      {quadrants}{lineas}{ejes}{marcas}{etiq_ejes}{labels_cuadrantes}
+      {vectores}
+      {burbujas}
+      {etiquetas}
+    </svg>
+    """
+
+    # === Top movedores ===
+    def _render_mov(items: list, titulo: str, color: str) -> str:
+        if not items:
+            return f'<div style="color:#64748b;font-size:12px;">Ninguno detectado en el periodo.</div>'
+        filas = ""
+        for it in items[:4]:
+            filas += (
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'padding:8px 10px;background:#0f172a;border-radius:6px;margin-bottom:6px;border-left:3px solid {color};">'
+                f'<div><div style="font-weight:600;color:#f8fafc;font-size:13px;">{_esc_html(it["nombre"])}</div>'
+                f'<div style="color:#64748b;font-size:10px;text-transform:uppercase;">{_esc_html(it.get("categoria", ""))}</div></div>'
+                f'<div style="text-align:right;"><div style="color:{color};font-weight:700;font-size:15px;">{it["stf"]:+.1f}</div>'
+                f'<div style="color:#94a3b8;font-size:10px;">{it["tendencia_label"]}</div></div>'
+                f'</div>'
+            )
+        return filas
+
+    escalando_html = _render_mov(top_mov.get("escalando", []), "Escalando", "#ef4444")
+    atenuandose_html = _render_mov(top_mov.get("atenuandose", []), "Atenuándose", "#22c55e")
+
+    # === Fórmulas (panel colapsable) ===
+    formulas_html = ""
+    if formulas:
+        umbrales_html = ""
+        for k, v in formulas.get("umbrales", {}).items():
+            umbrales_html += f'<div style="color:#cbd5e1;font-size:12px;margin:4px 0;font-family:monospace;">{_esc_html(k)} → <span style="color:#60a5fa;">{_esc_html(v)}</span></div>'
+        formulas_html = f"""
+        <details style="margin-top:24px;background:#1e293b;border-radius:8px;padding:16px;">
+          <summary style="cursor:pointer;color:#60a5fa;font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.8px;">📐 Cómo se calcula · Fórmulas explícitas</summary>
+          <div style="margin-top:14px;padding:12px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:12.5px;line-height:1.9;color:#cbd5e1;">
+            <div><span style="color:#a855f7;">ΔP</span> = {_esc_html(formulas.get("delta_p", ""))}</div>
+            <div><span style="color:#a855f7;">ΔI</span> = {_esc_html(formulas.get("delta_i", ""))}</div>
+            <div><span style="color:#a855f7;">VT</span> = {_esc_html(formulas.get("vt", ""))}</div>
+            <div><span style="color:#a855f7;">CT</span> = {_esc_html(formulas.get("ct", ""))}</div>
+            <div><span style="color:#a855f7;">MC</span> = {_esc_html(formulas.get("mc", ""))}</div>
+            <div style="margin-top:8px;color:#fbbf24;font-weight:600;">STF = {_esc_html(formulas.get("stf", ""))}</div>
+          </div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid #334155;">
+            <div style="color:#94a3b8;font-size:11px;text-transform:uppercase;margin-bottom:8px;">Umbrales de clasificación</div>
+            {umbrales_html}
+          </div>
+        </details>
+        """
+
+    # === Error o sin datos ===
+    if error:
+        contenido = f'<div style="background:#7f1d1d;padding:24px;border-radius:8px;color:#fee2e2;">⚠ {_esc_html(error)}</div>'
+    elif not factores:
+        contenido = (
+            '<div style="background:#1e293b;padding:48px;border-radius:12px;text-align:center;color:#94a3b8;">'
+            f'<div style="font-size:48px;margin-bottom:12px;">📊</div>'
+            f'<div style="font-size:14px;">Sin factores con suficiente historia en los últimos {periodo.get("dias", 7)} días.</div>'
+            '<div style="font-size:12px;margin-top:8px;color:#64748b;">Se necesitan al menos 2 corridas del scheduler OSINT.</div>'
+            '</div>'
+        )
+    else:
+        contenido = f"""
+        <!-- CHART ANCHO COMPLETO -->
+        <div style="width:100%;">
+          {chart_svg}
+        </div>
+
+        <!-- Hint debajo del chart -->
+        <div style="margin-top:14px;padding:12px 18px;background:#0f172a;border-radius:8px;color:#cbd5e1;font-size:13px;line-height:1.7;">
+          💡 <strong>Cómo leer el mapa:</strong> cada burbuja es un factor de riesgo en su posición ACTUAL (probabilidad × impacto).
+          La <strong style="color:#fbbf24;">cola</strong> conecta con donde estaba hace {periodo.get("dias", 7)} días.
+          El <strong style="color:#fbbf24;">color</strong> indica la dirección de la tendencia.
+          El <strong style="color:#fbbf24;">tamaño</strong> es proporcional a |STF| (magnitud del cambio).
+          Haz <strong style="color:#fbbf24;">hover</strong> sobre cualquier burbuja para ver todas las métricas detalladas.
+        </div>
+
+        <!-- LEYENDAS DEBAJO DEL GRÁFICO -->
+        <div style="display:grid;grid-template-columns: 1fr 1fr; gap:20px; margin-top:24px;">
+          <div style="background:#1e293b;border-radius:10px;padding:18px;border-top:3px solid #ef4444;">
+            <div style="color:#ef4444;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+              🔥 Top Escalando · presión creciente
+            </div>
+            {escalando_html}
+          </div>
+          <div style="background:#1e293b;border-radius:10px;padding:18px;border-top:3px solid #22c55e;">
+            <div style="color:#22c55e;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+              🌿 Top Atenuándose · presión cediendo
+            </div>
+            {atenuandose_html}
+          </div>
+        </div>
+
+        <!-- LEYENDA DE COLORES -->
+        <div style="margin-top:20px;background:#1e293b;border-radius:10px;padding:18px;">
+          <div style="color:#cbd5e1;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;">Leyenda de tendencias</div>
+          <div style="display:flex;flex-wrap:wrap;gap:18px;font-size:12px;">
+            <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:#dc2626;"></span><strong style="color:#fca5a5;">ESCALANDO</strong> <span style="color:#94a3b8;">STF ≥ +20</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:#f97316;"></span><strong style="color:#fdba74;">SUBIDA</strong> <span style="color:#94a3b8;">STF +10 a +20</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:#94a3b8;"></span><strong style="color:#cbd5e1;">ESTABLE</strong> <span style="color:#94a3b8;">STF −10 a +10</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:#84cc16;"></span><strong style="color:#bef264;">DESCENSO</strong> <span style="color:#94a3b8;">STF −10 a −20</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:#22c55e;"></span><strong style="color:#86efac;">ATENUÁNDOSE</strong> <span style="color:#94a3b8;">STF &lt; −20</span></div>
+          </div>
+        </div>
+
+        {formulas_html}
+        """
+
+    n_factores = data.get("n_factores", 0)
+    n_escalando = len(top_mov.get("escalando", []))
+    n_atenuandose = len(top_mov.get("atenuandose", []))
+    fechas_str = ""
+    if periodo.get("fechas"):
+        fechas_str = f'{periodo["fechas"][0]} → {periodo["fechas"][-1]} · {n_corridas} corridas'
+
+    return f"""<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="UTF-8"/>
+<title>THALOS · Matriz Retrospectiva 7 días</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0f172a;
+          color:#f8fafc; margin:0; padding:24px 32px; }}
+  h1 {{ color:#60a5fa; margin:0 0 4px 0; font-size:22px; }}
+  .subtitle {{ color:#94a3b8; margin-bottom:24px; font-size:13px; }}
+  .stats {{ display:flex; gap:16px; margin-bottom:24px; }}
+  .stat {{ background:#1e293b; padding:14px 20px; border-radius:8px; border-left:3px solid #60a5fa; }}
+  .stat-label {{ font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#64748b; }}
+  .stat-value {{ font-size:24px; color:#f8fafc; font-weight:700; margin-top:2px; }}
+  #tooltip {{ position:fixed; pointer-events:none; background:#0f172a;
+              border:1px solid #334155; border-radius:8px; padding:12px 14px;
+              font-size:12px; color:#f8fafc; box-shadow:0 4px 20px rgba(0,0,0,0.5);
+              display:none; z-index:1000; min-width:240px; }}
+  #tooltip .row {{ display:flex; justify-content:space-between; margin:3px 0; }}
+  #tooltip .label {{ color:#64748b; font-size:10.5px; text-transform:uppercase; letter-spacing:0.4px;}}
+  #tooltip .value {{ color:#f8fafc; font-weight:600; font-family:monospace; }}
+  #tooltip .stf-badge {{ display:inline-block; padding:3px 8px; border-radius:10px;
+                          font-size:10.5px; font-weight:700; margin-top:6px; }}
+  .acciones {{ margin-top:24px; padding:14px; background:#1e293b; border-radius:8px;
+                font-size:12px; color:#94a3b8; }}
+  code {{ background:#0f172a; color:#a855f7; padding:2px 6px; border-radius:4px; }}
+  a {{ color:#60a5fa; }}
+</style>
+</head><body>
+
+<h1>🎯 Matriz Retrospectiva P×I · Tendencia {periodo.get("dias", 7)} días</h1>
+<div class="subtitle">
+  Posición actual de cada factor + vector de movimiento desde hace {periodo.get("dias", 7)} días.
+  Útil para detectar qué riesgos están escalando o atenuándose.<br>
+  {fechas_str}
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="stat-label">Factores</div><div class="stat-value">{n_factores}</div></div>
+  <div class="stat" style="border-left-color:#ef4444;"><div class="stat-label">🔥 Escalando</div><div class="stat-value" style="color:#fca5a5;">{n_escalando}</div></div>
+  <div class="stat" style="border-left-color:#22c55e;"><div class="stat-label">🌿 Atenuándose</div><div class="stat-value" style="color:#86efac;">{n_atenuandose}</div></div>
+  <div class="stat"><div class="stat-label">Corridas</div><div class="stat-value">{n_corridas}</div></div>
+</div>
+
+{contenido}
+
+<div class="acciones">
+  <strong>Endpoints relacionados:</strong>
+  · <code>GET /api/matriz/retrospectiva-7d?dias=N</code> · JSON crudo
+  · <a href="/matriz-7d">/matriz-7d</a> matriz consolidada agregada
+  · <a href="/diagnostico/scores-paralelos">/diagnostico/scores-paralelos</a> validación v1↔v2
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+(function() {{
+  const svg = document.getElementById('chart-svg');
+  const tt = document.getElementById('tooltip');
+  if (!svg) return;
+  const groups = svg.querySelectorAll('.factor-group circle');
+  groups.forEach(function(c) {{
+    c.addEventListener('mouseenter', function(e) {{
+      const d = c.dataset;
+      tt.innerHTML = '<div style="font-weight:700;font-size:13px;color:#60a5fa;">' + d.nombre +
+        '</div><div style="color:#64748b;font-size:10px;text-transform:uppercase;margin-bottom:8px;">' + d.categoria + '</div>' +
+        '<div class="row"><span class="label">P (hoy / hace ' + ({periodo.get("dias", 7)}) + 'd)</span><span class="value">' + d.pActual + ' / ' + d.pHace + '</span></div>' +
+        '<div class="row"><span class="label">ΔP</span><span class="value" style="color:' + (parseFloat(d.deltaP) > 0 ? '#ef4444' : '#22c55e') + ';">' + d.deltaP + '</span></div>' +
+        '<div class="row"><span class="label">I (hoy / hace ' + ({periodo.get("dias", 7)}) + 'd)</span><span class="value">' + d.iActual + ' / ' + d.iHace + '</span></div>' +
+        '<div class="row"><span class="label">ΔI</span><span class="value" style="color:' + (parseFloat(d.deltaI) > 0 ? '#ef4444' : '#22c55e') + ';">' + d.deltaI + '</span></div>' +
+        '<hr style="border:none;border-top:1px solid #334155;margin:8px 0;">' +
+        '<div class="row"><span class="label">Score (hoy / hace)</span><span class="value">' + d.scoreActual + ' / ' + d.scoreHace + '</span></div>' +
+        '<div class="row"><span class="label">VT puntos/día</span><span class="value">' + d.vt + '</span></div>' +
+        '<div class="row"><span class="label">CT consistencia</span><span class="value">' + d.ct + '</span></div>' +
+        '<div class="row"><span class="label">MC magnitud</span><span class="value">' + d.mc + '</span></div>' +
+        '<div class="row"><span class="label" style="font-size:11px;font-weight:700;color:#fbbf24;">STF score final</span><span class="value" style="color:#fbbf24;font-size:14px;">' + d.stf + '</span></div>' +
+        '<div class="stf-badge" style="background:' + c.getAttribute('fill') + ';color:white;">' + d.tendencia + '</div>';
+      tt.style.display = 'block';
+      c.setAttribute('r', parseFloat(c.getAttribute('r')) + 2);
+    }});
+    c.addEventListener('mousemove', function(e) {{
+      const x = e.clientX + 15;
+      const y = e.clientY + 15;
+      const ttRect = tt.getBoundingClientRect();
+      const maxX = window.innerWidth - ttRect.width - 10;
+      tt.style.left = Math.min(x, maxX) + 'px';
+      tt.style.top = y + 'px';
+    }});
+    c.addEventListener('mouseleave', function() {{
+      tt.style.display = 'none';
+      c.setAttribute('r', parseFloat(c.getAttribute('r')) - 2);
+    }});
+  }});
+}})();
+</script>
+
+</body></html>"""
+
+
 def _get_archive():
     """Devuelve la instancia singleton de ApuriskArchive."""
     try:
