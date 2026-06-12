@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import json
 import sys
+import secrets
 import asyncio
 from datetime import datetime
 from pathlib import Path
@@ -86,13 +87,118 @@ app = FastAPI(
     version=SERVER_VERSION,
 )
 
-# Servir archivos estáticos del dashboard (HTML, JSON, PDFs, DOCX)
-app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
+# ----------------------------------------------------------------------
+# Static files de /output CON filtro de seguridad.
+#
+# El directorio output/ mezcla productos públicos (PDF/DOCX/HTML y los
+# snapshots JSON que el dashboard ofrece como descarga) con artefactos
+# sensibles que NO deben ser descargables por nadie: la base SQLite
+# completa (apurisk_archive.db + sus WAL/SHM) y el caché interno del brief
+# ejecutivo. Antes se montaba todo el directorio sin filtro, de modo que
+# cualquiera podía bajar /output/apurisk_archive.db. Esta subclase sirve los
+# productos públicos y responde 404 a los archivos sensibles.
+# ----------------------------------------------------------------------
+class _OutputStaticFiles(StaticFiles):
+    _EXT_BLOQUEADAS = (
+        ".db", ".db-wal", ".db-shm", ".db-journal",
+        ".sqlite", ".sqlite3", ".sqlite-wal", ".sqlite-shm",
+    )
+    _NOMBRES_BLOQUEADOS = ("executive_brief_cache.json",)
+
+    async def get_response(self, path, scope):
+        nombre = path.rsplit("/", 1)[-1].lower()
+        if nombre.endswith(self._EXT_BLOQUEADAS) or nombre in self._NOMBRES_BLOQUEADOS:
+            # 404 (no 403) para no confirmar siquiera la existencia del archivo.
+            from starlette.responses import PlainTextResponse
+            return PlainTextResponse("Not Found", status_code=404)
+        return await super().get_response(path, scope)
+
+
+# Servir archivos estáticos del dashboard (HTML, PDFs, DOCX, snapshots JSON).
+# La base SQLite y el caché interno quedan bloqueados (ver clase de arriba).
+app.mount("/output", _OutputStaticFiles(directory=str(OUTPUT_DIR)), name="output")
 
 # Servir assets de la marca (logo THALOS, favicons, etc.)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 if _STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+# ======================================================================
+# Capa de autenticación (defense-in-depth)
+# ======================================================================
+# Se ACTIVA solo si la variable de entorno APURISK_API_KEY está definida.
+# Si NO está definida, el comportamiento es idéntico al histórico (todo
+# abierto), para no romper despliegues existentes ni el primer arranque.
+#
+# Cuando está activa, exige credencial en:
+#   - TODA operación que cambia estado (POST/PUT/PATCH/DELETE), p.ej.
+#     limpiar archivos, regenerar briefs, generar reportes, análisis de caso.
+#   - GETs costosos o de diagnóstico: /api/refresh y los *-test / debug-*.
+#
+# Las vistas de LECTURA (dashboard, /api/status, /api/snapshot, descargas
+# de reportes, /healthz, /static, /output) quedan SIEMPRE públicas para no
+# romper el visor en navegador.
+#
+# La credencial se acepta por (en este orden): cabecera 'X-API-Key', query
+# '?api_key=' o cookie 'apurisk_auth'. Al cargar CUALQUIER página con
+# ?api_key=<clave>, el servidor deja una cookie HttpOnly; así los botones del
+# dashboard (que hacen fetch a endpoints POST) siguen funcionando sin tener
+# que modificar el frontend. Clientes programáticos usan la cabecera.
+_GET_PROTEGIDOS = frozenset({
+    "/api/refresh",
+    "/api/executive/llm-test",
+    "/api/executive/sutran-test",
+    "/api/executive/debug-snapshot",
+})
+_METODOS_ESCRITURA = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_COOKIE_AUTH = "apurisk_auth"
+
+if not os.environ.get("APURISK_API_KEY", "").strip():
+    print("[seguridad] APURISK_API_KEY no está definida → endpoints de "
+          "escritura/diagnóstico ABIERTOS. Definí APURISK_API_KEY en el "
+          "entorno (Render → Environment) para activar la protección.")
+
+
+@app.middleware("http")
+async def _guardia_api_key(request: Request, call_next):
+    clave_esperada = os.environ.get("APURISK_API_KEY", "").strip()
+    if not clave_esperada:
+        # Gate desactivado: comportamiento histórico, no se rompe nada.
+        return await call_next(request)
+
+    provista = (
+        request.headers.get("X-API-Key", "")
+        or request.query_params.get("api_key", "")
+        or request.cookies.get(_COOKIE_AUTH, "")
+    ).strip()
+    valida = bool(provista) and secrets.compare_digest(provista, clave_esperada)
+
+    metodo = request.method.upper()
+    ruta = request.url.path
+    protegido = metodo in _METODOS_ESCRITURA or ruta in _GET_PROTEGIDOS
+
+    if protegido and not valida:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": (
+                "No autorizado. Falta o es inválida la credencial. Provéela vía "
+                "cabecera 'X-API-Key', o cargá el dashboard una vez con "
+                "?api_key=<clave> para fijar la cookie de sesión."
+            )},
+        )
+
+    response = await call_next(request)
+
+    # Bootstrap de cookie: si llegó una clave válida por query string, la
+    # fijamos como cookie HttpOnly para que el navegador autentique las
+    # llamadas siguientes (botones del dashboard) automáticamente.
+    if valida and request.query_params.get("api_key"):
+        response.set_cookie(
+            _COOKIE_AUTH, clave_esperada,
+            httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 12,
+        )
+    return response
 
 
 # Estado interno del scheduler
@@ -2081,10 +2187,11 @@ async def executive_llm_test(modelo: str = Query(None, description="Override del
     """
     import os, traceback
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    # Solo exponemos si la key está presente o no. NUNCA su longitud ni un
+    # prefijo: aun unos pocos caracteres de una credencial ayudan a un
+    # atacante y no aportan nada al diagnóstico real.
     resultado = {
         "api_key_presente": bool(api_key),
-        "api_key_largo_caracteres": len(api_key) if api_key else 0,
-        "api_key_prefix": api_key[:12] + "..." if len(api_key) > 12 else "(vacío o corto)",
         "modelo_intentado": modelo or os.environ.get("APURISK_LLM_MODEL", "claude-haiku-4-5-20251001"),
     }
     if not api_key:
@@ -2118,7 +2225,9 @@ async def executive_llm_test(modelo: str = Query(None, description="Override del
         resultado["status"] = "FAIL"
         resultado["error_type"] = type(e).__name__
         resultado["error_msg"] = str(e)[:500]
-        resultado["traceback_tail"] = traceback.format_exc().splitlines()[-8:]
+        # El traceback completo se registra en el log del servidor, no se
+        # devuelve por HTTP (puede filtrar rutas internas / detalles del entorno).
+        print("[llm-test] error:\n" + traceback.format_exc())
         return resultado
 
 
