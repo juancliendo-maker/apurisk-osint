@@ -196,23 +196,72 @@ FACTORES = [
         "id": "deterioro_seguridad",
         "nombre": "Deterioro de seguridad ciudadana",
         "categoria": "Seguridad",
-        "impacto_base": 60,
+        "impacto_base": 78,  # Recalibrado 60→78 (sprint auditoría jun-2026): driver transversal
         "keywords_fuertes": [
+            # === Violencia letal específica ===
             "sicariato", "asesinato a manos de sicarios",
-            "extorsión a comerciantes", "extorsion a comerciantes",
-            "ola de extorsiones", "casos de extorsión",
             "homicidios en lima", "asesinatos en lima",
             "balacera en", "ataque armado en",
+            "asesinaron a empresario", "asesinaron al empresario",
+            "asesinato de empresario", "asesinato a empresario",
+            "asesinato de comerciante", "asesinaron a comerciante",
+            "asesinato de chofer", "asesinato de conductor",
+            "asesinato de transportista", "asesinaron a transportista",
+            "asesinaron al transportista", "asesinaron a un transportista",
+            "muere a balazos", "asesinado a balazos", "asesinado a tiros",
+            "matan a empresario", "mataron a empresario",
+            # === Crisis del transporte por extorsión (problema masivo actual) ===
+            "extorsión a transportistas", "extorsion a transportistas",
+            "extorsión a comerciantes", "extorsion a comerciantes",
+            "paro de transportistas", "paro nacional de transportistas",
+            "transportistas asesinados", "choferes asesinados",
+            "ataque a empresas de transporte",
+            "empresas de transporte amenazadas",
+            # === Patrones agregados (ola/tasa) ===
+            "ola de extorsiones", "casos de extorsión",
+            "ola de violencia", "ola de asesinatos", "ola de homicidios",
+            "tasa de homicidios", "tasa de criminalidad",
+            "índice de criminalidad", "indice de criminalidad",
+            "muerte violenta", "muertes violentas",
+            "secuestro extorsivo",
+            # === Crimen organizado ===
+            "crimen organizado en perú", "crimen organizado en peru",
+            "narcotraficantes",
+            # === Actores criminales activos en Perú 2026 ===
+            "tren de aragua en perú", "tren de aragua en peru",
+            "tren de aragua en lima",
+            "los pulpos", "los pulpos del norte",
+            "el tren del norte",
+            "los trinitarios",
+            # === Estados de emergencia regionales / distritales ===
             "estado de emergencia por inseguridad",
             "estado de emergencia ciudadana",
-            "crimen organizado en perú", "crimen organizado en peru",
+            "estado de emergencia en san juan de lurigancho",
+            "estado de emergencia en sjl",
+            "estado de emergencia en el callao",
+            "estado de emergencia en callao",
+            "estado de emergencia en villa el salvador",
+            "estado de emergencia en ves",
+            "estado de emergencia en ate", "estado de emergencia en comas",
+            "estado de emergencia en carabayllo",
+            "estado de emergencia en trujillo",
+            # === Ataques a infraestructura policial ===
             "ataque a comisaría", "ataque a comisaria",
-            "narcotraficantes",
         ],
-        "keywords_contexto": ["sicariato", "extorsión", "extorsion",
-                              "homicidio doloso", "asesinato dolo",
-                              "narcotráfico", "narcotrafico",
-                              "estado de emergencia"],
+        "keywords_contexto": [
+            # === Términos genéricos del ámbito de seguridad ciudadana ===
+            "sicariato", "sicarios",
+            "extorsión", "extorsion",
+            "asesinato", "asesinatos",
+            "homicidio", "homicidios", "homicidio doloso",
+            "crimen", "crímenes", "criminalidad",
+            "delincuencia", "delincuencial",
+            "secuestro", "secuestros",
+            "narcotráfico", "narcotrafico",
+            "violencia urbana",
+            "transportistas amenazados",
+            "estado de emergencia",
+        ],
         "keywords_negacion": [
             # CRÍTICO: descartar ataques a libertad de prensa, ataques verbales, etc.
             "ataque a la prensa", "ataque a libertad de prensa",
@@ -221,8 +270,26 @@ FACTORES = [
             "ataque cardíaco", "ataque al corazón",
             "ataque a la democracia", "ataque a la constitución",
             "ataque a la oposición", "ataque al gobierno",
+            # Evitar doble contabilización con violencia_electoral
+            "asesinato del candidato", "asesinato al candidato",
+            "asesinato político del candidato",
+            "atentado contra el candidato", "atentado al candidato",
+            "magnicidio",
+            # Otros tipos de "crimen" que no son seguridad ciudadana
+            "crimen pasional",
+            "crimen de lesa humanidad", "crímenes de lesa humanidad",
+            "crimen ambiental", "crímenes ambientales",
+            "crimen de guerra", "crímenes de guerra",
+            # Cobertura extranjera del Tren de Aragua (otro país)
+            "tren de aragua en colombia",
+            "tren de aragua en venezuela",
+            "tren de aragua en chile",
+            "tren de aragua en ecuador",
+            "tren de aragua en estados unidos",
+            # Muertes no violentas
+            "muere por causas naturales", "muerte natural",
         ],
-        "descripcion": "Eventos violentos urbanos (sicariato, extorsión, homicidios) que escalen a crisis de seguridad pública.",
+        "descripcion": "Eventos violentos urbanos (sicariato, extorsión a transportistas, asesinatos, crimen organizado) que escalen a crisis de seguridad pública.",
     },
     {
         "id": "presion_economica",
@@ -853,14 +920,39 @@ def _calcular_probabilidad_auditable(factor: dict, evidencias: list,
     # 5) Bonus por criticidad alta
     bonus_criticidad = 5 if criticidad_max == "alta" else 0
 
-    # 6) Total clippeado
-    prob_raw = prob_base + delta_evidencia + bonus_convergencia + bonus_criticidad
+    # 6) Bonus por persistencia crónica (sprint auditoría jun-2026)
+    # Captura la intuición: la rutinización mediática diaria ES la señal de crisis,
+    # aunque cada noticia individual sea "rutinaria". Agrupa evidencias por día y
+    # premia factores con presencia constante en el ciclo informativo.
+    bonus_persistencia = 0
+    dias_con_actividad = 0
+    if evidencias:
+        # Agrupar por bucket de día (hours_ago // 24)
+        from collections import Counter
+        dias_bucket = Counter()
+        for ev in evidencias:
+            horas = ev.get("hours_ago") or 0.0
+            dia = int(horas // 24)  # 0=hoy, 1=ayer, ..., 6=hace 6 días
+            if 0 <= dia <= 6:
+                dias_bucket[dia] += 1
+        # Contar días con ≥3 menciones
+        dias_con_actividad = sum(1 for cnt in dias_bucket.values() if cnt >= 3)
+        if dias_con_actividad >= 6:
+            bonus_persistencia = 8
+        elif dias_con_actividad >= 5:
+            bonus_persistencia = 5
+
+    # 7) Total clippeado
+    prob_raw = (prob_base + delta_evidencia + bonus_convergencia
+                + bonus_criticidad + bonus_persistencia)
     prob_final = round(max(3, min(95, prob_raw)), 1)
 
     formula = (
         f"P = base({prob_base}) + log_evidencia({delta_evidencia:.1f}) "
         f"+ convergencia({bonus_convergencia}, {n_fuentes} fuentes) "
-        f"+ criticidad({bonus_criticidad}) = {prob_raw:.1f} → clippeado a {prob_final}"
+        f"+ criticidad({bonus_criticidad}) "
+        f"+ persistencia({bonus_persistencia}, {dias_con_actividad}d con ≥3 menc) "
+        f"= {prob_raw:.1f} → clippeado a {prob_final}"
     )
 
     return {
@@ -870,6 +962,8 @@ def _calcular_probabilidad_auditable(factor: dict, evidencias: list,
             "delta_evidencia": delta_evidencia,
             "bonus_convergencia": bonus_convergencia,
             "bonus_criticidad": bonus_criticidad,
+            "bonus_persistencia": bonus_persistencia,
+            "dias_con_actividad_persistente": dias_con_actividad,
             "suma_pesos_decaidos": round(suma_pesos, 3),
             "n_evidencias": len(evidencias),
             "n_fuentes_distintas": n_fuentes,
@@ -945,6 +1039,34 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
         else:
             nivel = "BAJO"
 
+        # ====== SPRINT AUDITORÍA JUN-2026: factor de actividad para ranking ======
+        # Calcula días desde la evidencia más reciente.
+        # NO modifica el score real (auditable, estructural).
+        # Sí define un score_ranking = score × factor_actividad para ordenamiento UI.
+        if evidencias:
+            horas_min = min((e.get("hours_ago") or 1e9) for e in evidencias)
+            dias_sin_evidencia = round(horas_min / 24.0, 1)
+        else:
+            dias_sin_evidencia = 999.0  # centinela: sin evidencia en ventana de 7d
+
+        if dias_sin_evidencia <= 1.0:
+            factor_actividad = 1.00   # actividad últimas 24h
+        elif dias_sin_evidencia <= 3.0:
+            factor_actividad = 0.85   # 24-72h
+        elif dias_sin_evidencia <= 7.0:
+            factor_actividad = 0.70   # 3-7d
+        elif dias_sin_evidencia <= 14.0:
+            factor_actividad = 0.50   # 7-14d
+        else:
+            factor_actividad = 0.30   # >14d o sin evidencia (latente)
+
+        score_ranking = round(score * factor_actividad, 1)
+
+        # Clasificación de estado para badge UI (Tarea #71)
+        # ACTIVO si delta_evidencia > 0 (evidencia mediática real)
+        # LATENTE si delta_evidencia == 0 (score 100% del piso estructural)
+        estado_evidencia = "ACTIVO" if breakdown.get("delta_evidencia", 0) > 0 else "LATENTE"
+
         out.append({
             "id": f["id"],
             "nombre": f["nombre"],
@@ -952,7 +1074,11 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
             "descripcion": f["descripcion"],
             "probabilidad": prob,
             "impacto": impacto,
-            "score": score,
+            "score": score,             # ← REAL, va al PDF del Reporte Diario
+            "score_ranking": score_ranking,  # ← solo para ordenamiento UI del dashboard
+            "factor_actividad": factor_actividad,
+            "dias_sin_evidencia": dias_sin_evidencia,
+            "estado_evidencia": estado_evidencia,  # "ACTIVO" | "LATENTE"
             "nivel": nivel,
             "tendencia": _tendencia(cnt_reciente, cnt_previo),
             "menciones_24h": cnt_reciente,
@@ -961,5 +1087,7 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
             "breakdown_probabilidad": breakdown,  # ← AUDITABLE
         })
 
-    out.sort(key=lambda x: -x["score"])
+    # Ordenamiento por defecto: score_ranking (prioriza factores activos).
+    # El score real se conserva en cada item para el PDF y auditoría.
+    out.sort(key=lambda x: -x["score_ranking"])
     return out

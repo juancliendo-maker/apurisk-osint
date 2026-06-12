@@ -285,6 +285,35 @@ a:hover { text-decoration: underline; }
 .factor-evidence a { display:inline-block; background: var(--bg-3); padding: 2px 8px; border-radius: 4px; margin: 2px 2px 0 0; color: var(--txt-1);}
 .factor-evidence a:hover { background: var(--accent); color: var(--bg-0); text-decoration: none;}
 
+/* === Sprint auditoría jun-2026: badges de actividad y divisor de ranking === */
+.factor-badges { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.badge-estado { display: inline-block; font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; letter-spacing: 0.4px; cursor: help; }
+.badge-estado.activo { background: rgba(239,68,68,0.18); color: #fca5a5; border: 1px solid rgba(239,68,68,0.35); }
+.badge-estado.latente { background: rgba(148,163,184,0.18); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.30); }
+.badge-cobertura { display: inline-block; font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; letter-spacing: 0.4px; cursor: help; }
+.badge-cobertura.invisibilizado { background: rgba(251,191,36,0.18); color: #fcd34d; border: 1px solid rgba(251,191,36,0.40); }
+
+/* Card "LATENTE" se atenúa visualmente */
+.factor-card[data-estado="LATENTE"] { opacity: 0.78; }
+.factor-card[data-estado="LATENTE"]:hover { opacity: 1; }
+
+/* Divisor del ranking entre activos y latentes */
+.ranking-divider { grid-column: 1 / -1; margin: 16px 0 8px; cursor: pointer; user-select: none; }
+.ranking-divider-inner { background: linear-gradient(90deg, rgba(148,163,184,0.10), rgba(148,163,184,0.04)); border-left: 3px solid rgba(148,163,184,0.55); border-radius: 6px; padding: 10px 14px; transition: background 0.2s; }
+.ranking-divider:hover .ranking-divider-inner { background: linear-gradient(90deg, rgba(148,163,184,0.18), rgba(148,163,184,0.08)); }
+.ranking-divider-title { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; color: #cbd5e1; text-transform: uppercase; }
+.ranking-divider-sub { font-size: 10px; color: var(--txt-2); margin-top: 3px; font-style: italic; }
+.ranking-divider.expanded .ranking-divider-title::before { content: "▼ "; }
+.ranking-divider:not(.expanded) .ranking-divider-title::before { content: "▶ "; }
+.ranking-activos-wrap, .ranking-latentes-wrap { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.ranking-latentes-wrap { grid-column: 1 / -1; }
+
+/* Toggle de orden del ranking */
+.ranking-toggle { display: inline-flex; gap: 0; margin-left: 12px; background: var(--bg-3); border-radius: 6px; padding: 2px; vertical-align: middle; }
+.ranking-toggle button { background: transparent; color: var(--txt-2); border: none; padding: 4px 10px; font-size: 10px; border-radius: 4px; cursor: pointer; transition: all 0.15s; font-family: inherit; }
+.ranking-toggle button.active { background: var(--accent); color: var(--bg-0); font-weight: 700; }
+.ranking-toggle button:not(.active):hover { color: var(--txt-1); }
+
 /* Map */
 #peru-map { height: 540px; border-radius: 8px;}
 .leaflet-container { background: #0a0e1a !important; }
@@ -542,6 +571,7 @@ def _factor_card(f: dict) -> str:
               <span>Evidencia (log):</span><strong>+{brk.get('delta_evidencia', 0):.1f}</strong>
               <span>Convergencia ({brk.get('n_fuentes_distintas', 0)} fuentes):</span><strong>+{brk.get('bonus_convergencia', 0)}</strong>
               <span>Bonus criticidad:</span><strong>+{brk.get('bonus_criticidad', 0)}</strong>
+              <span>Bonus persistencia ({brk.get('dias_con_actividad_persistente', 0)}d con ≥3 menc):</span><strong>+{brk.get('bonus_persistencia', 0)}</strong>
               <span style='border-top:1px dashed var(--bg-3); padding-top:3px;'>TOTAL clippeado:</span>
               <strong style='border-top:1px dashed var(--bg-3); padding-top:3px;'>{f['probabilidad']}</strong>
             </div>
@@ -553,12 +583,53 @@ def _factor_card(f: dict) -> str:
         </details>
         """
 
+    # ====== SPRINT AUDITORÍA JUN-2026: badges de estado y actividad ======
+    estado = f.get("estado_evidencia", "ACTIVO")
+    dias_sev = f.get("dias_sin_evidencia", 0.0)
+    prob_base_factor = (f.get("breakdown_probabilidad") or {}).get("prob_base", 0)
+    delta_ev = (f.get("breakdown_probabilidad") or {}).get("delta_evidencia", 0)
+
+    # Badge ACTIVO / LATENTE (Tarea #71)
+    if estado == "ACTIVO":
+        badge_estado = (
+            f"<span class='badge-estado activo' "
+            f"title='Score basado en evidencia mediática reciente. Δ por evidencia: +{delta_ev:.1f} puntos.'>"
+            f"🔥 ACTIVO</span>"
+        )
+    else:
+        if dias_sev >= 999:
+            actividad_tooltip = "Sin evidencia en la ventana de 7 días — score 100% del piso estructural."
+            actividad_text = "Sin evidencia 7d"
+        else:
+            actividad_tooltip = (
+                f"Score basado en piso estructural — no hubo evidencia en las últimas 168h. "
+                f"Última actividad: hace {dias_sev:.0f} días."
+            )
+            actividad_text = f"hace {dias_sev:.0f}d"
+        badge_estado = (
+            f"<span class='badge-estado latente' title='{actividad_tooltip}'>"
+            f"💤 LATENTE · {actividad_text}</span>"
+        )
+
+    # Badge INVISIBILIZADO POR AGENDA (Tarea #69)
+    # Disparar si: prob_base ≥ 28 (factor estructuralmente alto) Y delta_evidencia débil Y no top
+    badge_invisibilizado = ""
+    if prob_base_factor >= 28 and delta_ev < 5 and estado == "LATENTE":
+        badge_invisibilizado = (
+            "<span class='badge-cobertura invisibilizado' "
+            "title='Este factor de riesgo estructuralmente alto recibe poca cobertura mediática en este periodo. "
+            "Probable causa: desplazamiento por agenda electoral. El piso estructural mantiene el score, pero la "
+            "atención pública es menor de lo esperado.'>"
+            "🔇 INVISIBILIZADO POR AGENDA</span>"
+        )
+
     return f"""
-    <div class="factor-card {f['nivel']}">
+    <div class="factor-card {f['nivel']}" data-estado="{estado}">
       <div class="factor-head">
-        <div>
+        <div style="flex:1; min-width:0;">
           <div class="titulo">{_esc(f['nombre'])}</div>
           <div class="cat">{_esc(f['categoria'])}</div>
+          <div class="factor-badges">{badge_estado}{badge_invisibilizado}</div>
         </div>
         <div class="score-pill">
           <div class="num nivel-{f['nivel']}">{f['score']}</div>
@@ -1892,8 +1963,39 @@ def generar_dashboard_html(
     ) or f"<span class='ticker-item'>Sin alertas activas en la ventana de monitoreo.</span>"
     ticker = ticker_items + " · " + ticker_items
 
-    # Factor cards
-    factors_html = "".join(_factor_card(f) for f in matriz)
+    # Factor cards · sprint auditoría jun-2026
+    # matriz ya viene ordenada por score_ranking desc (activos primero, latentes al final).
+    # Inserta divisor visual entre los factores con actividad reciente (≤7d) y los latentes (>7d).
+    activos = [f for f in matriz if f.get("dias_sin_evidencia", 999) <= 7]
+    latentes = [f for f in matriz if f.get("dias_sin_evidencia", 999) > 7]
+    n_activos = len(activos)
+    n_latentes = len(latentes)
+
+    cards_activos = "".join(_factor_card(f) for f in activos)
+    cards_latentes = "".join(_factor_card(f) for f in latentes)
+
+    # Divisor visual entre los 2 grupos
+    if cards_latentes:
+        divisor = f"""
+        <div class="ranking-divider" data-section="latentes">
+          <div class="ranking-divider-inner">
+            <div class="ranking-divider-title">📊 RIESGOS ESTRUCTURALES MONITOREADOS · {n_latentes} factor{'es' if n_latentes != 1 else ''} sin actividad mediática reciente</div>
+            <div class="ranking-divider-sub">Score basado en piso estructural — siguen latentes y pueden activarse en cualquier momento. Click para expandir/colapsar.</div>
+          </div>
+        </div>
+        <div class="ranking-latentes-wrap" style="display:none;">
+          {cards_latentes}
+        </div>
+        """
+    else:
+        divisor = ""
+
+    factors_html = f"""
+      <div class="ranking-activos-wrap">
+        {cards_activos if cards_activos else '<div style="padding:24px; text-align:center; color:var(--txt-2); font-size:13px;">⚠ Sin factores con evidencia mediática reciente (últimos 7 días).</div>'}
+      </div>
+      {divisor}
+    """
 
     # Alerts — críticas primero, dentro de cada nivel por fecha desc
     alertas_crit_html = "".join(_alerta_html(a) for a in alertas_criticas) or "<div style='color:var(--txt-2);'><em>Sin alertas críticas en la ventana actual.</em></div>"
@@ -3751,6 +3853,23 @@ python -m http.server 8080 --directory output
     document.addEventListener('DOMContentLoaded', cargarEDI);
   }} else {{
     cargarEDI();
+  }}
+
+  // === Sprint auditoría jun-2026: divisor colapsable del ranking ===
+  // Click en "📊 RIESGOS ESTRUCTURALES MONITOREADOS" expande/colapsa la sección de latentes
+  function _initRankingDivider() {{
+    const divider = document.querySelector('.ranking-divider[data-section="latentes"]');
+    const wrap = document.querySelector('.ranking-latentes-wrap');
+    if (!divider || !wrap) return;
+    divider.addEventListener('click', () => {{
+      const isExpanded = divider.classList.toggle('expanded');
+      wrap.style.display = isExpanded ? 'grid' : 'none';
+    }});
+  }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', _initRankingDivider);
+  }} else {{
+    _initRankingDivider();
   }}
 
   // Mapa Leaflet (envuelto en safeInit para que un fallo no rompa el resto)
