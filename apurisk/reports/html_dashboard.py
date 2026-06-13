@@ -2317,6 +2317,21 @@ def generar_dashboard_html(
   </div>
 </header>
 
+<!-- Barra de SECCIONES: abre todas las páginas propias desde el dashboard -->
+<nav class="secciones-nav" style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+     padding:8px 16px; background:#0c1424; border-bottom:1px solid #1f2a44; font-size:13px;">
+  <span style="color:#64748b; font-weight:600; margin-right:4px;">Secciones:</span>
+  <a href="/dashboard"               style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🏠 Dashboard</a>
+  <a href="/intelligence"            style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🎯 Intelligence</a>
+  <a href="/executive"               style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">⚡ Executive</a>
+  <a href="/matriz-7d"               style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">📈 Matriz 7d</a>
+  <a href="/matriz-retrospectiva-7d" style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">📊 Retrospectiva 7d</a>
+  <a href="/analisis"                style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🔍 Análisis de Caso</a>
+  <a href="/riesgo-minera"           style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">⛏️ Riesgo Minera</a>
+  <a href="/diagnostico/scores-paralelos" style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🧪 Diagnóstico</a>
+  <a href="/logout" title="Cerrar sesión" style="margin-left:auto; color:#fca5a5; text-decoration:none; padding:5px 10px; border-radius:7px; background:#2a1620; border:1px solid #7f1d1d;">⎋ Cerrar sesión</a>
+</nav>
+
 <div class="ticker">
   <div class="label">⚠ ALERTAS</div>
   <div class="ticker-track">{ticker}</div>
