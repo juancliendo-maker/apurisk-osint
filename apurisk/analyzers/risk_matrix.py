@@ -247,6 +247,20 @@ FACTORES = [
             "estado de emergencia en trujillo",
             # === Ataques a infraestructura policial ===
             "ataque a comisaría", "ataque a comisaria",
+            # === Frases-señal genéricas de alta confianza (sprint jun-2026: gap captura) ===
+            "seguridad ciudadana en crisis", "crisis de seguridad ciudadana",
+            "crisis de inseguridad", "inseguridad ciudadana",
+            "violencia generalizada", "violencia se generaliza",
+            "criminalidad en aumento", "criminalidad al alza",
+            "incremento de la criminalidad", "aumento de la inseguridad",
+            "ola criminal", "ola delincuencial",
+            "delincuencia desbordada", "inseguridad desbordada",
+            # === Homicidio criminal por arma de fuego (alinea con crimen_organizado) ===
+            "acribillado", "acribillada", "acribillaron", "acribillan",
+            "muerto a balazos", "muertos a balazos",
+            "muerto a tiros", "muertos a tiros",
+            "asesinado a tiros", "ejecutado a balazos",
+            "baleado en", "balean a", "balearon a",
         ],
         "keywords_contexto": [
             # === Términos genéricos del ámbito de seguridad ciudadana ===
@@ -261,6 +275,10 @@ FACTORES = [
             "violencia urbana",
             "transportistas amenazados",
             "estado de emergencia",
+            # === Términos cotidianos del discurso de seguridad (gap jun-2026) ===
+            "seguridad ciudadana", "inseguridad",
+            "zona roja", "balacera", "ataque armado",
+            "banda criminal", "banda delincuencial",
         ],
         "keywords_negacion": [
             # CRÍTICO: descartar ataques a libertad de prensa, ataques verbales, etc.
@@ -477,6 +495,42 @@ FACTORES = [
         "keywords_negacion": ["fraude bancario", "fraude tributario",
                               "magnicidio en otro país", "magnicidio en otro pais"],
         "descripcion": "Violencia física contra candidatos, atentados, magnicidios, fraude o impugnación masiva de resultados electorales.",
+    },
+    {
+        # Conflictividad electoral COTIDIANA (sprint jun-2026): captura la
+        # disputa político-electoral del día a día —discrepancias sobre el
+        # conteo, llamados a desconocer resultados, amenazas de movilización—
+        # que NO llega a violencia física (eso lo cubre violencia_electoral)
+        # pero que en año electoral es un driver de inestabilidad de primer orden.
+        "id": "conflictividad_electoral",
+        "nombre": "Conflictividad electoral",
+        "categoria": "Estabilidad gubernamental",
+        "impacto_base": 72,
+        "keywords_fuertes": [
+            "llamado a desconocer las elecciones", "desconocer las elecciones",
+            "desconocer los resultados", "desconocer el resultado electoral",
+            "no reconocer los resultados", "no reconocer el resultado",
+            "amenaza de movilización electoral", "movilización postelectoral",
+            "votos observados", "actas observadas", "actas cuestionadas",
+            "reconteo de votos", "reconteo manual de actas", "reconteo de actas",
+            "impugnación de actas", "impugnación de votos",
+            "conflictividad electoral", "tensión postelectoral",
+            "denuncia de fraude electoral", "denuncias de fraude electoral",
+            "irregularidades en el conteo", "irregularidades en el empadronamiento",
+            "cuestionan resultados electorales", "rechazan resultados electorales",
+        ],
+        "keywords_contexto": [
+            "elecciones", "electoral", "votos", "votación", "votacion",
+            "actas", "jne", "onpe", "jee", "segunda vuelta", "balotaje",
+            "conteo de votos", "padrón electoral", "padron electoral",
+            "candidato", "movilización", "movilizacion", "marcha",
+        ],
+        "keywords_negacion": [
+            "reforma electoral", "ley electoral", "sistema electoral",
+            "calendario electoral", "cronograma electoral",
+            "elecciones en otro país", "elecciones en otro pais",
+        ],
+        "descripcion": "Disputa electoral cotidiana: discrepancias sobre el conteo, actas observadas, llamados a desconocer resultados y amenazas de movilización en contexto electoral.",
     },
     {
         # Crisis específica del Tribunal Constitucional. Es el órgano que
@@ -805,6 +859,7 @@ PROB_BASE_FACTOR = {
     "crisis_migratoria":         18,
     "tensiones_diplomaticas":    14,
     "violencia_electoral":       22,  # contexto electoral activo
+    "conflictividad_electoral":  34,  # año electoral: disputa cotidiana muy probable
     "crisis_tc":                 20,  # TC con tensiones estructurales actuales
     "crisis_pj_corte_suprema":   16,  # Poder Judicial relativamente estable
     "crisis_organos_control":    22,  # JNJ con conflictos recurrentes
