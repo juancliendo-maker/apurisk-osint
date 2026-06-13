@@ -30,11 +30,15 @@ from __future__ import annotations
 import os
 import json
 import sys
+import time
+import socket
 import secrets
 import asyncio
+import ipaddress
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin, urlparse
 
 from fastapi import FastAPI, HTTPException, Query, Body, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
@@ -175,6 +179,136 @@ if not os.environ.get("APURISK_API_KEY", "").strip():
           "escritura/diagnóstico ABIERTOS. Definí APURISK_API_KEY en el "
           "entorno (Render → Environment) para activar la protección.")
 
+# ======================================================================
+# Utilidades de seguridad: respuestas JSON, anti-SSRF y rate limiting
+# ======================================================================
+def _json_error(status_code: int, detail: str) -> JSONResponse:
+    """JSONResponse con charset utf-8 explícito (evita acentos rotos en pantalla)."""
+    return JSONResponse(status_code=status_code, content={"detail": detail},
+                        media_type="application/json; charset=utf-8")
+
+
+# --- Anti-SSRF: validar y descargar URLs provistas por el usuario ---
+_FETCH_TIMEOUT = 10
+_FETCH_MAX_BYTES = 3_000_000        # 3 MB tope por descarga
+_FETCH_MAX_REDIRECTS = 3
+
+
+def _ip_es_interna(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # ante la duda, bloquear
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _url_es_segura(url: str):
+    """(True, host) si es http/https y resuelve SOLO a IPs públicas; (False, motivo)
+    si no. Bloquea SSRF hacia metadata cloud (169.254.169.254), localhost y redes
+    internas."""
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False, "URL ilegible"
+    if p.scheme not in ("http", "https"):
+        return False, "solo se permiten http/https"
+    host = p.hostname
+    if not host:
+        return False, "URL sin host"
+    puerto = p.port or (443 if p.scheme == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, puerto, proto=socket.IPPROTO_TCP)
+    except Exception:
+        return False, "no se pudo resolver el host"
+    for info in infos:
+        if _ip_es_interna(info[4][0]):
+            return False, f"destino interno no permitido ({info[4][0]})"
+    return True, host
+
+
+def _fetch_url_segura(url: str):
+    """Descarga una URL del usuario con protección anti-SSRF: valida CADA salto de
+    redirección, limita tamaño y tiempo. Devuelve el texto, o None ante cualquier
+    problema."""
+    import requests
+    actual = url
+    for _ in range(_FETCH_MAX_REDIRECTS + 1):
+        ok, motivo = _url_es_segura(actual)
+        if not ok:
+            print(f"[ssrf] URL rechazada: {actual!r} → {motivo}")
+            return None
+        try:
+            r = requests.get(
+                actual, timeout=_FETCH_TIMEOUT, allow_redirects=False, stream=True,
+                headers={"User-Agent": "Mozilla/5.0 APURISK-OSINT/1.0"})
+        except Exception:
+            return None
+        if r.status_code in (301, 302, 303, 307, 308):
+            loc = r.headers.get("Location")
+            if not loc:
+                return None
+            actual = urljoin(actual, loc)  # el destino se valida en la próxima vuelta
+            continue
+        if r.status_code != 200:
+            return None
+        try:
+            crudo = r.raw.read(_FETCH_MAX_BYTES + 1, decode_content=True)
+        except Exception:
+            return None
+        if len(crudo) > _FETCH_MAX_BYTES:
+            print(f"[ssrf] respuesta demasiado grande, descartada: {actual!r}")
+            return None
+        return crudo.decode(r.encoding or "utf-8", errors="replace")
+    print(f"[ssrf] demasiadas redirecciones: {url!r}")
+    return None
+
+
+# --- Rate limiting en memoria (la app corre en una sola instancia en Render) ---
+# Prefijo de ruta -> (máx. solicitudes, ventana en segundos). Solo endpoints caros.
+_RL_REGLAS = {
+    "/api/refresh": (5, 300),
+    "/api/analisis-caso": (10, 600),
+    "/api/riesgo-minera/generar": (10, 600),
+    "/api/executive/brief/regenerar": (10, 600),
+    "/api/executive/llm-test": (15, 300),
+    "/api/diagnostico/scores-paralelos/calcular-hoy": (10, 600),
+}
+_rl_buckets: dict = {}  # "ip|prefijo" -> (conteo, inicio_ventana)
+
+
+def _cliente_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "desconocido"
+
+
+def _excede_rate_limit(request: Request) -> bool:
+    ruta = request.url.path
+    regla = None
+    for pref, lim in _RL_REGLAS.items():
+        if ruta == pref or ruta.startswith(pref):
+            regla = (pref, lim[0], lim[1])
+            break
+    if not regla:
+        return False
+    pref, maximo, ventana = regla
+    ahora = int(time.time())
+    key = f"{_cliente_ip(request)}|{pref}"
+    conteo, inicio = _rl_buckets.get(key, (0, ahora))
+    if ahora - inicio >= ventana:
+        conteo, inicio = 0, ahora
+    conteo += 1
+    _rl_buckets[key] = (conteo, inicio)
+    if len(_rl_buckets) > 5000:  # prune ocasional de entradas vencidas
+        tope = max(v[1] for v in _RL_REGLAS.values())
+        for k, (_, t) in list(_rl_buckets.items()):
+            if ahora - t >= tope:
+                _rl_buckets.pop(k, None)
+    return conteo > maximo
+
+
 # Rutas siempre accesibles sin sesión (necesarias para poder loguearse o para
 # que la plataforma viva): login/logout, health check, favicon y assets.
 _RUTAS_PUBLICAS = frozenset({"/login", "/logout", "/healthz", "/favicon.ico"})
@@ -202,6 +336,11 @@ async def _guardia_acceso(request: Request, call_next):
     ruta = request.url.path
     metodo = request.method.upper()
 
+    # Rate limiting de endpoints costosos (aplica con o sin login).
+    if _excede_rate_limit(request):
+        return _json_error(429, "Demasiadas solicitudes a este recurso. "
+                                "Esperá un momento e intentá de nuevo.")
+
     # ============ MODO LOGIN: protege TODO el sitio ============
     if _auth_state["login_enforce"]:
         if _es_ruta_publica(ruta):
@@ -222,8 +361,7 @@ async def _guardia_acceso(request: Request, call_next):
 
         # No autorizado: API → 401 JSON; navegación → redirige al login.
         if ruta.startswith("/api/") or ruta.startswith("/output") or metodo in _METODOS_ESCRITURA:
-            return JSONResponse(status_code=401,
-                                content={"detail": "No autorizado. Iniciá sesión en /login."})
+            return _json_error(401, "No autorizado. Iniciá sesión en /login.")
         from urllib.parse import quote
         return RedirectResponse(url=f"/login?next={quote(ruta, safe='/')}", status_code=302)
 
@@ -235,14 +373,10 @@ async def _guardia_acceso(request: Request, call_next):
     valida = _apikey_valida(request)
     protegido = metodo in _METODOS_ESCRITURA or ruta in _GET_PROTEGIDOS
     if protegido and not valida:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": (
-                "No autorizado. Falta o es inválida la credencial. Provéela vía "
-                "cabecera 'X-API-Key', o cargá el dashboard una vez con "
-                "?api_key=<clave> para fijar la cookie de sesión."
-            )},
-        )
+        return _json_error(401,
+            "No autorizado. Falta o es inválida la credencial. Provéela vía "
+            "cabecera 'X-API-Key', o cargá el dashboard una vez con "
+            "?api_key=<clave> para fijar la cookie de sesión.")
 
     response = await call_next(request)
     if valida and request.query_params.get("api_key"):
@@ -2735,15 +2869,8 @@ async def analisis_caso_post(payload: dict = Body(...)):
 
     # URL fetcher opcional (solo en producción con red)
     def _url_fetcher(url: str) -> str | None:
-        try:
-            import requests
-            r = requests.get(url, timeout=10,
-                              headers={"User-Agent": "Mozilla/5.0 APURISK-OSINT/1.0"})
-            if r.status_code == 200:
-                return r.text
-        except Exception:
-            return None
-        return None
+        # Descarga con protección anti-SSRF (ver _fetch_url_segura).
+        return _fetch_url_segura(url)
 
     # Ejecutar análisis
     try:
@@ -3065,15 +3192,8 @@ async def generar_riesgo_minera(request: Request):
 
     # URL fetcher para procesar URLs aportadas por el analista
     def _url_fetcher(url: str) -> str | None:
-        try:
-            import requests
-            r = requests.get(url, timeout=10,
-                              headers={"User-Agent": "Mozilla/5.0 APURISK-OSINT/1.0"})
-            if r.status_code == 200:
-                return r.text
-        except Exception:
-            return None
-        return None
+        # Descarga con protección anti-SSRF (ver _fetch_url_segura).
+        return _fetch_url_segura(url)
 
     # Ejecutar análisis (pasando url_fetcher para procesar URLs adjuntas)
     try:
