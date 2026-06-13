@@ -92,7 +92,7 @@ SERVER_VERSION = "1.0.0"
 # un usuario. Mientras tanto, el sitio se comporta como antes (sin romper nada).
 SECRET_SESION = os.getenv("APURISK_SECRET_KEY", "").strip()
 LOGIN_ACTIVO = bool(SECRET_SESION)
-SESION_TTL = int(os.getenv("APURISK_SESION_TTL", str(60 * 60 * 12)))  # 12h
+SESION_TTL = int(os.getenv("APURISK_SESION_TTL", str(60 * 60 * 24 * 7)))  # 7 días
 _COOKIE_SESION = "apurisk_sesion"
 # Holder mutable: el middleware lee si debe exigir login. Se fija en _startup
 # (requiere que exista al menos un usuario para no dejar a nadie afuera).
@@ -356,7 +356,7 @@ async def _guardia_acceso(request: Request, call_next):
             if _apikey_valida(request) and request.query_params.get("api_key"):
                 response.set_cookie(
                     _COOKIE_AUTH, os.environ["APURISK_API_KEY"].strip(),
-                    httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 12)
+                    httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
             return response
 
         # No autorizado: API → 401 JSON; navegación → redirige al login.
@@ -382,7 +382,7 @@ async def _guardia_acceso(request: Request, call_next):
     if valida and request.query_params.get("api_key"):
         response.set_cookie(
             _COOKIE_AUTH, clave_esperada,
-            httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 12,
+            httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7,
         )
     return response
 
