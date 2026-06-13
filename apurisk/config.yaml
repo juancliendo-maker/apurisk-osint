@@ -605,7 +605,7 @@ salida:
 #   3. "v2"       → después de validación humana exitosa (Sprint 1.8)
 # =====================================================================
 score_engine:
-  version: "v1"   # ← arranca conservador, no rompe nada en producción
+  version: "v2"   # ← v2 activo (validación paralela aprobada jun-2026). Fallback automático a v1 si v2 falla.
 
   # Pesos por dimensión (Score Nacional v2) — configurables sin tocar código.
   # Suma debe ser 1.0 exacto. Cambios aquí se aplican al siguiente ciclo
