@@ -143,13 +143,21 @@ CATEGORIAS = {
         "fuertes": [
             "extorsión", "extorsion", "extorsionado", "extorsionadores",
             "sicariato", "sicario", "sicarios",
-            "asesinato por encargo",
+            "asesinato por encargo", "crimen por encargo",
             "cobro de cupos", "cobro de cupo",
             "tren de aragua perú", "tren de aragua peru",
             "los pulpos", "los malditos",
             "amenaza con explosivo", "atentado con dinamita",
             "atentado con granada",
             "secuestro al paso", "secuestro extorsivo",
+            # === Homicidio criminal: señal fuerte de sicariato/crimen (jun-2026) ===
+            "acribillado", "acribillada", "acribillaron", "acribillan",
+            "asesinado a balazos", "asesinada a balazos",
+            "asesinado a tiros", "asesinado de varios disparos",
+            "ejecutado a balazos", "ejecutado de varios disparos",
+            "muerto a balazos", "muerto a tiros", "muerto de varios disparos",
+            "ataque a balazos", "ataque a tiros",
+            "baleado en", "balean a", "balearon a",
         ],
         "contexto": [
             "trujillo extorsión", "trujillo extorsion",
@@ -157,10 +165,18 @@ CATEGORIAS = {
             "construcción civil amenazada", "construccion civil amenazada",
             "transportistas amenazados",
             "pyme extorsionada",
-            "banda criminal", "organización criminal",
+            "banda criminal", "organización criminal", "organizacion criminal",
+            # === Términos de homicidio (requieren 2 para clasificar, evita falsos +) ===
+            "asesinato", "asesinado", "asesinaron",
+            "homicidio", "homicidios",
+            "crimen", "delincuente", "delincuentes",
+            "disparos", "balazos", "arma de fuego",
         ],
         "negacion": [
             "extorsión política", "extorsion politica",  # otro tema
+            # Evitar clasificar homicidios no vinculados a crimen organizado
+            "crimen pasional", "feminicidio", "crimen de lesa humanidad",
+            "muerte natural", "accidente de tránsito", "accidente de transito",
         ],
     },
 }
