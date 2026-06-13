@@ -188,6 +188,27 @@ a:hover { text-decoration: underline; }
 .kpi .lbl { font-size:11px; letter-spacing:1px; color: var(--txt-2); text-transform:uppercase; }
 .kpi .val { font-size: 28px; font-weight: 700; margin-top: 6px;}
 .kpi .sub { color: var(--txt-2); font-size: 12px; margin-top:4px;}
+
+/* Tira de horizontes temporales (Score v2) — ancho completo, bajo los KPIs */
+.hz-strip { margin: 0 28px 18px; background: var(--bg-1); border: 1px solid var(--bg-3);
+            border-radius: 10px; padding: 16px 22px; position: relative; overflow: hidden; }
+.hz-strip::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px;
+                    background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
+.hz-head { display:flex; align-items:baseline; gap:12px; margin-bottom: 14px; flex-wrap: wrap; }
+.hz-title { font-size:12px; letter-spacing:1.5px; text-transform:uppercase; color: var(--txt-1); font-weight:600; }
+.hz-sub { font-size:11px; color: var(--txt-2); }
+.hz-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.hz-cell { background: var(--bg-2); border: 1px solid var(--bg-3); border-radius: 8px; padding: 12px 16px; }
+.hz-cell-now { border-color: rgba(56,189,248,0.45); }
+.hz-lbl { font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color: var(--txt-2); margin-bottom: 6px; }
+.hz-val { font-size:26px; font-weight:700; color: var(--accent); line-height:1; }
+.hz-arrow { font-size:15px; font-weight:700; margin-left:4px; vertical-align: 2px; }
+.hz-insight { margin-top:14px; font-size:13px; color: var(--txt-1); display:flex; align-items:center; gap:8px; }
+.hz-insight-arrow { font-size:14px; font-weight:700; }
+.hz-up, .hz-insight.hz-up .hz-insight-arrow, .hz-arrow.hz-up { color: var(--alto); }
+.hz-down, .hz-insight.hz-down .hz-insight-arrow, .hz-arrow.hz-down { color: var(--bajo); }
+.hz-flat, .hz-insight.hz-flat .hz-insight-arrow, .hz-arrow.hz-flat { color: var(--txt-2); }
+@media (max-width: 760px) { .hz-grid { grid-template-columns: repeat(2, 1fr); } .hz-strip { margin: 0 14px 14px; } }
 .nivel-CRÍTICO, .nivel-ALTO-cls, .val-CRÍTICO { color: var(--critico);}
 .nivel-ALTO { color: var(--alto);}
 .nivel-MEDIO { color: var(--medio);}
@@ -2250,6 +2271,46 @@ def generar_dashboard_html(
 
     kpi_class = "critico" if kpi_global_nivel == "ALTO" else ("alto" if kpi_global_nivel == "MEDIO" else "bajo")
 
+    # --- Tira de horizontes temporales (Score v2): Coyuntura 24h · Semana · Mes · Estructural ---
+    # Solo se muestra cuando el motor v2 expone los 4 horizontes (riesgo["horizontes"]).
+    _hz = riesgo.get("horizontes") or {}
+    _h24, _h7d, _h30d, _h90d = (_hz.get("h24"), _hz.get("h7d"), _hz.get("h30d"), _hz.get("h90d"))
+    horizontes_html = ""
+    if all(isinstance(v, (int, float)) for v in (_h24, _h7d, _h30d, _h90d)):
+        _delta = round(_h24 - _h90d, 1)
+        if _delta > 0.5:
+            _arrow, _ins_cls, _ins_txt = "▲", "hz-up", f"Coyuntura ({_h24:g}) por encima del fondo estructural ({_h90d:g}) · +{_delta:g} pts"
+        elif _delta < -0.5:
+            _arrow, _ins_cls, _ins_txt = "▼", "hz-down", f"Coyuntura ({_h24:g}) por debajo del fondo estructural ({_h90d:g}) · {_delta:g} pts"
+        else:
+            _arrow, _ins_cls, _ins_txt = "▬", "hz-flat", f"Coyuntura ({_h24:g}) alineada con el fondo estructural ({_h90d:g})"
+        horizontes_html = f"""
+<div class="hz-strip">
+  <div class="hz-head">
+    <span class="hz-title">Score por horizonte temporal</span>
+    <span class="hz-sub">descomposición del Score Global · motor v2</span>
+  </div>
+  <div class="hz-grid">
+    <div class="hz-cell hz-cell-now">
+      <div class="hz-lbl">Coyuntura 24h</div>
+      <div class="hz-val">{_h24:g} <span class="hz-arrow {_ins_cls}">{_arrow}</span></div>
+    </div>
+    <div class="hz-cell">
+      <div class="hz-lbl">Última semana</div>
+      <div class="hz-val">{_h7d:g}</div>
+    </div>
+    <div class="hz-cell">
+      <div class="hz-lbl">Tendencia 4 semanas</div>
+      <div class="hz-val">{_h30d:g}</div>
+    </div>
+    <div class="hz-cell">
+      <div class="hz-lbl">Estructural 3 meses</div>
+      <div class="hz-val">{_h90d:g}</div>
+    </div>
+  </div>
+  <div class="hz-insight {_ins_cls}"><span class="hz-insight-arrow">{_arrow}</span> {_ins_txt}</div>
+</div>"""
+
     refresh_minutos = max(1, int(refresh_seconds / 60))
     _now_pe = now_pe()
     generated_iso = _now_pe.isoformat(timespec="seconds")
@@ -2381,6 +2442,7 @@ def generar_dashboard_html(
     <div class="sub">interacciones acumuladas 24h</div>
   </div>
 </div>
+{horizontes_html}
 
 <nav class="tabs">
   <div class="tab active" data-tab="riesgos">Mapa de Riesgos</div>

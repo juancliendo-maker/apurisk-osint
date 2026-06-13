@@ -322,6 +322,12 @@ def analizar(data: dict, config: dict) -> dict:
         riesgo["motor"] = "v2"
         riesgo["confidence"] = score_v2_completo["confidence"]["score"]
         riesgo["evento_critico"] = score_v2_completo["evento_critico"]
+        # Puente: exponer los 4 horizontes temporales al dashboard (tira bajo el Score).
+        # Coyuntura 24h · Última semana 7d · Tendencia 4 sem (30d) · Estructural 3 meses (90d).
+        _horiz = score_v2_completo.get("horizontes", {})
+        riesgo["horizontes"] = {
+            h: (_horiz.get(h, {}) or {}).get("score") for h in ("h24", "h7d", "h30d", "h90d")
+        }
         print(f"  · 🟢 Motor activo: v2 (score {riesgo['global']} sobrescribió v1 legacy {riesgo['riesgo_v1_legacy']['global']})")
     else:
         riesgo["motor"] = "v1"
