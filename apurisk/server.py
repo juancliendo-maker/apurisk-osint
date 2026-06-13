@@ -70,6 +70,11 @@ except ImportError:
     )
     from apurisk.reports.pdf_minera import generar_reporte_minera_pdf
 
+try:
+    from .utils import auth
+except ImportError:
+    from apurisk.utils import auth
+
 
 # Configuración
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "output"))
@@ -77,6 +82,17 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 REFRESH_SECONDS = int(os.getenv("REFRESH_SECONDS", "1800"))  # 30 min default
 PORT = int(os.getenv("PORT", "8080"))
 SERVER_VERSION = "1.0.0"
+
+# --- Login por usuario/clave (Fase 1) ---
+# El login se ACTIVA solo si APURISK_SECRET_KEY está definida Y existe al menos
+# un usuario. Mientras tanto, el sitio se comporta como antes (sin romper nada).
+SECRET_SESION = os.getenv("APURISK_SECRET_KEY", "").strip()
+LOGIN_ACTIVO = bool(SECRET_SESION)
+SESION_TTL = int(os.getenv("APURISK_SESION_TTL", str(60 * 60 * 12)))  # 12h
+_COOKIE_SESION = "apurisk_sesion"
+# Holder mutable: el middleware lee si debe exigir login. Se fija en _startup
+# (requiere que exista al menos un usuario para no dejar a nadie afuera).
+_auth_state = {"login_enforce": False}
 
 app = FastAPI(
     title="APURISK OSINT — Strategic Intelligence for Complex Decisions (Powered by THALOS)",
@@ -159,25 +175,65 @@ if not os.environ.get("APURISK_API_KEY", "").strip():
           "escritura/diagnóstico ABIERTOS. Definí APURISK_API_KEY en el "
           "entorno (Render → Environment) para activar la protección.")
 
+# Rutas siempre accesibles sin sesión (necesarias para poder loguearse o para
+# que la plataforma viva): login/logout, health check, favicon y assets.
+_RUTAS_PUBLICAS = frozenset({"/login", "/logout", "/healthz", "/favicon.ico"})
 
-@app.middleware("http")
-async def _guardia_api_key(request: Request, call_next):
-    clave_esperada = os.environ.get("APURISK_API_KEY", "").strip()
-    if not clave_esperada:
-        # Gate desactivado: comportamiento histórico, no se rompe nada.
-        return await call_next(request)
 
+def _es_ruta_publica(ruta: str) -> bool:
+    return ruta in _RUTAS_PUBLICAS or ruta.startswith("/static")
+
+
+def _apikey_valida(request: Request) -> bool:
+    """True si la request trae una APURISK_API_KEY válida (header, query o cookie)."""
+    esperada = os.environ.get("APURISK_API_KEY", "").strip()
+    if not esperada:
+        return False
     provista = (
         request.headers.get("X-API-Key", "")
         or request.query_params.get("api_key", "")
         or request.cookies.get(_COOKIE_AUTH, "")
     ).strip()
-    valida = bool(provista) and secrets.compare_digest(provista, clave_esperada)
+    return bool(provista) and secrets.compare_digest(provista, esperada)
 
-    metodo = request.method.upper()
+
+@app.middleware("http")
+async def _guardia_acceso(request: Request, call_next):
     ruta = request.url.path
-    protegido = metodo in _METODOS_ESCRITURA or ruta in _GET_PROTEGIDOS
+    metodo = request.method.upper()
 
+    # ============ MODO LOGIN: protege TODO el sitio ============
+    if _auth_state["login_enforce"]:
+        if _es_ruta_publica(ruta):
+            return await call_next(request)
+
+        sesion = auth.verificar_token_sesion(
+            request.cookies.get(_COOKIE_SESION, ""), SECRET_SESION)
+        autorizado = bool(sesion) or _apikey_valida(request)
+
+        if autorizado:
+            response = await call_next(request)
+            # Bootstrap de la cookie api_key para clientes que la pasan por query.
+            if _apikey_valida(request) and request.query_params.get("api_key"):
+                response.set_cookie(
+                    _COOKIE_AUTH, os.environ["APURISK_API_KEY"].strip(),
+                    httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 12)
+            return response
+
+        # No autorizado: API → 401 JSON; navegación → redirige al login.
+        if ruta.startswith("/api/") or ruta.startswith("/output") or metodo in _METODOS_ESCRITURA:
+            return JSONResponse(status_code=401,
+                                content={"detail": "No autorizado. Iniciá sesión en /login."})
+        from urllib.parse import quote
+        return RedirectResponse(url=f"/login?next={quote(ruta, safe='/')}", status_code=302)
+
+    # ============ MODO API-KEY (login desactivado): comportamiento anterior ============
+    clave_esperada = os.environ.get("APURISK_API_KEY", "").strip()
+    if not clave_esperada:
+        return await call_next(request)
+
+    valida = _apikey_valida(request)
+    protegido = metodo in _METODOS_ESCRITURA or ruta in _GET_PROTEGIDOS
     if protegido and not valida:
         return JSONResponse(
             status_code=401,
@@ -189,16 +245,113 @@ async def _guardia_api_key(request: Request, call_next):
         )
 
     response = await call_next(request)
-
-    # Bootstrap de cookie: si llegó una clave válida por query string, la
-    # fijamos como cookie HttpOnly para que el navegador autentique las
-    # llamadas siguientes (botones del dashboard) automáticamente.
     if valida and request.query_params.get("api_key"):
         response.set_cookie(
             _COOKIE_AUTH, clave_esperada,
             httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 12,
         )
     return response
+
+
+# ======================================================================
+# Login por usuario y clave
+# ======================================================================
+def _safe_next(n: str) -> str:
+    """Solo permite redirecciones internas seguras; ante la duda → /dashboard."""
+    n = (n or "/dashboard").strip()
+    if not n.startswith("/") or n.startswith("//") or any(c in n for c in '"\'<>'):
+        return "/dashboard"
+    return n
+
+
+def _html_login(error: str = "", next_url: str = "/dashboard") -> str:
+    import html as _html
+    next_url = _html.escape(_safe_next(next_url), quote=True)
+    err = (f'<div class="err">{_html.escape(error)}</div>') if error else ""
+    return f"""<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APURISK · Iniciar sesión</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0b1220; color:#e5e7eb;
+         font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }}
+  .card {{ width:min(92vw, 380px); background:#111a2e; border:1px solid #1f2a44;
+          border-radius:16px; padding:32px 28px; box-shadow:0 12px 40px rgba(0,0,0,.5); }}
+  .logo {{ height:42px; display:block; margin:0 auto 14px; }}
+  h1 {{ font-size:20px; text-align:center; margin:0 0 4px; letter-spacing:.5px; }}
+  .sub {{ text-align:center; color:#94a3b8; font-size:12px; margin:0 0 22px; }}
+  label {{ display:block; font-size:12px; color:#94a3b8; margin:14px 0 6px; }}
+  input {{ width:100%; padding:11px 12px; border-radius:9px; border:1px solid #28354f;
+          background:#0b1220; color:#e5e7eb; font-size:14px; }}
+  input:focus {{ outline:2px solid #38bdf8; border-color:transparent; }}
+  button {{ width:100%; margin-top:22px; padding:12px; border:0; border-radius:9px;
+           background:linear-gradient(90deg,#38bdf8,#6366f1); color:#fff;
+           font-size:15px; font-weight:600; cursor:pointer; }}
+  button:hover {{ filter:brightness(1.08); }}
+  .err {{ background:#3b1320; border:1px solid #7f1d1d; color:#fecaca;
+         padding:10px 12px; border-radius:9px; font-size:13px; margin-bottom:8px; }}
+  .foot {{ text-align:center; color:#64748b; font-size:11px; margin-top:18px; }}
+</style></head>
+<body>
+  <form class="card" method="post" action="/login" autocomplete="on">
+    <img class="logo" src="/static/thalos-mark.svg" alt="THALOS"
+         onerror="this.style.display='none'">
+    <h1>APURISK OSINT</h1>
+    <div class="sub">Strategic Intelligence · Acceso restringido</div>
+    {err}
+    <input type="hidden" name="next" value="{next_url}">
+    <label for="u">Usuario</label>
+    <input id="u" name="username" autofocus required autocomplete="username">
+    <label for="p">Contraseña</label>
+    <input id="p" name="password" type="password" required autocomplete="current-password">
+    <button type="submit">Entrar</button>
+    <div class="foot">Powered by THALOS</div>
+  </form>
+</body></html>"""
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request, next: str = "/dashboard"):
+    if not _auth_state["login_enforce"]:
+        return HTMLResponse(_html_login(
+            error="El inicio de sesión no está configurado en este servidor."))
+    if auth.verificar_token_sesion(request.cookies.get(_COOKIE_SESION, ""), SECRET_SESION):
+        return RedirectResponse(_safe_next(next), status_code=302)
+    return HTMLResponse(_html_login(next_url=next))
+
+
+@app.post("/login")
+async def login_post(request: Request):
+    form = await request.form()
+    username = (form.get("username") or "").strip()
+    password = form.get("password") or ""
+    next_url = _safe_next(form.get("next") or "/dashboard")
+
+    if not _auth_state["login_enforce"]:
+        return RedirectResponse("/dashboard", status_code=302)
+
+    user = auth.verificar_credenciales(username, password)
+    if not user:
+        return HTMLResponse(
+            _html_login(error="Usuario o contraseña incorrectos.", next_url=next_url),
+            status_code=401)
+
+    token = auth.crear_token_sesion(user["username"], user["rol"], SECRET_SESION, SESION_TTL)
+    resp = RedirectResponse(next_url, status_code=302)
+    resp.set_cookie(_COOKIE_SESION, token, httponly=True, secure=True,
+                    samesite="lax", max_age=SESION_TTL)
+    return resp
+
+
+@app.get("/logout")
+async def logout():
+    resp = RedirectResponse("/login", status_code=302)
+    resp.delete_cookie(_COOKIE_SESION)
+    return resp
 
 
 # Estado interno del scheduler
@@ -345,6 +498,25 @@ async def _scheduler_diario_pdf():
 
 @app.on_event("startup")
 async def _startup():
+    # --- Autenticación: preparar tabla de usuarios y admin inicial ---
+    try:
+        auth.init_db()
+        nuevo = auth.seed_admin_desde_env()
+        if nuevo:
+            print(f"[auth] usuario administrador inicial creado: '{nuevo}'")
+        _auth_state["login_enforce"] = LOGIN_ACTIVO and auth.existe_algun_usuario()
+        if _auth_state["login_enforce"]:
+            print("[auth] Login por usuario/clave ACTIVO → todo el sitio requiere sesión.")
+        elif LOGIN_ACTIVO:
+            print("[auth] APURISK_SECRET_KEY presente pero NO hay usuarios → login NO "
+                  "se exige. Definí APURISK_ADMIN_USER y APURISK_ADMIN_PASSWORD para "
+                  "crear el primer usuario.")
+        else:
+            print("[auth] Login por usuario/clave DESACTIVADO (sin APURISK_SECRET_KEY).")
+    except Exception as e:
+        print(f"[auth] inicialización de login falló (login desactivado): {e}")
+        _auth_state["login_enforce"] = False
+
     # Limpieza AGRESIVA de archivos antiguos al iniciar el servicio.
     # Esto elimina la basura acumulada de deploys anteriores SIN esperar
     # al primer ciclo del scheduler (que tarda hasta 30 min en correr).
