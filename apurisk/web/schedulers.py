@@ -135,6 +135,17 @@ async def _scheduler_diario_pdf():
 
 
 async def _startup():
+    # --- Tablas de configuración admin (Fase A) ---
+    try:
+        from ..storage.admin_tables import inicializar_admin_tables
+        import os
+        from pathlib import Path
+        db_path = os.environ.get("APURISK_DB_PATH", str(OUTPUT_DIR / "apurisk_archive.db"))
+        inicializar_admin_tables(db_path)
+        print("[admin] Tablas de configuración inicializadas.")
+    except Exception as e:
+        print(f"[admin] inicialización de tablas admin falló (no crítico): {e}")
+
     # --- Autenticación: preparar tabla de usuarios y admin inicial ---
     try:
         auth.init_db()

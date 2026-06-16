@@ -51,6 +51,7 @@ try:
     from .web.routes_diagnostics import router as diagnostics_router
     from .web.routes_reports import router as reports_router
     from .web.routes_cases import router as cases_router
+    from .web.routes_admin import router as admin_router
 except ImportError:  # ejecución como script suelto (sin contexto de paquete)
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -62,6 +63,7 @@ except ImportError:  # ejecución como script suelto (sin contexto de paquete)
     from apurisk.web.routes_diagnostics import router as diagnostics_router
     from apurisk.web.routes_reports import router as reports_router
     from apurisk.web.routes_cases import router as cases_router
+    from apurisk.web.routes_admin import router as admin_router
 
 
 app = FastAPI(
@@ -123,6 +125,7 @@ app.include_router(intelligence_router)
 app.include_router(diagnostics_router)
 app.include_router(reports_router)
 app.include_router(cases_router)
+app.include_router(admin_router)
 
 
 # Para correr local con: python -m apurisk.server
