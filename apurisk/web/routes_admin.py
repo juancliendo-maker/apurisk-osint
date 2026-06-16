@@ -1,7 +1,13 @@
 """APURISK · web/routes_admin — Panel de control administrativo (solo lectura — Fase A).
 
-Acceso: requiere sesión con rol 'admin'.
+Acceso: requiere sesión con rol 'admin' + token de origen admin (segundo factor).
 Aislamiento: si ADMIN_HOST está definido, solo acepta requests a ese host.
+
+Variables de entorno:
+  ADMIN_HOST             → subdominio admin (ej: admin.apurisk.onrender.com)
+  ADMIN_PRESHARED_TOKEN  → token de origen, presentado una vez vía ?admin_token=<valor>
+                           y persistido como cookie HttpOnly _apurisk_admin_tk (30 días).
+
 Rutas:
   GET /admin/          → Resumen del sistema
   GET /admin/fuentes   → Inventario de fuentes RSS
@@ -11,6 +17,7 @@ Rutas:
 """
 from __future__ import annotations
 import os
+import secrets
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -37,16 +44,49 @@ except ImportError:
 
 router = APIRouter(prefix="/admin")
 
-# Host opcional para aislamiento lógico (Ruta A).
-# Si se define ADMIN_HOST=admin.apurisk.com, solo ese host llega a estas rutas.
+# ── Env vars de aislamiento ─────────────────────────────────────────────────
+# ADMIN_HOST: si está definido, solo ese host puede acceder a /admin/*.
 _ADMIN_HOST = os.getenv("ADMIN_HOST", "").strip().lower()
 
+# ADMIN_PRESHARED_TOKEN: segundo factor de origen. El analista lo obtiene de
+# los env vars de Render y lo presenta UNA VEZ vía ?admin_token=<valor>.
+# El servidor planta una cookie HttpOnly de 30 días. Sin esa cookie, las
+# rutas /admin/* son inaccesibles aunque la sesión sea válida.
+_ADMIN_TOKEN       = os.getenv("ADMIN_PRESHARED_TOKEN", "").strip()
+_ADMIN_TOKEN_COOKIE = "_apurisk_admin_tk"
+_ADMIN_TOKEN_TTL    = 60 * 60 * 24 * 30  # 30 días en segundos
+
+_TOKEN_ACTIVO = bool(_ADMIN_TOKEN)
+
+if not _TOKEN_ACTIVO:
+    print("[admin] ADMIN_PRESHARED_TOKEN no configurado → segundo factor desactivado. "
+          "Define ADMIN_PRESHARED_TOKEN en Render para activar el control de origen.")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Auth & aislamiento
+# Auth & aislamiento — tres capas independientes
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _verificar_host(request: Request) -> bool:
+    """Capa 1: host header debe coincidir con ADMIN_HOST (si está configurado).
+    Render fija el Host desde el SNI del TLS handshake — no manipulable por el cliente."""
+    if not _ADMIN_HOST:
+        return True
+    host = request.headers.get("host", "").lower().split(":")[0]
+    return host == _ADMIN_HOST
+
+
+def _verificar_token_origen(request: Request) -> bool:
+    """Capa 2: cookie de token de origen (_apurisk_admin_tk).
+    Sin ADMIN_PRESHARED_TOKEN configurado, este check siempre pasa (degradación segura)."""
+    if not _TOKEN_ACTIVO:
+        return True
+    cookie_val = request.cookies.get(_ADMIN_TOKEN_COOKIE, "")
+    return bool(cookie_val) and secrets.compare_digest(cookie_val, _ADMIN_TOKEN)
+
+
 def _get_admin_sesion(request: Request) -> dict | None:
-    """Devuelve la sesión si el usuario tiene rol 'admin', None en caso contrario."""
+    """Capa 3: sesión válida con rol 'admin'."""
     if not _auth_state.get("login_enforce"):
         return {"username": "admin", "rol": "admin"}
     token = request.cookies.get(_COOKIE_SESION, "")
@@ -56,28 +96,93 @@ def _get_admin_sesion(request: Request) -> dict | None:
     return sesion
 
 
-def _verificar_host(request: Request) -> bool:
-    """True si el request llega desde el host admin permitido (o si no se configuró ninguno)."""
-    if not _ADMIN_HOST:
-        return True
-    host = request.headers.get("host", "").lower().split(":")[0]
-    return host == _ADMIN_HOST
-
-
 def _admin_guard(request: Request):
-    """Verifica host + rol. Devuelve (sesion, None) o (None, RedirectResponse)."""
+    """Verifica las tres capas. Devuelve (sesion, response_or_None).
+
+    Si el request trae ?admin_token=<valor> correcto, planta la cookie de origen
+    y redirige a la misma ruta sin el query param (limpia el token del historial
+    de navegador).
+    """
+    # Capa 1: host
     if not _verificar_host(request):
-        return None, HTMLResponse(_html_403("Acceso denegado desde este host."), status_code=403)
+        return None, HTMLResponse(_html_403(
+            "Acceso denegado desde este host. Usa el subdominio de administración."
+        ), status_code=403)
+
+    # Bootstrap del token de origen: si viene ?admin_token=<valor>, validar y plantar cookie.
+    query_token = request.query_params.get("admin_token", "").strip()
+    if query_token and _TOKEN_ACTIVO:
+        if secrets.compare_digest(query_token, _ADMIN_TOKEN):
+            # Token correcto: plantar cookie y redirigir sin el param (evita historial)
+            from urllib.parse import urlencode
+            params = {k: v for k, v in request.query_params.items() if k != "admin_token"}
+            clean_url = str(request.url.path)
+            if params:
+                clean_url += "?" + urlencode(params)
+            resp = RedirectResponse(clean_url, status_code=302)
+            resp.set_cookie(
+                _ADMIN_TOKEN_COOKIE, _ADMIN_TOKEN,
+                httponly=True, secure=True, samesite="strict",
+                max_age=_ADMIN_TOKEN_TTL,
+            )
+            return None, resp
+        else:
+            return None, HTMLResponse(_html_403(
+                "Token de acceso admin incorrecto."
+            ), status_code=403)
+
+    # Capa 2: cookie de token de origen
+    if not _verificar_token_origen(request):
+        return None, HTMLResponse(_html_403_token(), status_code=403)
+
+    # Capa 3: sesión admin
     sesion = _get_admin_sesion(request)
     if not sesion:
         from urllib.parse import quote
-        return None, RedirectResponse(f"/login?next={quote(request.url.path, safe='/')}", status_code=302)
+        return None, RedirectResponse(
+            f"/login?next={quote(request.url.path, safe='/')}",
+            status_code=302,
+        )
+
     return sesion, None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helpers HTML
+# Helpers HTML — páginas de error y layout
 # ──────────────────────────────────────────────────────────────────────────────
+
+_ERR_CSS = ("body{background:#0b1220;color:#e2e8f0;font-family:system-ui;"
+            "display:flex;align-items:center;justify-content:center;min-height:100vh;}"
+            ".box{max-width:460px;text-align:center;padding:32px;}"
+            "h1{color:#f59e0b;font-size:28px;margin-bottom:8px}"
+            "p{color:#94a3b8;margin:8px 0;font-size:14px;line-height:1.6}"
+            "code{background:#1f2a44;padding:2px 6px;border-radius:4px;font-size:13px}"
+            "a{color:#38bdf8;text-decoration:none}")
+
+
+def _html_403(msg: str = "Acceso denegado.") -> str:
+    return (f'<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">'
+            f'<title>403 Acceso denegado</title><style>{_ERR_CSS}</style></head>'
+            f'<body><div class="box"><h1>⛔ 403</h1><p>{escape(msg)}</p>'
+            f'<a href="/dashboard">← Volver al dashboard</a></div></body></html>')
+
+
+def _html_403_token() -> str:
+    host = _ADMIN_HOST or "admin.tudominio.com"
+    return (f'<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">'
+            f'<title>Acceso admin requerido</title><style>{_ERR_CSS}</style></head>'
+            f'<body><div class="box">'
+            f'<h1>🔐 Acceso de origen requerido</h1>'
+            f'<p>Este panel requiere un token de acceso de origen que no está presente en tu sesión.</p>'
+            f'<p>Para activarlo, accede una sola vez a:<br>'
+            f'<code>https://{escape(host)}/admin/?admin_token=TU_TOKEN</code></p>'
+            f'<p>El token lo encontrás en las variables de entorno de Render:<br>'
+            f'<code>ADMIN_PRESHARED_TOKEN</code></p>'
+            f'<p style="font-size:12px;color:#64748b">El token se guardará como cookie segura '
+            f'(HttpOnly, 30 días). No volverás a necesitar ingresarlo.</p>'
+            f'<a href="/dashboard">← Volver al dashboard</a>'
+            f'</div></body></html>')
+
 
 _CSS = """
 :root {
@@ -255,13 +360,6 @@ def _page(titulo: str, contenido: str, nav_activo: str, username: str) -> str:
 </html>"""
 
 
-def _html_403(msg: str = "Acceso denegado.") -> str:
-    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
-<title>403</title><style>body{{background:#0b1220;color:#e2e8f0;
-font-family:system-ui;display:flex;align-items:center;justify-content:center;
-min-height:100vh;}}div{{text-align:center;}}</style></head>
-<body><div><h1 style="color:#f59e0b">⛔ 403</h1><p>{escape(msg)}</p>
-<a href="/dashboard" style="color:#38bdf8">← Volver</a></div></body></html>"""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -849,6 +947,24 @@ async def admin_logs(request: Request):
     sin_serie = not serie
     sin_params = not parametros
 
+    _serie_html = (
+        '<div style="color:var(--muted);font-size:13px">Sin snapshots en BD aún.</div>'
+        if sin_serie else
+        '<div style="overflow-x:auto"><table class="tbl">'
+        '<thead><tr><th>Timestamp</th><th>Score</th><th>Nivel</th>'
+        '<th>Artículos total</th><th>Artículos 24h</th></tr></thead>'
+        f'<tbody>{filas_serie}</tbody></table></div>'
+    )
+    _params_html = (
+        '<div style="color:var(--muted);font-size:13px">Sin parámetros en BD aún.</div>'
+        if sin_params else
+        '<div style="overflow-x:auto"><table class="tbl">'
+        '<thead><tr><th>Clave</th><th>Valor</th><th>Tipo</th><th>Descripción</th></tr></thead>'
+        f'<tbody>{filas_params}</tbody></table></div>'
+    )
+    _err_col = "var(--alto)" if errores > 0 else "var(--bajo)"
+    _admin_host_label = escape(_ADMIN_HOST or "(no configurado — acceso solo por rol)")
+
     contenido = f"""
 <div class="card card-accent">
   <div class="card-title">Estado del scheduler</div>
@@ -858,13 +974,15 @@ async def admin_logs(request: Request):
         <td><span class="dot {dot_cls}"></span><b>{sch_txt}</b></td></tr>
     <tr><td>Ciclos ejecutados (esta sesión)</td><td>{total_runs}</td></tr>
     <tr><td>Errores acumulados</td>
-        <td style="color:{'var(--alto)' if errores > 0 else 'var(--bajo)'}">{errores}</td></tr>
+        <td style="color:{_err_col}">{errores}</td></tr>
     <tr><td>Último ciclo completado</td><td>{_ago(last_run)}<br>
         <span style="color:var(--muted);font-size:11px">{escape(last_run or '—')}</span></td></tr>
     <tr><td>Próximo ciclo</td>
         <td><span style="font-size:11px">{escape(next_run or '—')}</span></td></tr>
-    <tr><td>Host admin configurado</td>
-        <td><code style="color:var(--accent)">{escape(_ADMIN_HOST or '(no configurado — acceso por rol)')}</code></td></tr>
+    <tr><td>Host admin configurado (ADMIN_HOST)</td>
+        <td><code style="color:var(--accent)">{_admin_host_label}</code></td></tr>
+    <tr><td>Segundo factor de origen (ADMIN_PRESHARED_TOKEN)</td>
+        <td>{'<span class="badge badge-ok">Activo</span>' if _TOKEN_ACTIVO else '<span class="badge badge-warn">No configurado</span>'}</td></tr>
   </table>
 </div>
 
@@ -872,27 +990,12 @@ async def admin_logs(request: Request):
 
 <div class="card">
   <div class="card-title">Serie temporal de scores (últimos 10 ciclos)</div>
-  {'<div style="color:var(--muted);font-size:13px">Sin snapshots en BD aún.</div>' if sin_serie else f"""
-  <div style="overflow-x:auto">
-    <table class="tbl">
-      <thead><tr>
-        <th>Timestamp</th><th>Score</th><th>Nivel</th>
-        <th>Artículos total</th><th>Artículos 24h</th>
-      </tr></thead>
-      <tbody>{filas_serie}</tbody>
-    </table>
-  </div>"""}
+  {_serie_html}
 </div>
 
 <div class="card">
   <div class="card-title">Parámetros del motor de scoring</div>
-  {'<div style="color:var(--muted);font-size:13px">Sin parámetros en BD aún.</div>' if sin_params else f"""
-  <div style="overflow-x:auto">
-    <table class="tbl">
-      <thead><tr><th>Clave</th><th>Valor</th><th>Tipo</th><th>Descripción</th></tr></thead>
-      <tbody>{filas_params}</tbody>
-    </table>
-  </div>"""}
+  {_params_html}
 </div>
 """
     return HTMLResponse(_page("Logs del sistema", contenido, "logs", sesion["username"]))
