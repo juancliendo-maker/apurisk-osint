@@ -10,6 +10,7 @@ Single-file HTML self-contained con:
 from __future__ import annotations
 from datetime import datetime, timedelta
 import json
+import os
 import html as _html
 from collections import Counter
 from pathlib import Path
@@ -1644,6 +1645,12 @@ def generar_dashboard_html(
     acled_events = acled_events or []
     crimen_items = crimen_items or []
 
+    # URL del botón Admin: incluye el token de origen si está configurado,
+    # para que un solo clic active la cookie y acceda al panel sin pasos extra.
+    _admin_base = "https://admin.xauxa.net/admin/"
+    _admin_token = os.environ.get("ADMIN_PRESHARED_TOKEN", "").strip()
+    _admin_url = f"{_admin_base}?admin_token={_admin_token}" if _admin_token else _admin_base
+
     # 24h slice — todos ordenados por fecha desc (más reciente primero)
     articulos_sorted = sorted(articulos, key=lambda a: a.hours_ago())
     conflictos_sorted = sorted(conflictos, key=lambda c: c.hours_ago())
@@ -2390,7 +2397,7 @@ def generar_dashboard_html(
   <a href="/analisis"                style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🔍 Análisis de Caso</a>
   <a href="/riesgo-minera"           style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">⛏️ Riesgo Minera</a>
   <a href="/diagnostico/scores-paralelos" style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🧪 Diagnóstico</a>
-  <a href="https://admin.xauxa.net/admin/" target="_blank" rel="noopener noreferrer" style="color:#f59e0b; text-decoration:none; padding:5px 10px; border-radius:7px; background:#1c1a0e; border:1px solid #b45309;">⚙️ Admin</a>
+  <a href="{_admin_url}" target="_blank" rel="noopener noreferrer" style="color:#f59e0b; text-decoration:none; padding:5px 10px; border-radius:7px; background:#1c1a0e; border:1px solid #b45309;">⚙️ Admin</a>
   <a href="/logout" title="Cerrar sesión" style="margin-left:auto; color:#fca5a5; text-decoration:none; padding:5px 10px; border-radius:7px; background:#2a1620; border:1px solid #7f1d1d;">⎋ Cerrar sesión</a>
 </nav>
 
