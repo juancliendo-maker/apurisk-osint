@@ -2390,6 +2390,7 @@ def generar_dashboard_html(
   <a href="/analisis"                style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🔍 Análisis de Caso</a>
   <a href="/riesgo-minera"           style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">⛏️ Riesgo Minera</a>
   <a href="/diagnostico/scores-paralelos" style="color:#e5e7eb; text-decoration:none; padding:5px 10px; border-radius:7px; background:#16233c;">🧪 Diagnóstico</a>
+  <a href="https://admin.xauxa.net/admin/" target="_blank" rel="noopener noreferrer" style="color:#f59e0b; text-decoration:none; padding:5px 10px; border-radius:7px; background:#1c1a0e; border:1px solid #b45309;">⚙️ Admin</a>
   <a href="/logout" title="Cerrar sesión" style="margin-left:auto; color:#fca5a5; text-decoration:none; padding:5px 10px; border-radius:7px; background:#2a1620; border:1px solid #7f1d1d;">⎋ Cerrar sesión</a>
 </nav>
 
