@@ -665,3 +665,143 @@ def listar_ingestas(db_path: str, limite: int = 50) -> list:
     except Exception as e:
         print(f"[config_loader] listar_ingestas falló: {e}")
         return []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Motor de análisis dual — lectura de estructuras de configuración (Fase C)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def cargar_factores_formula(db_path: str, motor: str = "osint") -> dict:
+    """Devuelve {tipo_puntaje: [{nombre_factor, peso, descripcion}]} para el motor dado.
+
+    Ejemplo: {"sustancia": [...], "ruido": [...]}
+    {} si vacío/falla → el motor usa pesos hardcodeados (1.0 por defecto).
+    """
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT tipo_puntaje, nombre_factor, peso, descripcion "
+                "FROM config_factores_formula "
+                "WHERE motor=? AND activo=1 AND pais='PE' ORDER BY tipo_puntaje, id",
+                (motor,),
+            ).fetchall()
+        result: dict = {}
+        for r in rows:
+            result.setdefault(r["tipo_puntaje"], []).append({
+                "nombre_factor": r["nombre_factor"],
+                "peso": float(r["peso"]),
+                "descripcion": r["descripcion"] or "",
+            })
+        return result
+    except Exception as e:
+        print(f"[config_loader] cargar_factores_formula falló: {e}")
+        return {}
+
+
+def cargar_formula_semaforo(db_path: str, pais: str = "PE") -> list:
+    """Devuelve [{factor, nombre, peso}] para la fórmula del semáforo.
+
+    [] si vacío/falla → motor usa peso 1.0 para todos los factores.
+    """
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT factor, nombre, peso FROM config_formula_semaforo "
+                "WHERE pais=? AND activo=1 ORDER BY id",
+                (pais,),
+            ).fetchall()
+        return [{"factor": r["factor"], "nombre": r["nombre"], "peso": float(r["peso"])}
+                for r in rows]
+    except Exception as e:
+        print(f"[config_loader] cargar_formula_semaforo falló: {e}")
+        return []
+
+
+def cargar_umbrales_semaforo(db_path: str, pais: str = "PE") -> list:
+    """Devuelve [{rango_min, rango_max, nivel_sugerido, color_hex}] ordenados por rango_min.
+
+    [] si vacío/falla → motor usa umbrales hardcodeados.
+    """
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT rango_min, rango_max, nivel_sugerido, color_hex "
+                "FROM config_umbrales_semaforo "
+                "WHERE pais=? AND activo=1 ORDER BY rango_min",
+                (pais,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] cargar_umbrales_semaforo falló: {e}")
+        return []
+
+
+def cargar_activadores_rojo(db_path: str, pais: str = "PE") -> list:
+    """Devuelve [descripcion, ...] de activadores activos para el país, ordenados por orden.
+
+    [] si vacío/falla → motor no dispara activadores automáticos.
+    """
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT descripcion FROM config_activadores_rojo "
+                "WHERE pais=? AND activo=1 ORDER BY orden",
+                (pais,),
+            ).fetchall()
+        return [r["descripcion"] for r in rows]
+    except Exception as e:
+        print(f"[config_loader] cargar_activadores_rojo falló: {e}")
+        return []
+
+
+def guardar_resultado_analisis(db_path: str, articulo_id: int, motor: str,
+                               score_sustancia: float = None, score_ruido: float = None,
+                               score_semaforo: float = None, nivel_semaforo: str = None,
+                               activador_rojo: bool = False, resultado_json: str = None,
+                               pais: str = "PE") -> dict:
+    """Guarda o actualiza el resultado de un motor para un artículo (upsert).
+
+    Unicidad: (articulo_id, motor). Si ya existe, sobrescribe todos los campos.
+    Lanza LockTimeoutError si BD ocupada. Devuelve {ok, accion}.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        existe = c.execute(
+            "SELECT id FROM resultados_analisis WHERE articulo_id=? AND motor=?",
+            (articulo_id, motor),
+        ).fetchone()
+        if existe:
+            c.execute(
+                "UPDATE resultados_analisis SET pais=?, score_sustancia=?, score_ruido=?, "
+                "score_semaforo=?, nivel_semaforo=?, activador_rojo=?, resultado_json=?, "
+                "procesado_en=datetime('now') WHERE articulo_id=? AND motor=?",
+                (pais, score_sustancia, score_ruido, score_semaforo, nivel_semaforo,
+                 1 if activador_rojo else 0, resultado_json, articulo_id, motor),
+            )
+            return {"ok": True, "accion": "actualizado"}
+        c.execute(
+            "INSERT INTO resultados_analisis "
+            "(articulo_id, motor, pais, score_sustancia, score_ruido, "
+            "score_semaforo, nivel_semaforo, activador_rojo, resultado_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (articulo_id, motor, pais, score_sustancia, score_ruido,
+             score_semaforo, nivel_semaforo, 1 if activador_rojo else 0, resultado_json),
+        )
+        return {"ok": True, "accion": "creado"}
+
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def listar_resultados_articulo(db_path: str, articulo_id: int) -> list:
+    """Devuelve los resultados de todos los motores para un artículo dado."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT motor, score_sustancia, score_ruido, score_semaforo, "
+                "nivel_semaforo, activador_rojo, procesado_en "
+                "FROM resultados_analisis WHERE articulo_id=? ORDER BY motor",
+                (articulo_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_resultados_articulo falló: {e}")
+        return []
