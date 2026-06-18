@@ -805,8 +805,25 @@ async def admin_fuentes_log(request: Request):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GET /admin/factores   Factores P×I activos
+# GET /admin/factores   Editor de pesos de factores P×I (Fase B Item 2)
+# POST /admin/factores/peso  Actualiza impacto_base o prob_base de un factor
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _peso_color(val: int, campo: str) -> str:
+    """Color para el badge de impacto_base o prob_base."""
+    if campo == "impacto_base":
+        if val >= 80:
+            return "var(--alto)"
+        if val >= 60:
+            return "var(--warn, #e5a500)"
+        return "var(--bajo)"
+    else:  # prob_base
+        if val >= 30:
+            return "var(--alto)"
+        if val >= 20:
+            return "var(--warn, #e5a500)"
+        return "var(--bajo)"
+
 
 @router.get("/factores", response_class=HTMLResponse)
 async def admin_factores(request: Request):
@@ -814,78 +831,103 @@ async def admin_factores(request: Request):
     if err:
         return err
 
-    # Último snapshot para el último ciclo
-    snap = _ultimo_snapshot()
-    factores_snap = (snap.get("riesgo") or {}).get("factores") if snap else None
+    from ..storage.config_loader import listar_factores_config
+    factores_cfg = listar_factores_config(_get_db_path())
 
-    # Leer de BD: último snapshot de factores
-    factores_bd: list[dict] = []
+    # Último snapshot para mostrar valores reales del pipeline (prob/impacto/score actual)
+    factores_snap: dict[str, dict] = {}
     try:
         with _db_conn() as conn:
             rows = conn.execute("""
-                SELECT f.factor_id, f.nombre, f.categoria,
-                       f.probabilidad, f.impacto, f.score,
+                SELECT f.factor_id, f.probabilidad, f.impacto, f.score,
                        f.nivel, f.tendencia, f.menciones_24h
                 FROM factores f
                 JOIN snapshots s ON f.snapshot_id = s.id
                 WHERE s.id = (SELECT MAX(id) FROM snapshots)
-                ORDER BY f.score DESC
             """).fetchall()
-            factores_bd = [dict(r) for r in rows]
+            factores_snap = {r["factor_id"]: dict(r) for r in rows}
     except Exception:
         pass
 
-    # Usar lista del snapshot si la BD no tiene datos aún
-    fuente = factores_bd or []
-    if not fuente and factores_snap and isinstance(factores_snap, list):
-        fuente = factores_snap
+    msg = request.query_params.get("msg", "")
+    msg_tipo = request.query_params.get("tipo", "info")
+    msg_html = ""
+    if msg:
+        cls = {"ok": "alert-ok", "err": "alert-err", "warn": "alert-warn"}.get(msg_tipo, "alert-info")
+        msg_html = f'<div class="alert-box {cls}">{escape(msg)}</div>'
+
+    sin_datos = not factores_cfg
+    aviso = '<div class="alert-box alert-warn">config_factores vacía. Reinicia el servidor para poblarla automáticamente.</div>' if sin_datos else ""
 
     filas = ""
-    for f in fuente:
-        fid   = escape(f.get("factor_id") or "—")
+    for f in factores_cfg:
+        fid   = f.get("factor_id") or ""
         fname = escape(f.get("nombre") or "—")
         fcat  = escape(f.get("categoria") or "—")
-        prob  = f.get("probabilidad", 0) or 0
-        imp   = f.get("impacto", 0) or 0
-        score = f.get("score", 0) or 0
-        nivel = f.get("nivel") or "—"
-        men24 = f.get("menciones_24h", 0) or 0
-        tend  = f.get("tendencia") or "—"
+        imp   = int(f.get("impacto_base", 60))
+        prob  = int(f.get("prob_base", 25))
+        snap  = factores_snap.get(fid) or {}
+        prob_real  = snap.get("probabilidad", "—")
+        imp_real   = snap.get("impacto", "—")
+        score_real = snap.get("score")
+        nivel_real = snap.get("nivel", "—")
+        tend  = snap.get("tendencia") or "—"
         tend_ico = {"subiendo": "▲", "bajando": "▼", "estable": "▬"}.get(tend, "—")
         tend_col = {"subiendo": "var(--alto)", "bajando": "var(--bajo)", "estable": "var(--muted)"}.get(tend, "var(--muted)")
+        score_txt = f"{score_real:.1f}" if isinstance(score_real, (int, float)) else "—"
+
         filas += f"""<tr>
-  <td><span style="color:var(--muted);font-size:10px">{fid}</span><br><b>{fname}</b></td>
-  <td style="color:var(--muted)">{fcat}</td>
-  <td style="font-weight:600">{prob}%</td>
-  <td style="font-weight:600">{imp}</td>
-  <td style="font-size:16px;font-weight:700;color:var(--accent)">{score:.1f}</td>
-  <td>{_badge_nivel(nivel)}</td>
-  <td style="{'color:var(--muted)' if men24 == 0 else 'color:var(--text);font-weight:600'}">{men24}</td>
+  <td>
+    <span style="color:var(--muted);font-size:10px">{escape(fid)}</span><br>
+    <b>{fname}</b><br>
+    <span style="color:var(--muted);font-size:11px">{fcat}</span>
+  </td>
+  <td style="white-space:nowrap">
+    <span style="color:{_peso_color(imp,'impacto_base')};font-weight:700;font-size:15px">{imp}</span>
+    <form method="post" action="/admin/factores/peso" style="display:inline-flex;gap:4px;margin-left:6px;vertical-align:middle">
+      <input type="hidden" name="factor_id" value="{escape(fid)}">
+      <input type="hidden" name="campo" value="impacto_base">
+      <input type="number" name="valor" value="{imp}" min="1" max="100"
+             style="width:58px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:12px">
+      <button type="submit" style="padding:2px 8px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">✓</button>
+    </form>
+  </td>
+  <td style="white-space:nowrap">
+    <span style="color:{_peso_color(prob,'prob_base')};font-weight:700;font-size:15px">{prob}%</span>
+    <form method="post" action="/admin/factores/peso" style="display:inline-flex;gap:4px;margin-left:6px;vertical-align:middle">
+      <input type="hidden" name="factor_id" value="{escape(fid)}">
+      <input type="hidden" name="campo" value="prob_base">
+      <input type="number" name="valor" value="{prob}" min="1" max="95"
+             style="width:54px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:12px">
+      <button type="submit" style="padding:2px 8px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">✓</button>
+    </form>
+  </td>
+  <td style="font-size:13px;color:var(--muted)">{prob_real}% → {imp_real}</td>
+  <td style="font-size:15px;font-weight:700;color:var(--accent)">{score_txt}</td>
+  <td>{_badge_nivel(nivel_real)}</td>
   <td style="color:{tend_col}">{tend_ico}</td>
 </tr>\n"""
 
-    sin_datos = not fuente
-    aviso = '<div class="alert-box alert-warn">Sin datos de factores en BD aún. Ejecuta un ciclo del pipeline.</div>' if sin_datos else ""
-
     contenido = f"""
+{msg_html}
 <div class="alert-box alert-info">
-  ℹ️ Fase A: factores leídos desde el último snapshot del pipeline.
-  En Fase B serán editables (impacto_base, prob_base, keywords) desde este panel.
+  <b>Editor de pesos base P×I.</b> Los cambios toman efecto en el próximo ciclo del pipeline (hasta 30 min).
+  impacto_base: 1–100 · prob_base: 1–95%.
+  Los valores <b>Prob. real</b> e <b>Impacto real</b> son los calculados por el pipeline en el último ciclo.
 </div>
 {aviso}
 <div class="card">
-  <div class="card-title">Factores P×I · último ciclo ({len(fuente)} factores)</div>
-  <div style="font-size:11px;color:var(--muted);margin-bottom:12px">
-    Coincidencia de keywords: % de keywords fuerte/contexto que matchearon —
-    <b>es coincidencia léxica, no un modelo de NLP.</b>
-    Menciones 24h: artículos que activaron el factor en las últimas 24h.
-  </div>
+  <div class="card-title">Factores P×I — pesos base configurables ({len(factores_cfg)} factores)</div>
   <div style="overflow-x:auto">
     <table class="tbl">
       <thead><tr>
-        <th>Factor</th><th>Categoría</th>
-        <th>Prob.</th><th>Impacto</th><th>Score P×I</th>
-        <th>Nivel</th><th>Mencs 24h</th><th>Tend.</th>
+        <th>Factor</th>
+        <th>Impacto base</th>
+        <th>Prob. base</th>
+        <th>Prob. real → Imp. real</th>
+        <th>Score actual</th>
+        <th>Nivel</th>
+        <th>Tend.</th>
       </tr></thead>
       <tbody>{filas}</tbody>
     </table>
@@ -893,6 +935,35 @@ async def admin_factores(request: Request):
 </div>
 """
     return HTMLResponse(_page("Factores de riesgo", contenido, "factores", sesion["username"]))
+
+
+@router.post("/factores/peso", response_class=HTMLResponse)
+async def admin_factores_peso(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    form = await request.form()
+    factor_id = (form.get("factor_id") or "").strip()
+    campo     = (form.get("campo") or "").strip()
+    valor_str = (form.get("valor") or "").strip()
+
+    from ..storage.config_loader import actualizar_factor_peso, LockTimeoutError
+    from fastapi.responses import RedirectResponse as RR
+    try:
+        r = actualizar_factor_peso(
+            _get_db_path(), factor_id, campo, valor_str,
+            usuario=sesion["username"],
+        )
+        msg = f"✓ {campo.replace('_', ' ')} de '{factor_id}' actualizado: {r['valor_anterior']} → {r['valor_nuevo']}. Activo en próximo ciclo."
+        return RR(f"/admin/factores?msg={escape(msg)}&tipo=ok", status_code=303)
+    except LockTimeoutError:
+        msg = "El sistema está actualizando datos (ciclo automático en curso). El cambio NO se guardó. Reintenta en unos segundos."
+        return RR(f"/admin/factores?msg={escape(msg)}&tipo=err", status_code=303)
+    except ValueError as e:
+        return RR(f"/admin/factores?msg={escape(str(e))}&tipo=err", status_code=303)
+    except Exception as e:
+        return RR(f"/admin/factores?msg=Error+inesperado:+{escape(str(e))}&tipo=err", status_code=303)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
