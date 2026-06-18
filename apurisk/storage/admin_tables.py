@@ -149,22 +149,32 @@ CREATE TABLE IF NOT EXISTS config_formula_semaforo (
 );
 
 -- Umbrales de clasificación del semáforo (guía visual)
+-- Rangos DUALES: el porcentaje SUGIERE una banda (primario/secundario), pero NO
+-- decide solo — el peso del actor corrige la lectura final. Por eso bandas bajas
+-- ofrecen dos niveles (ej. 0-3% verde O amarillo según actor). nivel_secundario
+-- y color_secundario_hex son NULL cuando la banda es de color único.
 CREATE TABLE IF NOT EXISTS config_umbrales_semaforo (
-    id              INTEGER PRIMARY KEY,
-    rango_min       REAL NOT NULL,
-    rango_max       REAL NOT NULL,
-    nivel_sugerido  TEXT NOT NULL,   -- 'VERDE' | 'AMARILLO' | 'NARANJA' | 'ROJO_PROBABLE' | 'ROJO'
-    color_hex       TEXT,
-    pais            TEXT NOT NULL DEFAULT 'PE',
-    activo          INTEGER NOT NULL DEFAULT 1,
+    id                    INTEGER PRIMARY KEY,
+    rango_min             REAL NOT NULL,
+    rango_max             REAL NOT NULL,
+    nivel_sugerido        TEXT NOT NULL,   -- nivel primario de la banda
+    color_hex             TEXT,            -- color primario
+    nivel_secundario      TEXT,            -- nivel alternativo si el actor corrige (NULL = banda única)
+    color_secundario_hex  TEXT,            -- color alternativo (NULL = banda única)
+    pais                  TEXT NOT NULL DEFAULT 'PE',
+    activo                INTEGER NOT NULL DEFAULT 1,
     UNIQUE(rango_min, rango_max, pais)
 );
 
 -- Activadores de rojo automático (editables por país)
+-- tipo: 'absoluto'    → dispara ROJO por sí mismo, sin importar el contexto
+--       'condicional' → dispara ROJO solo si el contexto lo confirma (depende del
+--                       motor de inteligencia evaluar afectación real)
 CREATE TABLE IF NOT EXISTS config_activadores_rojo (
     id          INTEGER PRIMARY KEY,
     pais        TEXT NOT NULL DEFAULT 'PE',
     descripcion TEXT NOT NULL,
+    tipo        TEXT NOT NULL DEFAULT 'condicional',  -- 'absoluto' | 'condicional'
     activo      INTEGER NOT NULL DEFAULT 1,
     orden       INTEGER NOT NULL DEFAULT 0,
     UNIQUE(pais, descripcion)
@@ -267,33 +277,49 @@ _DATOS_INICIALES = [
           ("V",  "Velocidad de propagación y adopción mediática"),
       ]],
 
-    # ── Umbrales del semáforo ──────────────────────────────────────────────────
+    # ── Umbrales del semáforo (rangos DUALES — el % sugiere, el actor corrige) ──
+    # Bandas bajas ofrecen dos niveles; el motor de inteligencia elige según el
+    # peso del actor. Bandas altas (≥20%) son de color único.
     *[("INSERT OR IGNORE INTO config_umbrales_semaforo "
-       "(rango_min, rango_max, nivel_sugerido, color_hex, pais, activo) "
-       f"VALUES ({rmin}, {rmax}, '{nivel}', '{color}', 'PE', 1)", [])
-      for rmin, rmax, nivel, color in [
-          (0,   3,  "VERDE",         "#2ecc71"),
-          (3,   9,  "AMARILLO",      "#f1c40f"),
-          (10,  19, "NARANJA",       "#e67e22"),
-          (20,  30, "ROJO_PROBABLE", "#e74c3c"),
-          (30, 100, "ROJO",          "#c0392b"),
+       "(rango_min, rango_max, nivel_sugerido, color_hex, "
+       "nivel_secundario, color_secundario_hex, pais, activo) "
+       f"VALUES ({rmin}, {rmax}, '{n1}', '{c1}', {n2}, {c2}, 'PE', 1)", [])
+      for rmin, rmax, n1, c1, n2, c2 in [
+          (0,   3,  "VERDE",         "#2ecc71", "'AMARILLO'", "'#f1c40f'"),
+          (4,   9,  "AMARILLO",      "#f1c40f", "'NARANJA'",  "'#e67e22'"),
+          (10,  19, "NARANJA_ALTO",  "#e67e22", "NULL",       "NULL"),
+          (20,  30, "ROJO_PROBABLE", "#e74c3c", "NULL",       "NULL"),
+          (30, 100, "ROJO",          "#c0392b", "NULL",       "NULL"),
       ]],
 
     # ── Activadores de rojo automático — Perú ─────────────────────────────────
+    # tipo 'absoluto'    → dispara ROJO por sí mismo
+    #      'condicional' → dispara ROJO solo si el contexto lo confirma
     *[("INSERT OR IGNORE INTO config_activadores_rojo "
-       f"(pais, descripcion, activo, orden) VALUES ('PE', '{desc}', 1, {orden})", [])
-      for orden, desc in enumerate([
-          "Renuncia o cierre del Ejecutivo (presidente, premier o ministros clave)",
-          "Manifiesto, comunicado o posicionamiento público de las FFAA o PNP",
-          "Censura, interpelación, moción de vacancia o comisión investigadora activada en el Congreso",
-          "Investigación formal abierta por Fiscalía, Contraloría, PJ o Procuraduría General",
-          "Paro, bloqueo o movilización anunciada formalmente por gremio, sindicato, frente regional o comunidad",
-          "Adhesión pública de gobernador regional, alcalde provincial o líder territorial al conflicto",
-          "Medios nacionales de referencia instalando escándalo en portada o agenda principal por ≥48h",
-          "Señal de preocupación de embajada, organismo internacional o agencia calificadora",
-          "Afectación directa a inversión, operación, seguridad, reputación o continuidad de autoridad competente",
-          "Paso documentado de indignación digital a acción física, legal, política o administrativa",
+       f"(pais, descripcion, tipo, activo, orden) VALUES ('PE', '{desc}', '{tipo}', 1, {orden})", [])
+      for orden, (tipo, desc) in enumerate([
+          ("absoluto",    "Renuncia o cierre del Ejecutivo (presidente, premier o ministros clave)"),
+          ("absoluto",    "Manifiesto, comunicado o posicionamiento público de las FFAA o PNP"),
+          ("absoluto",    "Censura, interpelación, moción de vacancia o comisión investigadora activada en el Congreso"),
+          ("absoluto",    "Investigación formal abierta por Fiscalía, Contraloría, PJ o Procuraduría General"),
+          ("condicional", "Paro, bloqueo o movilización anunciada formalmente por gremio, sindicato, frente regional o comunidad"),
+          ("condicional", "Adhesión pública de gobernador regional, alcalde provincial o líder territorial al conflicto"),
+          ("condicional", "Medios nacionales de referencia instalando escándalo en portada o agenda principal por ≥48h"),
+          ("condicional", "Señal de preocupación de embajada, organismo internacional o agencia calificadora"),
+          ("condicional", "Afectación directa a inversión, operación, seguridad, reputación o continuidad de autoridad competente"),
+          ("condicional", "Paso documentado de indignación digital a acción física, legal, política o administrativa"),
       ], start=1)],
+
+    # ── Parámetro: tipo de fórmula del semáforo (MULTIPLICATIVA, no aditiva) ───
+    # VC × PA × CE × IA × V — un factor en 0 colapsa el resultado a 0.
+    # Los 'peso' de config_formula_semaforo actúan como EXPONENTES de cada factor,
+    # no como sumandos. Documentado aquí para que el motor (tarea 2) lo respete.
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('FORMULA_SEMAFORO_TIPO', 'multiplicativa', 'string', "
+        "'Fórmula del semáforo: VC x PA x CE x IA x V. Pesos = exponentes. "
+        "Un factor en 0 colapsa el resultado.', 'GLOBAL')", []
+    ),
 ]
 
 

@@ -718,14 +718,18 @@ def cargar_formula_semaforo(db_path: str, pais: str = "PE") -> list:
 
 
 def cargar_umbrales_semaforo(db_path: str, pais: str = "PE") -> list:
-    """Devuelve [{rango_min, rango_max, nivel_sugerido, color_hex}] ordenados por rango_min.
+    """Devuelve los umbrales DUALES del semáforo ordenados por rango_min.
 
+    Cada banda: {rango_min, rango_max, nivel_sugerido, color_hex,
+                 nivel_secundario, color_secundario_hex}.
+    nivel_secundario/color_secundario_hex son None en bandas de color único.
     [] si vacío/falla → motor usa umbrales hardcodeados.
     """
     try:
         with _conn(db_path) as c:
             rows = c.execute(
-                "SELECT rango_min, rango_max, nivel_sugerido, color_hex "
+                "SELECT rango_min, rango_max, nivel_sugerido, color_hex, "
+                "nivel_secundario, color_secundario_hex "
                 "FROM config_umbrales_semaforo "
                 "WHERE pais=? AND activo=1 ORDER BY rango_min",
                 (pais,),
@@ -737,18 +741,19 @@ def cargar_umbrales_semaforo(db_path: str, pais: str = "PE") -> list:
 
 
 def cargar_activadores_rojo(db_path: str, pais: str = "PE") -> list:
-    """Devuelve [descripcion, ...] de activadores activos para el país, ordenados por orden.
+    """Devuelve [{descripcion, tipo}] de activadores activos, ordenados por orden.
 
+    tipo: 'absoluto' (dispara ROJO por sí mismo) | 'condicional' (depende del contexto).
     [] si vacío/falla → motor no dispara activadores automáticos.
     """
     try:
         with _conn(db_path) as c:
             rows = c.execute(
-                "SELECT descripcion FROM config_activadores_rojo "
+                "SELECT descripcion, tipo FROM config_activadores_rojo "
                 "WHERE pais=? AND activo=1 ORDER BY orden",
                 (pais,),
             ).fetchall()
-        return [r["descripcion"] for r in rows]
+        return [{"descripcion": r["descripcion"], "tipo": r["tipo"]} for r in rows]
     except Exception as e:
         print(f"[config_loader] cargar_activadores_rojo falló: {e}")
         return []
