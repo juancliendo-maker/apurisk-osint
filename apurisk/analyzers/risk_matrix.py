@@ -904,6 +904,20 @@ DECAY_HALF_LIFE_H = 36.0   # peso(72h) ≈ 0.25, peso(24h) ≈ 0.63, peso(6h) �
 LOG_COEFICIENTE = 32.0     # multiplicador del log(1 + Σ pesos)
 
 
+def _pesos_override_bd() -> dict:
+    """Override de impacto_base/prob_base editados desde el panel admin (config_factores).
+    {} si no hay BD/datos → pipeline usa hardcodeados. Nunca rompe el pipeline."""
+    try:
+        import os
+        from ..storage.config_loader import cargar_pesos_override
+        db = os.environ.get("APURISK_DB_PATH",
+                            os.path.join(os.getenv("OUTPUT_DIR", "output"),
+                                         "apurisk_archive.db"))
+        return cargar_pesos_override(db)
+    except Exception:
+        return {}
+
+
 def _calidad_override_bd() -> dict:
     """Override de calidad editado desde el panel admin (config_fuentes).
     {} si no hay BD/datos → se usa solo el dict hardcodeado. Nunca rompe el pipeline."""
@@ -956,8 +970,8 @@ def _calcular_probabilidad_auditable(factor: dict, evidencias: list,
     fid = factor["id"]
     categoria = factor.get("categoria", "")
 
-    # 1) Probabilidad base estructural
-    prob_base = PROB_BASE_FACTOR.get(
+    # 1) Probabilidad base estructural (override BD tiene prioridad si fue editado)
+    prob_base = factor.get("_prob_base_override") or PROB_BASE_FACTOR.get(
         fid,
         PROB_BASE_CATEGORIA.get(categoria, 8)
     )
@@ -1067,6 +1081,10 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
     horas_max = MATCH_CONFIG["ventana_dias_max"] * 24
     todos_recientes = [a for a in todos if a.hours_ago() <= horas_max]
 
+    # Override de pesos editados en el panel admin (Fase B Item 2).
+    # Cacheado 5 min; {} si BD no disponible → valores hardcodeados.
+    _pesos_bd = _pesos_override_bd()
+
     for f in FACTORES:
         evidencias = []
         cnt_reciente = 0  # < 24h (solo para tendencia)
@@ -1100,11 +1118,18 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
         evidencias.sort(key=lambda e: -e.get("score_relevancia", 0))
 
         # ====== NUEVA PROBABILIDAD CONTINUA + AUDITABLE ======
-        calc = _calcular_probabilidad_auditable(f, evidencias, criticidad_max)
+        # Aplicar overrides de pesos editados en el panel admin (Fase B Item 2)
+        _ov = _pesos_bd.get(f["id"]) or {}
+        f_efectivo = f if not _ov else {
+            **f,
+            "impacto_base": _ov.get("impacto_base", f["impacto_base"]),
+            "_prob_base_override": _ov.get("prob_base"),
+        }
+        calc = _calcular_probabilidad_auditable(f_efectivo, evidencias, criticidad_max)
         prob = calc["prob_final"]
         breakdown = calc["breakdown"]
 
-        impacto = f["impacto_base"]
+        impacto = f_efectivo["impacto_base"]
         if criticidad_max == "alta":
             impacto = min(100, impacto + 5)
 

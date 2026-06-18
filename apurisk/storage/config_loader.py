@@ -255,3 +255,131 @@ def actualizar_fuente(db_path: str, fuente_id: int, campo: str, valor_nuevo,
     resultado = _ejecutar_con_reintentos(db_path, _op)
     invalidar_calidad_cache()  # la próxima lectura del pipeline verá el cambio
     return resultado
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Factores: seed, lectura y escritura de pesos (Fase B Item 2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def seed_factores_si_vacio(db_path: str, factores_hardcode: list,
+                           prob_base_dict: dict) -> int:
+    """Si config_factores está vacía, la puebla desde FACTORES + PROB_BASE_FACTOR.
+
+    factores_hardcode: lista de dicts con id, nombre, categoria, impacto_base.
+    prob_base_dict: dict factor_id → prob_base.
+    Devuelve número de filas insertadas (0 si ya había datos).
+    """
+    if not factores_hardcode:
+        return 0
+    try:
+        with _conn(db_path) as c:
+            ya = c.execute("SELECT COUNT(*) AS n FROM config_factores").fetchone()
+            if ya and ya["n"] > 0:
+                return 0
+            insertadas = 0
+            for i, f in enumerate(factores_hardcode):
+                fid     = f.get("id") or ""
+                nombre  = f.get("nombre") or fid
+                cat     = f.get("categoria") or "General"
+                impacto = int(f.get("impacto_base", 60))
+                prob    = int(prob_base_dict.get(fid, 25))
+                c.execute(
+                    "INSERT INTO config_factores "
+                    "(factor_id, nombre, categoria, pais, impacto_base, prob_base, activo, orden) "
+                    "VALUES (?, ?, ?, 'PE', ?, ?, 1, ?)",
+                    (fid, nombre, cat, impacto, prob, i),
+                )
+                insertadas += 1
+            c.commit()
+            return insertadas
+    except Exception as e:
+        print(f"[config_loader] seed_factores_si_vacio falló (no crítico): {e}")
+        return 0
+
+
+def listar_factores_config(db_path: str) -> list:
+    """Todos los factores de config_factores para la UI editable."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, factor_id, nombre, categoria, impacto_base, prob_base, activo, orden "
+                "FROM config_factores ORDER BY orden, categoria, nombre"
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_factores_config falló: {e}")
+        return []
+
+
+# Cache de pesos por factor_id (refrescado tras edición o cada 5 min)
+_pesos_cache: dict[str, dict] = {}
+_pesos_cache_ts: float = 0.0
+_PESOS_TTL = 300.0  # 5 min
+
+
+def cargar_pesos_override(db_path: str, forzar: bool = False) -> dict:
+    """Devuelve {factor_id: {impacto_base, prob_base}} desde config_factores.
+    Cacheado 5 min. {} si vacío/falla (pipeline usa hardcodeados)."""
+    global _pesos_cache, _pesos_cache_ts
+    ahora = time.time()
+    if not forzar and _pesos_cache and (ahora - _pesos_cache_ts) < _PESOS_TTL:
+        return _pesos_cache
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT factor_id, impacto_base, prob_base FROM config_factores WHERE activo = 1"
+            ).fetchall()
+        _pesos_cache = {
+            r["factor_id"]: {"impacto_base": r["impacto_base"], "prob_base": r["prob_base"]}
+            for r in rows
+        }
+        _pesos_cache_ts = ahora
+        return _pesos_cache
+    except Exception:
+        return _pesos_cache or {}
+
+
+def invalidar_pesos_cache() -> None:
+    """Fuerza recarga del cache de pesos tras una edición."""
+    global _pesos_cache_ts
+    _pesos_cache_ts = 0.0
+
+
+_CAMPOS_FACTORES_EDITABLES = {"impacto_base", "prob_base"}
+
+
+def actualizar_factor_peso(db_path: str, factor_id: str, campo: str,
+                           valor_nuevo, usuario: str, motivo: str = "") -> dict:
+    """Actualiza impacto_base o prob_base de un factor.
+
+    Validaciones: impacto_base ∈ [1, 100], prob_base ∈ [1, 95].
+    Lanza ValueError o LockTimeoutError. Devuelve {ok, valor_anterior, valor_nuevo}.
+    """
+    if campo not in _CAMPOS_FACTORES_EDITABLES:
+        raise ValueError(f"Campo no editable: {campo}")
+
+    def _op(c: sqlite3.Connection) -> dict:
+        fila = c.execute(
+            f"SELECT {campo} AS v FROM config_factores WHERE factor_id = ?", (factor_id,)
+        ).fetchone()
+        if fila is None:
+            raise ValueError(f"Factor '{factor_id}' no existe en config_factores")
+        valor_anterior = fila["v"]
+
+        vn = int(round(float(valor_nuevo)))
+        if campo == "impacto_base":
+            if not (1 <= vn <= 100):
+                raise ValueError("impacto_base debe estar entre 1 y 100")
+        else:  # prob_base
+            if not (1 <= vn <= 95):
+                raise ValueError("prob_base debe estar entre 1 y 95")
+
+        c.execute(
+            f"UPDATE config_factores SET {campo} = ? WHERE factor_id = ?",
+            (vn, factor_id),
+        )
+        return {"ok": True, "valor_anterior": valor_anterior, "valor_nuevo": vn}
+
+    resultado = _ejecutar_con_reintentos(db_path, _op)
+    invalidar_pesos_cache()
+    return resultado

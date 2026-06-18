@@ -164,6 +164,17 @@ async def _startup():
         except Exception as e:
             print(f"[config] seed de config_fuentes falló (no crítico): {e}")
 
+    # --- Seed de config_factores desde FACTORES + PROB_BASE_FACTOR (Fase B, item 2) ---
+    if db_path:
+        try:
+            from ..storage.config_loader import seed_factores_si_vacio
+            from ..analyzers.risk_matrix import FACTORES, PROB_BASE_FACTOR
+            n = seed_factores_si_vacio(db_path, FACTORES, PROB_BASE_FACTOR)
+            if n > 0:
+                print(f"[config] config_factores poblada con {n} factores")
+        except Exception as e:
+            print(f"[config] seed de config_factores falló (no crítico): {e}")
+
     # --- Autenticación: preparar tabla de usuarios y admin inicial ---
     try:
         auth.init_db()
