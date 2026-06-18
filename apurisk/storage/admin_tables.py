@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS config_fuentes (
     tipo            TEXT NOT NULL DEFAULT 'rss',      -- 'rss' | 'web' | 'manual'
     pais            TEXT NOT NULL DEFAULT 'PE',
     calidad         REAL NOT NULL DEFAULT 1.0,
+    peso_analista   REAL NOT NULL DEFAULT 1.0,        -- multiplicador manual del analista (0.1–2.0)
     activo          INTEGER NOT NULL DEFAULT 1,
     categoria       TEXT,
     notas           TEXT,
@@ -148,6 +149,12 @@ _DATOS_INICIALES = [
 ]
 
 
+_MIGRACIONES = [
+    # Fase B cierre: añadir peso_analista a instancias existentes (idempotente)
+    "ALTER TABLE config_fuentes ADD COLUMN peso_analista REAL NOT NULL DEFAULT 1.0",
+]
+
+
 def inicializar_admin_tables(db_path: str) -> None:
     """Crea las tablas de configuración admin en la BD existente e inserta datos iniciales."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -156,6 +163,12 @@ def inicializar_admin_tables(db_path: str) -> None:
             conn.executescript(_ADMIN_SCHEMA)
             for sql, _ in _DATOS_INICIALES:
                 conn.execute(sql)
+            # Migraciones idempotentes: ignoran "duplicate column" de SQLite
+            for mig in _MIGRACIONES:
+                try:
+                    conn.execute(mig)
+                except sqlite3.OperationalError:
+                    pass  # columna ya existe
             conn.commit()
     except Exception as e:
         print(f"[admin_tables] Error inicializando tablas admin: {e}")

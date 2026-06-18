@@ -616,7 +616,7 @@ async def admin_fuentes(request: Request):
     filas_html = ""
     for cat, items in grupos.items():
         cat_label = _CAT_LABEL.get(cat, (cat or "otros").title())
-        filas_html += (f'<tr><td colspan="5" style="background:var(--bg-2);color:var(--muted);'
+        filas_html += (f'<tr><td colspan="6" style="background:var(--bg-2);color:var(--muted);'
                        f'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;'
                        f'padding:8px 10px">{escape(cat_label)} ({len(items)})</td></tr>\n')
         for f in items:
@@ -636,6 +636,9 @@ async def admin_fuentes(request: Request):
             toggle_val = "0" if activo else "1"
             row_op = "" if activo else "opacity:.55;"
 
+            pa     = float(f.get("peso_analista") or 1.0)
+            pa_col = _calidad_color(pa)
+
             filas_html += f"""<tr style="{row_op}">
   <td>{fname}<br><span style="color:var(--muted);font-size:10px">{tipo_badge}</span></td>
   <td>{estado_badge}</td>
@@ -646,7 +649,17 @@ async def admin_fuentes(request: Request):
              style="width:64px;padding:3px 6px;border-radius:6px;border:1px solid var(--bg-3);
                     background:var(--bg-0);color:{q_col};font-weight:600;font-size:12px">
       <button type="submit" style="padding:3px 8px;border:0;border-radius:6px;
-              background:var(--bg-3);color:var(--text);font-size:11px;cursor:pointer">Guardar</button>
+              background:var(--bg-3);color:var(--text);font-size:11px;cursor:pointer">✓</button>
+    </form>
+  </td>
+  <td>
+    <form method="post" action="/admin/fuentes/peso_analista" style="display:flex;gap:4px;align-items:center">
+      <input type="hidden" name="fuente_id" value="{fid}">
+      <input type="number" name="peso_analista" value="{pa:.2f}" step="0.05" min="0.1" max="2.0"
+             style="width:64px;padding:3px 6px;border-radius:6px;border:1px solid var(--bg-3);
+                    background:var(--bg-0);color:{pa_col};font-weight:600;font-size:12px">
+      <button type="submit" style="padding:3px 8px;border:0;border-radius:6px;
+              background:var(--bg-3);color:var(--text);font-size:11px;cursor:pointer">✓</button>
     </form>
   </td>
   <td>
@@ -699,7 +712,10 @@ async def admin_fuentes(request: Request):
   <div style="overflow-x:auto">
     <table class="tbl">
       <thead><tr>
-        <th>Fuente</th><th>Estado</th><th>Calidad</th><th>Acción</th><th>URL</th>
+        <th>Fuente</th><th>Estado</th>
+        <th title="Multiplicador automático basado en historial de confiabilidad">Calidad auto</th>
+        <th title="Multiplicador manual del analista — sobreescribe calidad en el pipeline">Peso analista</th>
+        <th>Acción</th><th>URL</th>
       </tr></thead>
       <tbody>{filas_html}</tbody>
     </table>
@@ -751,6 +767,28 @@ async def admin_fuentes_calidad(request: Request):
                               usuario=sesion["username"], motivo="edición de calidad")
         return RedirectResponse(
             f"/admin/fuentes?msg=Calidad+actualizada+a+{r['valor_nuevo']}", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            "/admin/fuentes?err=El+sistema+está+actualizando+datos+(ciclo+automático).+"
+            "El+cambio+NO+se+guardó.+Reintenta+en+unos+segundos.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/fuentes?err={escape(str(e))}", status_code=303)
+
+
+@router.post("/fuentes/peso_analista")
+async def admin_fuentes_peso_analista(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import actualizar_fuente, LockTimeoutError
+    form = await request.form()
+    try:
+        fuente_id = int(form.get("fuente_id"))
+        peso = form.get("peso_analista")
+        r = actualizar_fuente(_get_db_path(), fuente_id, "peso_analista", peso,
+                              usuario=sesion["username"], motivo="edición de peso analista")
+        return RedirectResponse(
+            f"/admin/fuentes?msg=Peso+analista+actualizado+a+{r['valor_nuevo']}", status_code=303)
     except LockTimeoutError:
         return RedirectResponse(
             "/admin/fuentes?err=El+sistema+está+actualizando+datos+(ciclo+automático).+"
@@ -1137,18 +1175,18 @@ async def admin_keywords_desactivar(request: Request, factor_id: str):
 _TRIGGER_B2 = 10  # ingestas/día que sugieren migrar a Postgres
 
 
-def _trigger_html(n_hoy: int) -> str:
+def _trigger_html(n_hoy: int, n_semana: int) -> str:
     pct = min(100, int(n_hoy / _TRIGGER_B2 * 100))
     if n_hoy >= _TRIGGER_B2:
         color = "var(--alto)"
-        aviso = (f"<b>⚠️ Trigger B2 alcanzado ({n_hoy}/{_TRIGGER_B2} hoy).</b> "
+        aviso = (f"<b>⚠️ Trigger B2 alcanzado ({n_hoy}/{_TRIGGER_B2} hoy · {n_semana} esta semana).</b> "
                  "Considera migrar a PostgreSQL para soporte de ingesta a alta frecuencia.")
     elif n_hoy >= _TRIGGER_B2 * 0.7:
         color = "var(--warn, #e5a500)"
-        aviso = f"Acercándote al trigger B2 ({n_hoy}/{_TRIGGER_B2} hoy)."
+        aviso = f"Acercándote al trigger B2 — <b>{n_hoy}/{_TRIGGER_B2} hoy</b> · {n_semana} esta semana."
     else:
         color = "var(--bajo)"
-        aviso = f"Ingestas hoy: {n_hoy} / {_TRIGGER_B2} (umbral de migración B2)."
+        aviso = f"Ingestas: <b>{n_hoy}/{_TRIGGER_B2} hoy</b> · {n_semana} esta semana (umbral de migración B2)."
     return f"""<div class="alert-box" style="border-left:4px solid {color};padding:10px 14px;margin-bottom:14px">
   {aviso}
   <div style="margin-top:6px;background:var(--bg2);border-radius:4px;height:8px;width:100%">
@@ -1163,9 +1201,11 @@ async def admin_ingestas(request: Request):
     if err:
         return err
 
-    from ..storage.config_loader import listar_ingestas, contar_ingestas_hoy
+    from ..storage.config_loader import listar_ingestas, contar_ingestas
     ingestas = listar_ingestas(_get_db_path(), limite=30)
-    n_hoy = contar_ingestas_hoy(_get_db_path())
+    _conteo = contar_ingestas(_get_db_path())
+    n_hoy    = _conteo["hoy"]
+    n_semana = _conteo["semana"]
 
     msg = request.query_params.get("msg", "")
     msg_tipo = request.query_params.get("tipo", "info")
@@ -1218,7 +1258,7 @@ async def admin_ingestas(request: Request):
 
     contenido = f"""
 {msg_html}
-{_trigger_html(n_hoy)}
+{_trigger_html(n_hoy, n_semana)}
 
 <div class="card" style="margin-bottom:20px">
   <div class="card-title">Agregar URL para análisis</div>
