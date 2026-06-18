@@ -91,6 +91,28 @@ CREATE TABLE IF NOT EXISTS config_fuentes_log (
 CREATE INDEX IF NOT EXISTS idx_fuentes_log_fuente ON config_fuentes_log(fuente_id);
 CREATE INDEX IF NOT EXISTS idx_fuentes_log_campo ON config_fuentes_log(campo);
 CREATE INDEX IF NOT EXISTS idx_fuentes_log_usuario ON config_fuentes_log(usuario);
+
+-- Ingesta manual de URLs (Fase B Item 4)
+-- El analista pega una URL; el pipeline la procesa en el siguiente ciclo.
+-- procesada=0 → pendiente; procesada=1 → ya participó en el análisis.
+-- Contador de trigger B2: si ingestas_hoy > TRIGGER_B2, mostrar aviso de migración.
+CREATE TABLE IF NOT EXISTS ingestas_manuales (
+    id              INTEGER PRIMARY KEY,
+    url             TEXT NOT NULL,
+    titulo          TEXT,
+    resumen         TEXT,
+    fuente          TEXT,
+    categoria       TEXT NOT NULL DEFAULT 'medios',
+    published       TEXT NOT NULL,          -- ISO 8601 hora Lima (PET)
+    procesada       INTEGER NOT NULL DEFAULT 0,
+    procesada_en    TEXT,
+    ingresada_por   TEXT NOT NULL,
+    ingresada_en    TEXT NOT NULL DEFAULT (datetime('now')),
+    pais            TEXT NOT NULL DEFAULT 'PE'
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingestas_procesada ON ingestas_manuales(procesada);
+CREATE INDEX IF NOT EXISTS idx_ingestas_ingresada ON ingestas_manuales(ingresada_en);
 """
 
 _DATOS_INICIALES = [

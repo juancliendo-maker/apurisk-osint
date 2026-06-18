@@ -542,3 +542,109 @@ def desactivar_keyword(db_path: str, kw_id: int, usuario: str) -> dict:
     resultado = _ejecutar_con_reintentos(db_path, _op)
     invalidar_keywords_cache()
     return resultado
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ingesta manual de URLs (Fase B Item 4)
+# ──────────────────────────────────────────────────────────────────────────────
+
+TRIGGER_B2_DIARIO = 10  # ingestas/día que sugieren migrar a Postgres
+
+
+def guardar_ingesta_manual(db_path: str, url: str, titulo: str, resumen: str,
+                           fuente: str, categoria: str, published: str,
+                           usuario: str) -> dict:
+    """Persiste una URL ingresada manualmente en ingestas_manuales.
+
+    published: ISO 8601 en hora Lima (PET).
+    Lanza ValueError si url vacía o duplicada (ya pendiente).
+    Lanza LockTimeoutError si BD ocupada.
+    """
+    url = url.strip()
+    if not url:
+        raise ValueError("La URL no puede estar vacía")
+    if len(url) > 2000:
+        raise ValueError("URL demasiado larga (máx 2000 caracteres)")
+
+    def _op(c: sqlite3.Connection) -> dict:
+        pendiente = c.execute(
+            "SELECT id FROM ingestas_manuales WHERE url=? AND procesada=0",
+            (url,),
+        ).fetchone()
+        if pendiente:
+            raise ValueError("Esta URL ya está en la cola de procesamiento (pendiente).")
+        c.execute(
+            "INSERT INTO ingestas_manuales "
+            "(url, titulo, resumen, fuente, categoria, published, procesada, ingresada_por) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+            (url, (titulo or "")[:500], (resumen or "")[:2000],
+             (fuente or "")[:200], categoria or "medios", published, usuario),
+        )
+        return {"ok": True}
+
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def cargar_ingestas_pendientes(db_path: str) -> list:
+    """Devuelve ingestas_manuales con procesada=0 como lista de dicts.
+    [] si no hay pendientes o falla (nunca rompe el pipeline)."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, url, titulo, resumen, fuente, categoria, published "
+                "FROM ingestas_manuales WHERE procesada=0 ORDER BY id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] cargar_ingestas_pendientes falló: {e}")
+        return []
+
+
+def marcar_ingestas_procesadas(db_path: str, ids: list[int]) -> int:
+    """Marca las ingestas con los ids dados como procesadas=1.
+    Devuelve número de filas actualizadas. Nunca rompe el pipeline."""
+    if not ids:
+        return 0
+    try:
+        with _conn(db_path) as c:
+            placeholders = ",".join("?" * len(ids))
+            c.execute(
+                f"UPDATE ingestas_manuales SET procesada=1, procesada_en=datetime('now') "
+                f"WHERE id IN ({placeholders})",
+                ids,
+            )
+            n = c.execute("SELECT changes()").fetchone()[0]
+            c.commit()
+        return n
+    except Exception as e:
+        print(f"[config_loader] marcar_ingestas_procesadas falló: {e}")
+        return 0
+
+
+def contar_ingestas_hoy(db_path: str) -> int:
+    """Número de ingestas manuales ingresadas hoy (hora UTC, suficiente para el contador)."""
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                "SELECT COUNT(*) AS n FROM ingestas_manuales "
+                "WHERE date(ingresada_en) = date('now')"
+            ).fetchone()
+        return row["n"] if row else 0
+    except Exception:
+        return 0
+
+
+def listar_ingestas(db_path: str, limite: int = 50) -> list:
+    """Últimas ingestas manuales para la UI del panel admin."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, url, titulo, fuente, categoria, published, "
+                "procesada, procesada_en, ingresada_por, ingresada_en "
+                "FROM ingestas_manuales ORDER BY id DESC LIMIT ?",
+                (limite,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_ingestas falló: {e}")
+        return []

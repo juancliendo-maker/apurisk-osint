@@ -210,6 +210,37 @@ def recolectar(config: dict, demo: bool = True) -> dict:
     else:
         crimen_items = []
 
+    # Ingestas manuales del panel admin (Fase B Item 4)
+    # Se cargan como artículos de medios y participan en el matching/análisis.
+    ingestas_ids = []
+    if not demo:
+        try:
+            import os as _os
+            from .storage.config_loader import cargar_ingestas_pendientes, marcar_ingestas_procesadas
+            from .collectors.base import Article
+            _db_ing = _os.environ.get("APURISK_DB_PATH",
+                                      str(_os.path.join(_os.getenv("OUTPUT_DIR", "output"),
+                                                        "apurisk_archive.db")))
+            pendientes = cargar_ingestas_pendientes(_db_ing)
+            if pendientes:
+                print(f"  · Ingestas manuales: {len(pendientes)} artículos pendientes")
+                for ing in pendientes:
+                    art_manual = Article(
+                        source_id="manual",
+                        source_name=ing.get("fuente") or "Ingesta manual",
+                        category=ing.get("categoria") or "medios",
+                        title=ing.get("titulo") or ing["url"],
+                        summary=ing.get("resumen") or "",
+                        url=ing["url"],
+                        published=ing.get("published"),
+                        criticidad="media",
+                    )
+                    medios_articulos.append(art_manual)
+                    ingestas_ids.append(ing["id"])
+                marcar_ingestas_procesadas(_db_ing, ingestas_ids)
+        except Exception as _e:
+            print(f"  [warn] ingestas manuales no cargadas: {_e}")
+
     # Universo "todos": medios + conflictos + GDELT + tweets + ACLED + crimen
     todos = medios_articulos + conflictos + gdelt + tweets + acled_events + crimen_items
     return {

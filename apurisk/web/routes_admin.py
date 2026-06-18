@@ -12,6 +12,7 @@ Rutas:
   GET /admin/          → Resumen del sistema
   GET /admin/fuentes   → Inventario de fuentes RSS
   GET /admin/factores  → Factores de riesgo activos
+  GET /admin/ingestas  → Ingesta manual de URLs
   GET /admin/alertas   → Historial de alertas recientes
   GET /admin/logs      → Estado del scheduler y métricas
 """
@@ -312,10 +313,11 @@ def _badge_nivel(nivel: str) -> str:
 def _nav_html(activo: str, username: str) -> str:
     links = [
         ("resumen",  "📊", "Resumen",       "/admin/"),
-        ("fuentes",  "📡", "Fuentes RSS",   "/admin/fuentes"),
-        ("factores", "⚖️",  "Factores",      "/admin/factores"),
-        ("alertas",  "🚨", "Alertas",       "/admin/alertas"),
-        ("logs",     "📋", "Logs sistema",  "/admin/logs"),
+        ("fuentes",   "📡", "Fuentes RSS",    "/admin/fuentes"),
+        ("factores",  "⚖️",  "Factores",       "/admin/factores"),
+        ("ingestas",  "📥", "Ingesta manual", "/admin/ingestas"),
+        ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
+        ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
     items = ""
     for key, ico, label, href in links:
@@ -1124,6 +1126,237 @@ async def admin_keywords_desactivar(request: Request, factor_id: str):
         return RR(f"{base}?msg={escape(str(e))}&tipo=err", status_code=303)
     except Exception as e:
         return RR(f"{base}?msg=Error+inesperado:+{escape(str(e))}&tipo=err", status_code=303)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET  /admin/ingestas           Formulario + historial de ingesta manual de URLs
+# POST /admin/ingestas/fetch     Fetch de metadatos de una URL (AJAX-like via form)
+# POST /admin/ingestas/guardar   Guarda la ingesta en BD
+# ──────────────────────────────────────────────────────────────────────────────
+
+_TRIGGER_B2 = 10  # ingestas/día que sugieren migrar a Postgres
+
+
+def _trigger_html(n_hoy: int) -> str:
+    pct = min(100, int(n_hoy / _TRIGGER_B2 * 100))
+    if n_hoy >= _TRIGGER_B2:
+        color = "var(--alto)"
+        aviso = (f"<b>⚠️ Trigger B2 alcanzado ({n_hoy}/{_TRIGGER_B2} hoy).</b> "
+                 "Considera migrar a PostgreSQL para soporte de ingesta a alta frecuencia.")
+    elif n_hoy >= _TRIGGER_B2 * 0.7:
+        color = "var(--warn, #e5a500)"
+        aviso = f"Acercándote al trigger B2 ({n_hoy}/{_TRIGGER_B2} hoy)."
+    else:
+        color = "var(--bajo)"
+        aviso = f"Ingestas hoy: {n_hoy} / {_TRIGGER_B2} (umbral de migración B2)."
+    return f"""<div class="alert-box" style="border-left:4px solid {color};padding:10px 14px;margin-bottom:14px">
+  {aviso}
+  <div style="margin-top:6px;background:var(--bg2);border-radius:4px;height:8px;width:100%">
+    <div style="width:{pct}%;background:{color};height:8px;border-radius:4px;transition:width 0.3s"></div>
+  </div>
+</div>"""
+
+
+@router.get("/ingestas", response_class=HTMLResponse)
+async def admin_ingestas(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    from ..storage.config_loader import listar_ingestas, contar_ingestas_hoy
+    ingestas = listar_ingestas(_get_db_path(), limite=30)
+    n_hoy = contar_ingestas_hoy(_get_db_path())
+
+    msg = request.query_params.get("msg", "")
+    msg_tipo = request.query_params.get("tipo", "info")
+    # Prefill del formulario tras fetch
+    pf_url     = request.query_params.get("url", "")
+    pf_titulo  = request.query_params.get("titulo", "")
+    pf_resumen = request.query_params.get("resumen", "")
+    pf_fuente  = request.query_params.get("fuente", "")
+    pf_error   = request.query_params.get("fetch_error", "")
+
+    msg_html = ""
+    if msg:
+        cls = {"ok": "alert-ok", "err": "alert-err", "warn": "alert-warn"}.get(msg_tipo, "alert-info")
+        msg_html = f'<div class="alert-box {cls}">{escape(msg)}</div>'
+
+    fetch_error_html = (f'<div class="alert-box alert-warn">No se pudo extraer metadatos automáticamente: '
+                        f'{escape(pf_error)}. Rellena título y resumen manualmente.</div>'
+                        if pf_error else "")
+
+    filas = ""
+    for ing in ingestas:
+        url_ing  = escape(ing.get("url") or "")
+        titulo   = escape((ing.get("titulo") or "")[:60] or ing.get("url","")[:60])
+        fuente   = escape(ing.get("fuente") or "—")
+        cat      = escape(ing.get("categoria") or "—")
+        proc     = ing.get("procesada", 0)
+        estado   = ('<span style="color:var(--bajo)">✓ procesada</span>'
+                    if proc else '<span style="color:var(--warn,#e5a500)">⏳ pendiente</span>')
+        ts_raw = ing.get("ingresada_en") or ""
+        try:
+            from datetime import timedelta as _td
+            _ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            if _ts.tzinfo is None:
+                _ts = _ts.replace(tzinfo=timezone.utc)
+            ts_str = (_ts + _td(hours=-5)).strftime("%Y-%m-%d %H:%M") + " PET"
+        except Exception:
+            ts_str = ts_raw[:16]
+        by = escape(ing.get("ingresada_por") or "—")
+        filas += f"""<tr>
+  <td style="font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+    <a href="{url_ing}" target="_blank" rel="noopener noreferrer"
+       style="color:var(--accent);text-decoration:none" title="{url_ing}">{titulo}</a>
+  </td>
+  <td style="color:var(--muted);font-size:12px">{fuente}</td>
+  <td style="color:var(--muted);font-size:12px">{cat}</td>
+  <td>{estado}</td>
+  <td style="color:var(--muted);font-size:11px;white-space:nowrap">{ts_str}</td>
+  <td style="color:var(--muted);font-size:11px">{by}</td>
+</tr>\n"""
+
+    contenido = f"""
+{msg_html}
+{_trigger_html(n_hoy)}
+
+<div class="card" style="margin-bottom:20px">
+  <div class="card-title">Agregar URL para análisis</div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+    Paso 1: pega la URL y haz clic en <b>Extraer metadatos</b> para pre-rellenar título y resumen.
+    Paso 2: revisa/edita y haz clic en <b>Guardar en cola</b>.
+    El artículo se incluirá en el <b>próximo ciclo del pipeline</b> (hasta 30 min).
+  </div>
+
+  <form method="post" action="/admin/ingestas/fetch" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+    <input type="text" name="url" value="{escape(pf_url)}" placeholder="https://www.elperu.pe/..."
+           style="flex:1;min-width:300px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+    <button type="submit"
+            style="padding:8px 16px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;cursor:pointer;font-size:13px">
+      🔍 Extraer metadatos
+    </button>
+  </form>
+
+  {fetch_error_html}
+
+  <form method="post" action="/admin/ingestas/guardar">
+    <div style="display:grid;gap:10px">
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">URL *</label>
+        <input type="url" name="url" value="{escape(pf_url)}" required
+               style="width:100%;box-sizing:border-box;padding:7px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Título</label>
+        <input type="text" name="titulo" value="{escape(pf_titulo)}"
+               style="width:100%;box-sizing:border-box;padding:7px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Resumen / extracto</label>
+        <textarea name="resumen" rows="3"
+                  style="width:100%;box-sizing:border-box;padding:7px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px;resize:vertical">{escape(pf_resumen)}</textarea>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:160px">
+          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Fuente (dominio)</label>
+          <input type="text" name="fuente" value="{escape(pf_fuente)}"
+                 style="width:100%;box-sizing:border-box;padding:7px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+        </div>
+        <div style="flex:1;min-width:160px">
+          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Categoría</label>
+          <select name="categoria"
+                  style="width:100%;box-sizing:border-box;padding:7px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+            <option value="medios">medios</option>
+            <option value="estado">estado</option>
+            <option value="internacional">internacional</option>
+            <option value="redes">redes</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <button type="submit"
+                style="padding:9px 22px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
+          📥 Guardar en cola de análisis
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">Historial de ingestas ({len(ingestas)} recientes)</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Artículo</th><th>Fuente</th><th>Cat.</th>
+        <th>Estado</th><th>Ingresada</th><th>Por</th>
+      </tr></thead>
+      <tbody>{filas or '<tr><td colspan="6" style="color:var(--muted)">Sin ingestas aún.</td></tr>'}</tbody>
+    </table>
+  </div>
+</div>
+"""
+    return HTMLResponse(_page("Ingesta manual", contenido, "ingestas", sesion["username"]))
+
+
+@router.post("/ingestas/fetch", response_class=HTMLResponse)
+async def admin_ingestas_fetch(request: Request):
+    """Fetch de metadatos de la URL y redirige a /admin/ingestas con prefill."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    form = await request.form()
+    url = (form.get("url") or "").strip()
+    from fastapi.responses import RedirectResponse as RR
+    from urllib.parse import urlencode
+
+    if not url:
+        return RR("/admin/ingestas?msg=URL+vacía&tipo=err", status_code=303)
+
+    from ..utils.url_fetcher import fetch_articulo
+    meta = fetch_articulo(url)
+    params = {"url": url, "titulo": meta.get("titulo",""),
+              "resumen": meta.get("resumen",""), "fuente": meta.get("fuente","")}
+    if meta.get("error"):
+        params["fetch_error"] = meta["error"]
+    return RR("/admin/ingestas?" + urlencode(params), status_code=303)
+
+
+@router.post("/ingestas/guardar", response_class=HTMLResponse)
+async def admin_ingestas_guardar(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    form = await request.form()
+    url       = (form.get("url") or "").strip()
+    titulo    = (form.get("titulo") or "").strip()
+    resumen   = (form.get("resumen") or "").strip()
+    fuente    = (form.get("fuente") or "").strip()
+    categoria = (form.get("categoria") or "medios").strip()
+
+    from ..storage.config_loader import guardar_ingesta_manual, LockTimeoutError
+    from fastapi.responses import RedirectResponse as RR
+    try:
+        from ..utils.timezone_pe import now_pe_iso
+    except ImportError:
+        from apurisk.utils.timezone_pe import now_pe_iso
+
+    try:
+        guardar_ingesta_manual(
+            _get_db_path(), url, titulo, resumen, fuente, categoria,
+            published=now_pe_iso(), usuario=sesion["username"],
+        )
+        msg = f"✓ URL guardada en cola. Se procesará en el próximo ciclo del pipeline (hasta 30 min)."
+        return RR(f"/admin/ingestas?msg={escape(msg)}&tipo=ok", status_code=303)
+    except LockTimeoutError:
+        msg = "El sistema está actualizando datos. La ingesta NO se guardó. Reintenta en unos segundos."
+        return RR(f"/admin/ingestas?msg={escape(msg)}&tipo=err", status_code=303)
+    except ValueError as e:
+        return RR(f"/admin/ingestas?msg={escape(str(e))}&tipo=err", status_code=303)
+    except Exception as e:
+        return RR(f"/admin/ingestas?msg=Error+inesperado:+{escape(str(e))}&tipo=err", status_code=303)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
