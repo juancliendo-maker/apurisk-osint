@@ -904,14 +904,39 @@ DECAY_HALF_LIFE_H = 36.0   # peso(72h) ≈ 0.25, peso(24h) ≈ 0.63, peso(6h) �
 LOG_COEFICIENTE = 32.0     # multiplicador del log(1 + Σ pesos)
 
 
+def _calidad_override_bd() -> dict:
+    """Override de calidad editado desde el panel admin (config_fuentes).
+    {} si no hay BD/datos → se usa solo el dict hardcodeado. Nunca rompe el pipeline."""
+    try:
+        import os
+        from ..storage.config_loader import cargar_calidad_override
+        db = os.environ.get("APURISK_DB_PATH",
+                            os.path.join(os.getenv("OUTPUT_DIR", "output"),
+                                         "apurisk_archive.db"))
+        return cargar_calidad_override(db)
+    except Exception:
+        return {}
+
+
 def _calidad_fuente(source_name: str) -> float:
-    """Devuelve multiplicador 0.6..1.3 según la calidad del medio."""
+    """Devuelve multiplicador 0.6..1.3 según la calidad del medio.
+
+    Prioridad: calidad editada en el panel admin (config_fuentes) → match exacto
+    en el dict hardcodeado → match parcial → neutral 1.00.
+    """
     if not source_name:
         return 0.85
     key = source_name.strip().lower()
+    # Fase B: override editable desde el panel admin (match exacto por nombre)
+    override = _calidad_override_bd()
+    if key in override:
+        return override[key]
     if key in CALIDAD_FUENTE:
         return CALIDAD_FUENTE[key]
     # Match parcial (ej. "El Comercio - Política" → "el comercio")
+    for k, v in override.items():
+        if k in key:
+            return v
     for k, v in CALIDAD_FUENTE.items():
         if k in key:
             return v

@@ -130,6 +130,21 @@ def recolectar(config: dict, demo: bool = True) -> dict:
     feeds = config.get("medios_rss", [])
     if isinstance(feeds, dict):
         feeds = list(feeds.values())
+    # Fase B: si config_fuentes (BD) tiene fuentes activas, usarlas (permite
+    # activar/desactivar desde el panel admin). Fallback a config.yaml si vacío.
+    if not demo:
+        try:
+            import os as _os
+            from .storage.config_loader import cargar_feeds_efectivos
+            _db = _os.environ.get("APURISK_DB_PATH",
+                                  str(_os.path.join(_os.getenv("OUTPUT_DIR", "output"),
+                                                    "apurisk_archive.db")))
+            _feeds_bd = cargar_feeds_efectivos(_db)
+            if _feeds_bd:
+                print(f"  [config] {len(_feeds_bd)} fuentes activas desde config_fuentes (BD)")
+                feeds = _feeds_bd
+        except Exception as _e:
+            print(f"  [config] feeds desde BD no disponibles → config.yaml: {_e}")
     for feed in feeds or []:
         c = RSSMediaCollector(feed, config, demo=demo)
         items = c.collect()
