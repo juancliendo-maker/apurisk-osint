@@ -383,3 +383,162 @@ def actualizar_factor_peso(db_path: str, factor_id: str, campo: str,
     resultado = _ejecutar_con_reintentos(db_path, _op)
     invalidar_pesos_cache()
     return resultado
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Keywords por factor: seed, lectura y escritura (Fase B Item 3)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_TIPOS_KEYWORD = {"fuerte", "contexto", "negacion"}
+
+
+def seed_keywords_si_vacio(db_path: str, factores_hardcode: list) -> int:
+    """Si config_keywords está vacía, la puebla desde FACTORES hardcodeados.
+
+    factores_hardcode: lista de dicts con id, keywords_fuertes, keywords_contexto,
+    keywords_negacion.
+    Devuelve número de filas insertadas (0 si ya había datos).
+    """
+    if not factores_hardcode:
+        return 0
+    try:
+        with _conn(db_path) as c:
+            ya = c.execute("SELECT COUNT(*) AS n FROM config_keywords").fetchone()
+            if ya and ya["n"] > 0:
+                return 0
+            insertadas = 0
+            for f in factores_hardcode:
+                fid = f.get("id") or ""
+                for tipo, key in (
+                    ("fuerte", "keywords_fuertes"),
+                    ("contexto", "keywords_contexto"),
+                    ("negacion", "keywords_negacion"),
+                ):
+                    for kw in (f.get(key) or []):
+                        kw = kw.strip()
+                        if not kw:
+                            continue
+                        c.execute(
+                            "INSERT INTO config_keywords "
+                            "(factor_id, tipo, keyword, pais, activo) "
+                            "VALUES (?, ?, ?, 'PE', 1)",
+                            (fid, tipo, kw),
+                        )
+                        insertadas += 1
+            c.commit()
+            return insertadas
+    except Exception as e:
+        print(f"[config_loader] seed_keywords_si_vacio falló (no crítico): {e}")
+        return 0
+
+
+def listar_keywords_factor(db_path: str, factor_id: str) -> list:
+    """Keywords (activas e inactivas) de un factor para la UI editable."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, tipo, keyword, activo FROM config_keywords "
+                "WHERE factor_id = ? ORDER BY tipo, id",
+                (factor_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_keywords_factor falló: {e}")
+        return []
+
+
+# Cache de keywords por factor_id (refrescado tras edición o cada 5 min)
+_kw_cache: dict[str, dict] = {}  # {factor_id: {fuerte:[...], contexto:[...], negacion:[...]}}
+_kw_cache_ts: float = 0.0
+_KW_TTL = 300.0  # 5 min
+
+
+def cargar_keywords_override(db_path: str, forzar: bool = False) -> dict:
+    """Devuelve {factor_id: {fuerte, contexto, negacion}} con keywords ACTIVAS.
+    Cacheado 5 min. {} si vacío/falla → pipeline usa hardcodeados."""
+    global _kw_cache, _kw_cache_ts
+    ahora = time.time()
+    if not forzar and _kw_cache and (ahora - _kw_cache_ts) < _KW_TTL:
+        return _kw_cache
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT factor_id, tipo, keyword FROM config_keywords WHERE activo = 1"
+            ).fetchall()
+        result: dict = {}
+        for r in rows:
+            fid = r["factor_id"]
+            if fid not in result:
+                result[fid] = {"fuerte": [], "contexto": [], "negacion": []}
+            if r["tipo"] in _TIPOS_KEYWORD:
+                result[fid][r["tipo"]].append(r["keyword"])
+        _kw_cache = result
+        _kw_cache_ts = ahora
+        return _kw_cache
+    except Exception:
+        return _kw_cache or {}
+
+
+def invalidar_keywords_cache() -> None:
+    """Fuerza recarga del cache de keywords tras una edición."""
+    global _kw_cache_ts
+    _kw_cache_ts = 0.0
+
+
+def agregar_keyword(db_path: str, factor_id: str, tipo: str,
+                    keyword: str, usuario: str) -> dict:
+    """Añade una nueva keyword a config_keywords.
+
+    Lanza ValueError si tipo inválido, keyword vacía o duplicada.
+    Lanza LockTimeoutError si BD ocupada.
+    """
+    if tipo not in _TIPOS_KEYWORD:
+        raise ValueError(f"tipo debe ser fuerte, contexto o negacion (recibido: '{tipo}')")
+    kw = keyword.strip().lower()
+    if not kw:
+        raise ValueError("La keyword no puede estar vacía")
+    if len(kw) > 200:
+        raise ValueError("Keyword demasiado larga (máx 200 caracteres)")
+
+    def _op(c: sqlite3.Connection) -> dict:
+        existe = c.execute(
+            "SELECT id FROM config_keywords WHERE factor_id=? AND tipo=? AND keyword=?",
+            (factor_id, tipo, kw),
+        ).fetchone()
+        if existe:
+            # Reactivar si estaba inactiva
+            c.execute(
+                "UPDATE config_keywords SET activo=1 WHERE factor_id=? AND tipo=? AND keyword=?",
+                (factor_id, tipo, kw),
+            )
+            return {"ok": True, "accion": "reactivada", "keyword": kw}
+        c.execute(
+            "INSERT INTO config_keywords (factor_id, tipo, keyword, pais, activo) "
+            "VALUES (?, ?, ?, 'PE', 1)",
+            (factor_id, tipo, kw),
+        )
+        return {"ok": True, "accion": "creada", "keyword": kw}
+
+    resultado = _ejecutar_con_reintentos(db_path, _op)
+    invalidar_keywords_cache()
+    return resultado
+
+
+def desactivar_keyword(db_path: str, kw_id: int, usuario: str) -> dict:
+    """Desactiva (soft-delete) una keyword por su id primario.
+
+    No borra el registro para mantener trazabilidad.
+    Lanza ValueError si no existe. Lanza LockTimeoutError si BD ocupada.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        fila = c.execute(
+            "SELECT factor_id, tipo, keyword FROM config_keywords WHERE id=?", (kw_id,)
+        ).fetchone()
+        if fila is None:
+            raise ValueError(f"Keyword id={kw_id} no existe")
+        c.execute("UPDATE config_keywords SET activo=0 WHERE id=?", (kw_id,))
+        return {"ok": True, "keyword": fila["keyword"], "tipo": fila["tipo"]}
+
+    resultado = _ejecutar_con_reintentos(db_path, _op)
+    invalidar_keywords_cache()
+    return resultado
