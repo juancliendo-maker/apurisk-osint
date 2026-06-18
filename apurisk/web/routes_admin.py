@@ -934,7 +934,16 @@ async def admin_alertas(request: Request):
         titulo = escape(a.get("titulo") or "—")
         if url:
             titulo = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer" style="color:var(--text)">{titulo}</a>'
-        ts_str = (a.get("timestamp") or "")[:16].replace("T", " ")
+        _ts_raw = a.get("timestamp") or ""
+        try:
+            from datetime import timedelta as _td
+            _ts = datetime.fromisoformat(_ts_raw.replace("Z", "+00:00"))
+            if _ts.tzinfo is None:
+                _ts = _ts.replace(tzinfo=timezone.utc)
+            _ts_pet = _ts + _td(hours=-5)
+            ts_str = _ts_pet.strftime("%Y-%m-%d %H:%M") + " PET"
+        except Exception:
+            ts_str = _ts_raw[:16].replace("T", " ")
         filas += f"""<tr>
   <td>{_badge_nivel(a.get('nivel') or '—')}</td>
   <td style="color:var(--muted);font-size:12px">{escape(a.get('categoria') or '—')}</td>
