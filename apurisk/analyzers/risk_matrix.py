@@ -904,6 +904,21 @@ DECAY_HALF_LIFE_H = 36.0   # peso(72h) ≈ 0.25, peso(24h) ≈ 0.63, peso(6h) �
 LOG_COEFICIENTE = 32.0     # multiplicador del log(1 + Σ pesos)
 
 
+def _keywords_override_bd() -> dict:
+    """Override de keywords editadas desde el panel admin (config_keywords).
+    {factor_id: {fuerte, contexto, negacion}} — solo factores con al menos 1 kw activa.
+    {} si BD no disponible → pipeline usa listas hardcodeadas. Nunca rompe el pipeline."""
+    try:
+        import os
+        from ..storage.config_loader import cargar_keywords_override
+        db = os.environ.get("APURISK_DB_PATH",
+                            os.path.join(os.getenv("OUTPUT_DIR", "output"),
+                                         "apurisk_archive.db"))
+        return cargar_keywords_override(db)
+    except Exception:
+        return {}
+
+
 def _pesos_override_bd() -> dict:
     """Override de impacto_base/prob_base editados desde el panel admin (config_factores).
     {} si no hay BD/datos → pipeline usa hardcodeados. Nunca rompe el pipeline."""
@@ -1081,11 +1096,27 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
     horas_max = MATCH_CONFIG["ventana_dias_max"] * 24
     todos_recientes = [a for a in todos if a.hours_ago() <= horas_max]
 
-    # Override de pesos editados en el panel admin (Fase B Item 2).
-    # Cacheado 5 min; {} si BD no disponible → valores hardcodeados.
+    # Overrides editados en el panel admin (Fase B Items 2 y 3).
+    # Cacheados 5 min; {} si BD no disponible → valores hardcodeados.
     _pesos_bd = _pesos_override_bd()
+    _kw_bd = _keywords_override_bd()
 
     for f in FACTORES:
+        # Construir factor efectivo con overrides de BD (pesos + keywords)
+        _ov = _pesos_bd.get(f["id"]) or {}
+        _kw_ov = _kw_bd.get(f["id"]) or {}
+        if not _ov and not _kw_ov:
+            f_efectivo = f
+        else:
+            f_efectivo = {
+                **f,
+                "impacto_base": _ov.get("impacto_base", f["impacto_base"]) if _ov else f["impacto_base"],
+                "_prob_base_override": _ov.get("prob_base") if _ov else None,
+                "keywords_fuertes":  _kw_ov.get("fuerte",   f.get("keywords_fuertes", [])) if _kw_ov else f.get("keywords_fuertes", []),
+                "keywords_contexto": _kw_ov.get("contexto", f.get("keywords_contexto", [])) if _kw_ov else f.get("keywords_contexto", []),
+                "keywords_negacion": _kw_ov.get("negacion", f.get("keywords_negacion", [])) if _kw_ov else f.get("keywords_negacion", []),
+            }
+
         evidencias = []
         cnt_reciente = 0  # < 24h (solo para tendencia)
         cnt_previo = 0    # 24-72h (solo para tendencia)
@@ -1093,7 +1124,7 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
 
         for a in todos_recientes:
             text = _texto(a)
-            relevante, score_rel = _es_relevante(text, f)
+            relevante, score_rel = _es_relevante(text, f_efectivo)
             if not relevante:
                 continue
 
@@ -1118,13 +1149,6 @@ def calcular_matriz(articulos: list, conflictos: list) -> list[dict]:
         evidencias.sort(key=lambda e: -e.get("score_relevancia", 0))
 
         # ====== NUEVA PROBABILIDAD CONTINUA + AUDITABLE ======
-        # Aplicar overrides de pesos editados en el panel admin (Fase B Item 2)
-        _ov = _pesos_bd.get(f["id"]) or {}
-        f_efectivo = f if not _ov else {
-            **f,
-            "impacto_base": _ov.get("impacto_base", f["impacto_base"]),
-            "_prob_base_override": _ov.get("prob_base"),
-        }
         calc = _calcular_probabilidad_auditable(f_efectivo, evidencias, criticidad_max)
         prob = calc["prob_final"]
         breakdown = calc["breakdown"]

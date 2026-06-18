@@ -906,6 +906,7 @@ async def admin_factores(request: Request):
   <td style="font-size:15px;font-weight:700;color:var(--accent)">{score_txt}</td>
   <td>{_badge_nivel(nivel_real)}</td>
   <td style="color:{tend_col}">{tend_ico}</td>
+  <td><a href="/admin/factores/{escape(fid)}/keywords" style="font-size:12px;color:var(--accent);text-decoration:none">✏️ keywords</a></td>
 </tr>\n"""
 
     contenido = f"""
@@ -928,6 +929,7 @@ async def admin_factores(request: Request):
         <th>Score actual</th>
         <th>Nivel</th>
         <th>Tend.</th>
+        <th></th>
       </tr></thead>
       <tbody>{filas}</tbody>
     </table>
@@ -964,6 +966,164 @@ async def admin_factores_peso(request: Request):
         return RR(f"/admin/factores?msg={escape(str(e))}&tipo=err", status_code=303)
     except Exception as e:
         return RR(f"/admin/factores?msg=Error+inesperado:+{escape(str(e))}&tipo=err", status_code=303)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET  /admin/factores/{factor_id}/keywords   Editor de keywords de un factor
+# POST /admin/factores/{factor_id}/keywords/agregar
+# POST /admin/factores/{factor_id}/keywords/desactivar
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _tipo_label(tipo: str) -> str:
+    return {"fuerte": "💪 Fuerte", "contexto": "📌 Contexto", "negacion": "🚫 Negación"}.get(tipo, tipo)
+
+def _tipo_color(tipo: str) -> str:
+    return {"fuerte": "var(--accent)", "contexto": "var(--text)", "negacion": "var(--muted)"}.get(tipo, "var(--text)")
+
+
+@router.get("/factores/{factor_id}/keywords", response_class=HTMLResponse)
+async def admin_keywords(request: Request, factor_id: str):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    from ..storage.config_loader import listar_keywords_factor
+    # Buscar nombre del factor
+    from ..analyzers.risk_matrix import FACTORES as _FACTORES
+    factor_meta = next((f for f in _FACTORES if f["id"] == factor_id), None)
+    if factor_meta is None:
+        return HTMLResponse(_html_404(request), status_code=404)
+
+    keywords = listar_keywords_factor(_get_db_path(), factor_id)
+
+    msg = request.query_params.get("msg", "")
+    msg_tipo = request.query_params.get("tipo", "info")
+    msg_html = ""
+    if msg:
+        cls = {"ok": "alert-ok", "err": "alert-err", "warn": "alert-warn"}.get(msg_tipo, "alert-info")
+        msg_html = f'<div class="alert-box {cls}">{escape(msg)}</div>'
+
+    # Agrupar por tipo para mostrar en secciones
+    por_tipo: dict[str, list] = {"fuerte": [], "contexto": [], "negacion": []}
+    for kw in keywords:
+        t = kw.get("tipo", "")
+        if t in por_tipo:
+            por_tipo[t].append(kw)
+
+    secciones = ""
+    for tipo in ("fuerte", "contexto", "negacion"):
+        filas_kw = ""
+        for kw in por_tipo[tipo]:
+            activo = kw.get("activo", 1)
+            estilo_kw = "color:var(--muted);text-decoration:line-through" if not activo else f"color:{_tipo_color(tipo)}"
+            estado_txt = "inactiva" if not activo else ""
+            boton_desact = ""
+            if activo:
+                boton_desact = f"""<form method="post" action="/admin/factores/{escape(factor_id)}/keywords/desactivar" style="display:inline">
+  <input type="hidden" name="kw_id" value="{kw['id']}">
+  <button type="submit" title="Desactivar" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;padding:0 4px">×</button>
+</form>"""
+            filas_kw += f"""<tr>
+  <td style="{estilo_kw};font-size:13px">{escape(kw.get('keyword',''))}</td>
+  <td style="color:var(--muted);font-size:11px">{estado_txt}</td>
+  <td>{boton_desact}</td>
+</tr>\n"""
+
+        secciones += f"""<div class="card" style="margin-bottom:16px">
+  <div class="card-title">{_tipo_label(tipo)} ({len([k for k in por_tipo[tipo] if k.get('activo',1)])} activas)</div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+    {"Frases específicas multipalabra. Un match activa el factor." if tipo=="fuerte" else
+     "Palabras de respaldo. Se necesitan ≥2 coincidencias simultáneas." if tipo=="contexto" else
+     "Si aparece cualquiera de estas, se descarta la nota del factor."}
+  </div>
+  <div style="overflow-x:auto">
+    <table class="tbl" style="margin-bottom:8px">
+      <tbody>{filas_kw or '<tr><td colspan="3" style="color:var(--muted)">— sin keywords —</td></tr>'}</tbody>
+    </table>
+  </div>
+  <form method="post" action="/admin/factores/{escape(factor_id)}/keywords/agregar"
+        style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="hidden" name="tipo" value="{tipo}">
+    <input type="text" name="keyword" placeholder="Nueva keyword de tipo {tipo}..."
+           style="flex:1;min-width:220px;padding:6px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+    <button type="submit" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">+ Agregar</button>
+  </form>
+</div>\n"""
+
+    nombre_factor = escape(factor_meta.get("nombre", factor_id))
+    cat_factor    = escape(factor_meta.get("categoria", ""))
+
+    contenido = f"""
+{msg_html}
+<div style="margin-bottom:16px">
+  <a href="/admin/factores" style="color:var(--muted);font-size:13px;text-decoration:none">← Volver a factores</a>
+</div>
+<div class="card" style="margin-bottom:16px">
+  <div class="card-title">{nombre_factor}</div>
+  <div style="color:var(--muted);font-size:12px">{cat_factor} · <code style="font-size:11px">{escape(factor_id)}</code></div>
+</div>
+<div class="alert-box alert-info">
+  Los cambios de keywords toman efecto en el <b>próximo ciclo del pipeline</b> (hasta 30 min).
+  Desactivar una keyword la oculta del matching sin borrarla (trazabilidad).
+</div>
+{secciones}
+"""
+    return HTMLResponse(_page(f"Keywords · {nombre_factor}", contenido, "factores", sesion["username"]))
+
+
+@router.post("/factores/{factor_id}/keywords/agregar", response_class=HTMLResponse)
+async def admin_keywords_agregar(request: Request, factor_id: str):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    form = await request.form()
+    tipo    = (form.get("tipo") or "").strip()
+    keyword = (form.get("keyword") or "").strip()
+
+    from ..storage.config_loader import agregar_keyword, LockTimeoutError
+    from fastapi.responses import RedirectResponse as RR
+    base = f"/admin/factores/{factor_id}/keywords"
+    try:
+        r = agregar_keyword(_get_db_path(), factor_id, tipo, keyword, usuario=sesion["username"])
+        accion = r.get("accion", "ok")
+        msg = f"✓ Keyword '{r['keyword']}' {accion} en tipo '{tipo}'. Activa en próximo ciclo."
+        return RR(f"{base}?msg={escape(msg)}&tipo=ok", status_code=303)
+    except LockTimeoutError:
+        msg = "El sistema está actualizando datos. El cambio NO se guardó. Reintenta en unos segundos."
+        return RR(f"{base}?msg={escape(msg)}&tipo=err", status_code=303)
+    except ValueError as e:
+        return RR(f"{base}?msg={escape(str(e))}&tipo=err", status_code=303)
+    except Exception as e:
+        return RR(f"{base}?msg=Error+inesperado:+{escape(str(e))}&tipo=err", status_code=303)
+
+
+@router.post("/factores/{factor_id}/keywords/desactivar", response_class=HTMLResponse)
+async def admin_keywords_desactivar(request: Request, factor_id: str):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    form = await request.form()
+    try:
+        kw_id = int(form.get("kw_id") or 0)
+    except ValueError:
+        kw_id = 0
+
+    from ..storage.config_loader import desactivar_keyword, LockTimeoutError
+    from fastapi.responses import RedirectResponse as RR
+    base = f"/admin/factores/{factor_id}/keywords"
+    try:
+        r = desactivar_keyword(_get_db_path(), kw_id, usuario=sesion["username"])
+        msg = f"✓ Keyword '{r['keyword']}' ({r['tipo']}) desactivada. Activo en próximo ciclo."
+        return RR(f"{base}?msg={escape(msg)}&tipo=ok", status_code=303)
+    except LockTimeoutError:
+        msg = "El sistema está actualizando datos. El cambio NO se guardó. Reintenta en unos segundos."
+        return RR(f"{base}?msg={escape(msg)}&tipo=err", status_code=303)
+    except ValueError as e:
+        return RR(f"{base}?msg={escape(str(e))}&tipo=err", status_code=303)
+    except Exception as e:
+        return RR(f"{base}?msg=Error+inesperado:+{escape(str(e))}&tipo=err", status_code=303)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
