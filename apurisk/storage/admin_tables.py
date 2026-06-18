@@ -114,6 +114,97 @@ CREATE TABLE IF NOT EXISTS ingestas_manuales (
 
 CREATE INDEX IF NOT EXISTS idx_ingestas_procesada ON ingestas_manuales(procesada);
 CREATE INDEX IF NOT EXISTS idx_ingestas_ingresada ON ingestas_manuales(ingresada_en);
+
+-- ============================================================
+-- MOTOR DE ANÁLISIS DUAL (Fase C — estructuras de datos)
+-- ============================================================
+-- Dos motores sobre el mismo flujo de noticias:
+--   · osint       — volumen / reputación / tendencias
+--   · inteligencia — análisis estratégico / semáforo
+
+-- Factores de las dos fórmulas de puntaje OSINT
+-- tipo_puntaje: 'sustancia' | 'ruido'
+CREATE TABLE IF NOT EXISTS config_factores_formula (
+    id              INTEGER PRIMARY KEY,
+    motor           TEXT NOT NULL DEFAULT 'osint',  -- 'osint' | 'inteligencia'
+    tipo_puntaje    TEXT NOT NULL,                  -- 'sustancia' | 'ruido'
+    nombre_factor   TEXT NOT NULL,
+    descripcion     TEXT,
+    peso            REAL NOT NULL DEFAULT 1.0,
+    pais            TEXT NOT NULL DEFAULT 'PE',
+    activo          INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(motor, tipo_puntaje, nombre_factor, pais)
+);
+
+-- Factores de la fórmula del semáforo de riesgo (motor inteligencia)
+-- factor: 'VC' | 'PA' | 'CE' | 'IA' | 'V'
+CREATE TABLE IF NOT EXISTS config_formula_semaforo (
+    id      INTEGER PRIMARY KEY,
+    factor  TEXT NOT NULL,   -- código corto: VC / PA / CE / IA / V
+    nombre  TEXT NOT NULL,
+    peso    REAL NOT NULL DEFAULT 1.0,
+    pais    TEXT NOT NULL DEFAULT 'PE',
+    activo  INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(factor, pais)
+);
+
+-- Umbrales de clasificación del semáforo (guía visual)
+-- Rangos DUALES: el porcentaje SUGIERE una banda (primario/secundario), pero NO
+-- decide solo — el peso del actor corrige la lectura final. Por eso bandas bajas
+-- ofrecen dos niveles (ej. 0-3% verde O amarillo según actor). nivel_secundario
+-- y color_secundario_hex son NULL cuando la banda es de color único.
+CREATE TABLE IF NOT EXISTS config_umbrales_semaforo (
+    id                    INTEGER PRIMARY KEY,
+    rango_min             REAL NOT NULL,
+    rango_max             REAL NOT NULL,
+    nivel_sugerido        TEXT NOT NULL,   -- nivel primario de la banda
+    color_hex             TEXT,            -- color primario
+    nivel_secundario      TEXT,            -- nivel alternativo si el actor corrige (NULL = banda única)
+    color_secundario_hex  TEXT,            -- color alternativo (NULL = banda única)
+    pais                  TEXT NOT NULL DEFAULT 'PE',
+    activo                INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(rango_min, rango_max, pais)
+);
+
+-- Activadores de rojo automático (editables por país)
+-- tipo: 'absoluto'    → dispara ROJO por sí mismo, sin importar el contexto
+--       'condicional' → dispara ROJO solo si el contexto lo confirma (depende del
+--                       motor de inteligencia evaluar afectación real)
+CREATE TABLE IF NOT EXISTS config_activadores_rojo (
+    id          INTEGER PRIMARY KEY,
+    pais        TEXT NOT NULL DEFAULT 'PE',
+    descripcion TEXT NOT NULL,
+    tipo        TEXT NOT NULL DEFAULT 'condicional',  -- 'absoluto' | 'condicional'
+    activo      INTEGER NOT NULL DEFAULT 1,
+    orden       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(pais, descripcion)
+);
+
+CREATE INDEX IF NOT EXISTS idx_activadores_pais ON config_activadores_rojo(pais, activo);
+
+-- Resultados de análisis por artículo y por motor
+-- Una sola tabla con campo 'motor' (extensible sin ALTER TABLE).
+-- Unicidad: (articulo_id, motor) — un resultado por motor por artículo.
+-- articulo_id referencia articulos.id en archive.db (misma BD vía attach o mismo archivo).
+-- resultado_json: blob JSON con el output específico de cada motor.
+CREATE TABLE IF NOT EXISTS resultados_analisis (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    articulo_id     INTEGER NOT NULL,   -- FK a articulos.id
+    motor           TEXT NOT NULL,      -- 'osint' | 'inteligencia'
+    pais            TEXT NOT NULL DEFAULT 'PE',
+    score_sustancia REAL,               -- OSINT: puntaje de sustancia 0-100
+    score_ruido     REAL,               -- OSINT: puntaje de ruido 0-100
+    score_semaforo  REAL,               -- Inteligencia: puntaje fórmula semáforo
+    nivel_semaforo  TEXT,               -- Inteligencia: VERDE/AMARILLO/NARANJA/ROJO_PROBABLE/ROJO
+    activador_rojo  INTEGER DEFAULT 0,  -- 1 si disparó activador automático
+    resultado_json  TEXT,               -- JSON con detalle completo del análisis
+    procesado_en    TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(articulo_id, motor)
+);
+
+CREATE INDEX IF NOT EXISTS idx_resultados_articulo ON resultados_analisis(articulo_id);
+CREATE INDEX IF NOT EXISTS idx_resultados_motor ON resultados_analisis(motor, pais);
+CREATE INDEX IF NOT EXISTS idx_resultados_nivel ON resultados_analisis(nivel_semaforo);
 """
 
 _DATOS_INICIALES = [
@@ -145,6 +236,89 @@ _DATOS_INICIALES = [
     (
         "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
         "VALUES ('PESO_H90D', '0.15', 'float', 'Peso del horizonte 90d en score v2', 'GLOBAL')", []
+    ),
+
+    # ── Factores fórmula OSINT — puntaje de SUSTANCIA ─────────────────────────
+    *[("INSERT OR IGNORE INTO config_factores_formula "
+       "(motor, tipo_puntaje, nombre_factor, descripcion, peso, pais, activo) "
+       f"VALUES ('osint', 'sustancia', '{nombre}', '{desc}', 1.0, 'PE', 1)", [])
+      for nombre, desc in [
+          ("relevancia_tematica",     "Qué tan directamente toca el tema político/institucional de interés"),
+          ("peso_del_actor",          "Relevancia política del actor principal mencionado"),
+          ("alcance_real",            "Cobertura efectiva estimada (audiencia real, no seguidores)"),
+          ("capacidad_escalamiento",  "Potencial de que el evento escale a nivel nacional o sectorial"),
+          ("territorialidad",         "Presencia o impacto en territorio con operaciones o intereses"),
+          ("conexion_institucional",  "Vinculación con institución formal (Congreso, Fiscalía, FFAA, etc.)"),
+          ("intensidad_narrativa",    "Tono, urgencia y carga emocional del relato periodístico"),
+      ]],
+
+    # ── Factores fórmula OSINT — puntaje de RUIDO ─────────────────────────────
+    *[("INSERT OR IGNORE INTO config_factores_formula "
+       "(motor, tipo_puntaje, nombre_factor, descripcion, peso, pais, activo) "
+       f"VALUES ('osint', 'ruido', '{nombre}', '{desc}', 1.0, 'PE', 1)", [])
+      for nombre, desc in [
+          ("repeticion",              "Misma información publicada múltiples veces sin aporte nuevo"),
+          ("anonimato",               "Fuente anónima o no verificable como origen principal"),
+          ("automatizacion_probable", "Indicios de publicación automatizada o bot (ritmo, lenguaje, timing)"),
+          ("baja_originalidad",       "Contenido copiado, parafraseado o sin valor agregado editorial"),
+          ("baja_interaccion_autentica", "Engagement bajo o sospechosamente uniforme para el alcance declarado"),
+          ("patron_coordinado",       "Múltiples cuentas/fuentes amplificando el mismo mensaje simultáneamente"),
+      ]],
+
+    # ── Factores fórmula SEMÁFORO (motor inteligencia) ────────────────────────
+    *[("INSERT OR IGNORE INTO config_formula_semaforo "
+       "(factor, nombre, peso, pais, activo) "
+       f"VALUES ('{cod}', '{nombre}', 1.0, 'PE', 1)", [])
+      for cod, nombre in [
+          ("VC", "Vulnerabilidad del contexto institucional"),
+          ("PA", "Posición del actor principal en la cadena de poder"),
+          ("CE", "Capacidad de escalamiento del evento"),
+          ("IA", "Intensidad y amplitud de la acción política"),
+          ("V",  "Velocidad de propagación y adopción mediática"),
+      ]],
+
+    # ── Umbrales del semáforo (rangos DUALES — el % sugiere, el actor corrige) ──
+    # Bandas bajas ofrecen dos niveles; el motor de inteligencia elige según el
+    # peso del actor. Bandas altas (≥20%) son de color único.
+    *[("INSERT OR IGNORE INTO config_umbrales_semaforo "
+       "(rango_min, rango_max, nivel_sugerido, color_hex, "
+       "nivel_secundario, color_secundario_hex, pais, activo) "
+       f"VALUES ({rmin}, {rmax}, '{n1}', '{c1}', {n2}, {c2}, 'PE', 1)", [])
+      for rmin, rmax, n1, c1, n2, c2 in [
+          (0,   3,  "VERDE",         "#2ecc71", "'AMARILLO'", "'#f1c40f'"),
+          (4,   9,  "AMARILLO",      "#f1c40f", "'NARANJA'",  "'#e67e22'"),
+          (10,  19, "NARANJA_ALTO",  "#e67e22", "NULL",       "NULL"),
+          (20,  30, "ROJO_PROBABLE", "#e74c3c", "NULL",       "NULL"),
+          (30, 100, "ROJO",          "#c0392b", "NULL",       "NULL"),
+      ]],
+
+    # ── Activadores de rojo automático — Perú ─────────────────────────────────
+    # tipo 'absoluto'    → dispara ROJO por sí mismo
+    #      'condicional' → dispara ROJO solo si el contexto lo confirma
+    *[("INSERT OR IGNORE INTO config_activadores_rojo "
+       f"(pais, descripcion, tipo, activo, orden) VALUES ('PE', '{desc}', '{tipo}', 1, {orden})", [])
+      for orden, (tipo, desc) in enumerate([
+          ("absoluto",    "Renuncia o cierre del Ejecutivo (presidente, premier o ministros clave)"),
+          ("absoluto",    "Manifiesto, comunicado o posicionamiento público de las FFAA o PNP"),
+          ("absoluto",    "Censura, interpelación, moción de vacancia o comisión investigadora activada en el Congreso"),
+          ("absoluto",    "Investigación formal abierta por Fiscalía, Contraloría, PJ o Procuraduría General"),
+          ("condicional", "Paro, bloqueo o movilización anunciada formalmente por gremio, sindicato, frente regional o comunidad"),
+          ("condicional", "Adhesión pública de gobernador regional, alcalde provincial o líder territorial al conflicto"),
+          ("condicional", "Medios nacionales de referencia instalando escándalo en portada o agenda principal por ≥48h"),
+          ("condicional", "Señal de preocupación de embajada, organismo internacional o agencia calificadora"),
+          ("condicional", "Afectación directa a inversión, operación, seguridad, reputación o continuidad de autoridad competente"),
+          ("condicional", "Paso documentado de indignación digital a acción física, legal, política o administrativa"),
+      ], start=1)],
+
+    # ── Parámetro: tipo de fórmula del semáforo (MULTIPLICATIVA, no aditiva) ───
+    # VC × PA × CE × IA × V — un factor en 0 colapsa el resultado a 0.
+    # Los 'peso' de config_formula_semaforo actúan como EXPONENTES de cada factor,
+    # no como sumandos. Documentado aquí para que el motor (tarea 2) lo respete.
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('FORMULA_SEMAFORO_TIPO', 'multiplicativa', 'string', "
+        "'Fórmula del semáforo: VC x PA x CE x IA x V. Pesos = exponentes. "
+        "Un factor en 0 colapsa el resultado.', 'GLOBAL')", []
     ),
 ]
 
