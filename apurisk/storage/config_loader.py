@@ -142,8 +142,10 @@ _CALIDAD_TTL = 300.0  # 5 min
 
 
 def cargar_calidad_override(db_path: str, forzar: bool = False) -> dict:
-    """Devuelve {nombre_lower: calidad} desde config_fuentes para que risk_matrix
-    consulte calidades editadas. Cacheado 5 min. {} si vacío/falla (fallback al dict)."""
+    """Devuelve {nombre_lower: calidad_efectiva} donde calidad_efectiva = calidad * peso_analista.
+
+    El pipeline usa este valor como multiplicador único. Si peso_analista no existe
+    (instancias antiguas), COALESCE lo devuelve como 1.0. Cacheado 5 min."""
     global _calidad_cache, _calidad_cache_ts
     ahora = time.time()
     if not forzar and _calidad_cache and (ahora - _calidad_cache_ts) < _CALIDAD_TTL:
@@ -151,9 +153,13 @@ def cargar_calidad_override(db_path: str, forzar: bool = False) -> dict:
     try:
         with _conn(db_path) as c:
             rows = c.execute(
-                "SELECT nombre, calidad FROM config_fuentes WHERE activo = 1"
+                "SELECT nombre, calidad, COALESCE(peso_analista, 1.0) AS peso_analista "
+                "FROM config_fuentes WHERE activo = 1"
             ).fetchall()
-        _calidad_cache = {r["nombre"].strip().lower(): float(r["calidad"]) for r in rows}
+        _calidad_cache = {
+            r["nombre"].strip().lower(): round(float(r["calidad"]) * float(r["peso_analista"]), 3)
+            for r in rows
+        }
         _calidad_cache_ts = ahora
         return _calidad_cache
     except Exception:
@@ -175,8 +181,9 @@ def listar_fuentes(db_path: str) -> list:
     try:
         with _conn(db_path) as c:
             rows = c.execute(
-                "SELECT id, nombre, url_feed, tipo, pais, calidad, activo, "
-                "categoria, notas, actualizado_en FROM config_fuentes "
+                "SELECT id, nombre, url_feed, tipo, pais, calidad, "
+                "COALESCE(peso_analista, 1.0) AS peso_analista, "
+                "activo, categoria, notas, actualizado_en FROM config_fuentes "
                 "ORDER BY categoria, nombre"
             ).fetchall()
         return [dict(r) for r in rows]
@@ -207,7 +214,7 @@ def listar_log_fuentes(db_path: str, limite: int = 100) -> list:
 # Escritura con auditoría (panel admin)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_CAMPOS_EDITABLES = {"calidad", "activo", "notas"}
+_CAMPOS_EDITABLES = {"calidad", "peso_analista", "activo", "notas"}
 
 
 def actualizar_fuente(db_path: str, fuente_id: int, campo: str, valor_nuevo,
@@ -222,18 +229,19 @@ def actualizar_fuente(db_path: str, fuente_id: int, campo: str, valor_nuevo,
         raise ValueError(f"Campo no editable: {campo}")
 
     def _op(c: sqlite3.Connection) -> dict:
+        col = campo if campo != "peso_analista" else "COALESCE(peso_analista, 1.0)"
         fila = c.execute(
-            f"SELECT {campo} AS v FROM config_fuentes WHERE id = ?", (fuente_id,)
+            f"SELECT {col} AS v FROM config_fuentes WHERE id = ?", (fuente_id,)
         ).fetchone()
         if fila is None:
             raise ValueError(f"Fuente {fuente_id} no existe")
         valor_anterior = fila["v"]
 
         # Normalización por tipo de campo
-        if campo == "calidad":
+        if campo in ("calidad", "peso_analista"):
             vn = round(float(valor_nuevo), 2)
             if not (0.1 <= vn <= 2.0):
-                raise ValueError("calidad debe estar entre 0.1 y 2.0")
+                raise ValueError(f"{campo} debe estar entre 0.1 y 2.0")
         elif campo == "activo":
             vn = 1 if str(valor_nuevo) in ("1", "true", "True", "on") else 0
         else:  # notas
@@ -621,17 +629,26 @@ def marcar_ingestas_procesadas(db_path: str, ids: list[int]) -> int:
         return 0
 
 
-def contar_ingestas_hoy(db_path: str) -> int:
-    """Número de ingestas manuales ingresadas hoy (hora UTC, suficiente para el contador)."""
+def contar_ingestas(db_path: str) -> dict:
+    """Devuelve {hoy: int, semana: int} de ingestas manuales (hora UTC)."""
     try:
         with _conn(db_path) as c:
-            row = c.execute(
+            hoy = c.execute(
                 "SELECT COUNT(*) AS n FROM ingestas_manuales "
                 "WHERE date(ingresada_en) = date('now')"
             ).fetchone()
-        return row["n"] if row else 0
+            semana = c.execute(
+                "SELECT COUNT(*) AS n FROM ingestas_manuales "
+                "WHERE ingresada_en >= datetime('now', '-7 days')"
+            ).fetchone()
+        return {"hoy": hoy["n"] if hoy else 0, "semana": semana["n"] if semana else 0}
     except Exception:
-        return 0
+        return {"hoy": 0, "semana": 0}
+
+
+# Alias para compatibilidad con código anterior
+def contar_ingestas_hoy(db_path: str) -> int:
+    return contar_ingestas(db_path)["hoy"]
 
 
 def listar_ingestas(db_path: str, limite: int = 50) -> list:
