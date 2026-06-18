@@ -136,15 +136,33 @@ async def _scheduler_diario_pdf():
 
 async def _startup():
     # --- Tablas de configuración admin (Fase A) ---
+    db_path = None
     try:
         from ..storage.admin_tables import inicializar_admin_tables
         import os
-        from pathlib import Path
         db_path = os.environ.get("APURISK_DB_PATH", str(OUTPUT_DIR / "apurisk_archive.db"))
         inicializar_admin_tables(db_path)
         print("[admin] Tablas de configuración inicializadas.")
     except Exception as e:
         print(f"[admin] inicialización de tablas admin falló (no crítico): {e}")
+
+    # --- Seed de config_fuentes desde config.yaml (Fase B, item 1) ---
+    # Solo puebla si la tabla está vacía. La calidad inicial se calcula con la
+    # misma lógica que usa el pipeline (risk_matrix._calidad_fuente).
+    if db_path:
+        try:
+            from ..storage.config_loader import seed_fuentes_si_vacio
+            from ..analyzers.risk_matrix import _calidad_fuente
+            import yaml
+            from pathlib import Path as _P
+            _cfg_path = _P(__file__).resolve().parent.parent / "config.yaml"
+            with open(_cfg_path, encoding="utf-8") as _f:
+                _feeds = (yaml.safe_load(_f) or {}).get("medios_rss", [])
+            n = seed_fuentes_si_vacio(db_path, _feeds, calidad_fn=_calidad_fuente)
+            if n > 0:
+                print(f"[config] config_fuentes poblada con {n} fuentes desde config.yaml")
+        except Exception as e:
+            print(f"[config] seed de config_fuentes falló (no crítico): {e}")
 
     # --- Autenticación: preparar tabla de usuarios y admin inicial ---
     try:

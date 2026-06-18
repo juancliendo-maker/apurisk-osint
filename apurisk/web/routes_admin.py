@@ -560,118 +560,144 @@ async def admin_resumen(request: Request):
 # GET /admin/fuentes   Inventario de fuentes RSS
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _calidad_color(q: float) -> str:
+    if q >= 1.20:
+        return "var(--bajo)"
+    if q >= 1.00:
+        return "var(--accent)"
+    return "var(--muted)"
+
+
 @router.get("/fuentes", response_class=HTMLResponse)
 async def admin_fuentes(request: Request):
     sesion, err = _admin_guard(request)
     if err:
         return err
 
-    feeds = _cargar_feeds_yaml()
+    from ..storage.config_loader import listar_fuentes
 
-    # Categorías para agrupar
+    fuentes = listar_fuentes(_get_db_path())
+
+    # Banner de resultado de la última edición (via query param)
+    msg = request.query_params.get("msg", "")
+    err_msg = request.query_params.get("err", "")
+    banner = ""
+    if msg:
+        banner = f'<div class="alert-box alert-info">✓ {escape(msg)}</div>'
+    elif err_msg:
+        banner = f'<div class="alert-box alert-warn">⚠️ {escape(err_msg)}</div>'
+
     _CAT_LABEL = {
-        "medios": "Medios nacionales",
-        "estado": "Estado peruano",
-        "internacional": "Internacional",
-        "regional": "Medios regionales",
+        "medios": "Medios nacionales", "estado": "Estado peruano",
+        "internacional": "Internacional", "regional": "Medios regionales",
         "especializado": "Especializado (minería/anticorrupción)",
         "social": "Redes sociales / Foros",
     }
 
-    # Calidades conocidas (del pipeline actual)
-    _CALIDAD = {
-        "reuters": 1.30, "ap": 1.25, "bbc": 1.20,
-        "larepublica": 1.15, "elcomercio": 1.15, "rpp": 1.15,
-        "idl": 1.20, "ojo_publico": 1.20, "convoca": 1.18,
-        "gestion": 1.10, "andina": 1.10,
-        "google_news": 0.85,
-    }
+    n_total   = len(fuentes)
+    n_activas = sum(1 for f in fuentes if f.get("activo"))
+    n_inact   = n_total - n_activas
 
-    def _calidad_feed(feed: dict) -> float:
-        fid = (feed.get("id") or "").lower()
-        url = (feed.get("url") or "").lower()
-        for k, v in _CALIDAD.items():
-            if k in fid or k in url:
-                return v
-        if "news.google.com" in url:
-            return 0.85
-        return 1.00
-
-    def _calidad_color(q: float) -> str:
-        if q >= 1.20:
-            return "var(--bajo)"
-        if q >= 1.00:
-            return "var(--accent)"
-        return "var(--muted)"
+    if not fuentes:
+        contenido = """
+<div class="alert-box alert-warn">
+  Aún no hay fuentes en <code>config_fuentes</code>. Se poblarán automáticamente
+  desde <code>config.yaml</code> en el próximo arranque del servidor.
+</div>"""
+        return HTMLResponse(_page("Fuentes RSS", contenido, "fuentes", sesion["username"]))
 
     # Agrupar por categoría
     grupos: dict[str, list] = {}
-    for f in feeds:
-        cat = f.get("categoria", "medios")
-        grupos.setdefault(cat, []).append(f)
+    for f in fuentes:
+        grupos.setdefault(f.get("categoria") or "medios", []).append(f)
 
     filas_html = ""
     for cat, items in grupos.items():
-        cat_label = _CAT_LABEL.get(cat, cat.title())
-        filas_html += f'<tr><td colspan="4" style="background:var(--bg-2);color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;padding:8px 10px">{escape(cat_label)} ({len(items)})</td></tr>\n'
-        for feed in items:
-            fid   = escape(feed.get("id") or "—")
-            fname = escape(feed.get("nombre") or "—")
-            furl  = feed.get("url") or ""
-            q     = _calidad_feed(feed)
-            q_col = _calidad_color(q)
+        cat_label = _CAT_LABEL.get(cat, (cat or "otros").title())
+        filas_html += (f'<tr><td colspan="5" style="background:var(--bg-2);color:var(--muted);'
+                       f'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;'
+                       f'padding:8px 10px">{escape(cat_label)} ({len(items)})</td></tr>\n')
+        for f in items:
+            fid    = f["id"]
+            fname  = escape(f.get("nombre") or "—")
+            furl   = f.get("url_feed") or ""
+            q      = float(f.get("calidad") or 1.0)
+            q_col  = _calidad_color(q)
+            activo = bool(f.get("activo"))
             via_gn = "news.google.com" in furl
-            tipo_badge = '<span class="badge badge-warn">Google News</span>' if via_gn else '<span class="badge badge-ok">Feed directo</span>'
-            filas_html += f"""<tr>
-  <td><span style="color:var(--muted);font-size:11px">{fid}</span><br>{fname}</td>
-  <td>{tipo_badge}</td>
-  <td style="color:{q_col};font-weight:600">{q:.2f}×</td>
-  <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+
+            estado_badge = ('<span class="badge badge-ok">Activa</span>' if activo
+                            else '<span class="badge badge-off">Inactiva</span>')
+            tipo_badge = ('<span class="badge badge-warn">Google News</span>' if via_gn
+                          else '<span class="badge badge-ok">Directo</span>')
+            toggle_label = "Desactivar" if activo else "Activar"
+            toggle_val = "0" if activo else "1"
+            row_op = "" if activo else "opacity:.55;"
+
+            filas_html += f"""<tr style="{row_op}">
+  <td>{fname}<br><span style="color:var(--muted);font-size:10px">{tipo_badge}</span></td>
+  <td>{estado_badge}</td>
+  <td>
+    <form method="post" action="/admin/fuentes/calidad" style="display:flex;gap:4px;align-items:center">
+      <input type="hidden" name="fuente_id" value="{fid}">
+      <input type="number" name="calidad" value="{q:.2f}" step="0.05" min="0.1" max="2.0"
+             style="width:64px;padding:3px 6px;border-radius:6px;border:1px solid var(--bg-3);
+                    background:var(--bg-0);color:{q_col};font-weight:600;font-size:12px">
+      <button type="submit" style="padding:3px 8px;border:0;border-radius:6px;
+              background:var(--bg-3);color:var(--text);font-size:11px;cursor:pointer">Guardar</button>
+    </form>
+  </td>
+  <td>
+    <form method="post" action="/admin/fuentes/toggle" style="margin:0">
+      <input type="hidden" name="fuente_id" value="{fid}">
+      <input type="hidden" name="activo" value="{toggle_val}">
+      <button type="submit" style="padding:4px 10px;border:1px solid var(--bg-3);border-radius:6px;
+              background:{'#2a1620' if activo else '#0d2b1f'};
+              color:{'var(--alto)' if activo else 'var(--bajo)'};font-size:11px;cursor:pointer">
+        {toggle_label}</button>
+    </form>
+  </td>
+  <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
     <a href="{escape(furl)}" target="_blank" rel="noopener noreferrer"
-       style="color:var(--muted);font-size:11px">{escape(furl[:70] + ('…' if len(furl) > 70 else ''))}</a>
+       style="color:var(--muted);font-size:11px">{escape(furl[:60] + ('…' if len(furl) > 60 else ''))}</a>
   </td>
 </tr>\n"""
 
-    n_gn    = sum(1 for f in feeds if "news.google.com" in (f.get("url") or ""))
-    n_direc = len(feeds) - n_gn
-
     contenido = f"""
+{banner}
 <div class="alert-box alert-info">
-  ℹ️ Fase A: visualización desde <code>config.yaml</code>. En Fase B, los feeds
-  serán editables desde este panel y se guardarán en <code>config_fuentes</code>.
+  ℹ️ Edición en vivo: activar/desactivar una fuente la incluye o excluye del próximo
+  ciclo del pipeline. Cambiar la calidad ajusta el multiplicador de score de esa fuente.
+  Todos los cambios quedan registrados en el <a href="/admin/fuentes/log" style="color:var(--accent)">log de auditoría</a>.
 </div>
 
 <div class="kpi-row">
   <div class="kpi">
-    <div class="label">Total feeds</div>
-    <div class="val">{len(feeds)}</div>
-    <div class="sub">configurados en config.yaml</div>
+    <div class="label">Total fuentes</div>
+    <div class="val">{n_total}</div>
+    <div class="sub">en config_fuentes</div>
   </div>
   <div class="kpi">
-    <div class="label">Feeds directos</div>
-    <div class="val" style="color:var(--bajo)">{n_direc}</div>
-    <div class="sub">URL del medio</div>
+    <div class="label">Activas</div>
+    <div class="val" style="color:var(--bajo)">{n_activas}</div>
+    <div class="sub">entran al pipeline</div>
   </div>
   <div class="kpi">
-    <div class="label">Vía Google News</div>
-    <div class="val" style="color:var(--medio)">{n_gn}</div>
-    <div class="sub">menos control, más estable</div>
+    <div class="label">Inactivas</div>
+    <div class="val" style="color:var(--muted)">{n_inact}</div>
+    <div class="sub">excluidas del ciclo</div>
   </div>
 </div>
 
 <div class="card">
-  <div class="card-title">Inventario completo de fuentes</div>
+  <div class="card-title">Fuentes — edición</div>
   <div style="font-size:11px;color:var(--muted);margin-bottom:12px">
-    Calidad: multiplicador aplicado al score de artículos de esa fuente (&gt;1 amplifica, &lt;1 atenúa).
-    Hardcodeado en <code>risk_matrix.py → CALIDAD_FUENTE</code>.
+    Calidad: multiplicador al score de artículos de esa fuente (rango 0.10–2.00; &gt;1 amplifica, &lt;1 atenúa).
   </div>
   <div style="overflow-x:auto">
     <table class="tbl">
       <thead><tr>
-        <th>Fuente</th>
-        <th>Tipo</th>
-        <th>Calidad</th>
-        <th>URL</th>
+        <th>Fuente</th><th>Estado</th><th>Calidad</th><th>Acción</th><th>URL</th>
       </tr></thead>
       <tbody>{filas_html}</tbody>
     </table>
@@ -679,6 +705,103 @@ async def admin_fuentes(request: Request):
 </div>
 """
     return HTMLResponse(_page("Fuentes RSS", contenido, "fuentes", sesion["username"]))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /admin/fuentes/toggle   Activar/desactivar fuente
+# POST /admin/fuentes/calidad  Editar calidad de fuente
+# GET  /admin/fuentes/log      Auditoría de cambios
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.post("/fuentes/toggle")
+async def admin_fuentes_toggle(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import actualizar_fuente, LockTimeoutError
+    form = await request.form()
+    try:
+        fuente_id = int(form.get("fuente_id"))
+        activo = form.get("activo", "1")
+        r = actualizar_fuente(_get_db_path(), fuente_id, "activo", activo,
+                              usuario=sesion["username"], motivo="toggle desde panel")
+        estado = "activada" if r["valor_nuevo"] == 1 else "desactivada"
+        return RedirectResponse(f"/admin/fuentes?msg=Fuente+{estado}", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            "/admin/fuentes?err=El+sistema+está+actualizando+datos+(ciclo+automático).+"
+            "El+cambio+NO+se+guardó.+Reintenta+en+unos+segundos.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/fuentes?err={escape(str(e))}", status_code=303)
+
+
+@router.post("/fuentes/calidad")
+async def admin_fuentes_calidad(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import actualizar_fuente, LockTimeoutError
+    form = await request.form()
+    try:
+        fuente_id = int(form.get("fuente_id"))
+        calidad = form.get("calidad")
+        r = actualizar_fuente(_get_db_path(), fuente_id, "calidad", calidad,
+                              usuario=sesion["username"], motivo="edición de calidad")
+        return RedirectResponse(
+            f"/admin/fuentes?msg=Calidad+actualizada+a+{r['valor_nuevo']}", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            "/admin/fuentes?err=El+sistema+está+actualizando+datos+(ciclo+automático).+"
+            "El+cambio+NO+se+guardó.+Reintenta+en+unos+segundos.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/fuentes?err={escape(str(e))}", status_code=303)
+
+
+@router.get("/fuentes/log", response_class=HTMLResponse)
+async def admin_fuentes_log(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import listar_log_fuentes
+    logs = listar_log_fuentes(_get_db_path(), limite=200)
+
+    filas = ""
+    for l in logs:
+        ts = (l.get("cambiado_en") or "")[:19].replace("T", " ")
+        campo = escape(l.get("campo") or "—")
+        va = escape(str(l.get("valor_anterior") if l.get("valor_anterior") is not None else "—"))
+        vn = escape(str(l.get("valor_nuevo") if l.get("valor_nuevo") is not None else "—"))
+        filas += f"""<tr>
+  <td style="color:var(--muted);font-size:12px;white-space:nowrap">{ts}</td>
+  <td>{escape(l.get('fuente_nombre') or ('#' + str(l.get('fuente_id'))))}</td>
+  <td><span class="badge badge-off">{campo}</span></td>
+  <td style="color:var(--muted)">{va} → <b style="color:var(--text)">{vn}</b></td>
+  <td style="color:var(--accent);font-size:12px">{escape(l.get('usuario') or '—')}</td>
+  <td style="color:var(--muted);font-size:12px">{escape(l.get('motivo') or '—')}</td>
+</tr>\n"""
+
+    cuerpo = (filas if logs else
+              '<tr><td colspan="6" style="color:var(--muted);padding:16px">'
+              'Sin cambios registrados todavía.</td></tr>')
+
+    contenido = f"""
+<div class="alert-box alert-info">
+  Registro de auditoría de cambios en fuentes (calidad, estado activo/inactivo).
+  <a href="/admin/fuentes" style="color:var(--accent)">← Volver a fuentes</a>
+</div>
+<div class="card">
+  <div class="card-title">Auditoría de cambios — config_fuentes_log ({len(logs)})</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Fecha</th><th>Fuente</th><th>Campo</th><th>Cambio</th><th>Usuario</th><th>Motivo</th>
+      </tr></thead>
+      <tbody>{cuerpo}</tbody>
+    </table>
+  </div>
+</div>
+"""
+    return HTMLResponse(_page("Auditoría de fuentes", contenido, "fuentes", sesion["username"]))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
