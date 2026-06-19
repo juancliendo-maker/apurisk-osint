@@ -1657,9 +1657,9 @@ def _origen_badge(origen: str) -> str:
 
 @router.get("/semaforo")
 async def admin_semaforo(request: Request):
-    sesion = await _require_admin(request)
-    if isinstance(sesion, RedirectResponse):
-        return sesion
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
 
     db_path = str(Path(OUTPUT_DIR) / "apurisk_archive.db")
 
