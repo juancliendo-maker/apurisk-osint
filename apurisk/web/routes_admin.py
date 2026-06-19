@@ -316,6 +316,7 @@ def _nav_html(activo: str, username: str) -> str:
         ("fuentes",   "📡", "Fuentes RSS",    "/admin/fuentes"),
         ("factores",  "⚖️",  "Factores",       "/admin/factores"),
         ("ingestas",  "📥", "Ingesta manual", "/admin/ingestas"),
+        ("semaforo",  "🚦", "Semáforo OSINT", "/admin/semaforo"),
         ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
         ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
@@ -1635,3 +1636,164 @@ async def admin_logs(request: Request):
 </div>
 """
     return HTMLResponse(_page("Logs del sistema", contenido, "logs", sesion["username"]))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Semáforo OSINT — resultado del motor multiplicativo (Fase C)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _color_nivel(nivel: str) -> str:
+    return {
+        "ROJO": "#7B0000", "ROJO PROBABLE": "#C0392B",
+        "NARANJA ALTO": "#E06000", "AMARILLO": "#F5A623",
+        "VERDE": "#2D9E56",
+    }.get(nivel or "", "#888")
+
+
+def _origen_badge(origen: str) -> str:
+    cls = {"real": "ok", "proxy": "warn", "estimado": "alto"}.get(origen, "off")
+    return f'<span class="badge badge-{cls}">{escape(origen)}</span>'
+
+
+@router.get("/semaforo")
+async def admin_semaforo(request: Request):
+    sesion = await _require_admin(request)
+    if isinstance(sesion, RedirectResponse):
+        return sesion
+
+    db_path = str(Path(OUTPUT_DIR) / "apurisk_archive.db")
+
+    # Leer último resultado OSINT desde snapshot JSON más reciente
+    osint = None
+    out_dir = Path(OUTPUT_DIR)
+    snaps = sorted(out_dir.glob("apurisk_snapshot_*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    for s in snaps[:1]:
+        try:
+            data = json.loads(s.read_text(encoding="utf-8"))
+            osint = data.get("osint_motor")
+            break
+        except Exception:
+            pass
+
+    if not osint:
+        contenido = """
+<div class="card card-accent">
+  <div class="card-title">🚦 Semáforo OSINT</div>
+  <p style="color:var(--muted)">Sin resultado disponible aún.
+  El motor OSINT corre automáticamente en cada ciclo del scheduler.
+  Espera el próximo ciclo o ejecuta una corrida manual.</p>
+</div>"""
+        return HTMLResponse(_page("Semáforo OSINT", contenido, "semaforo", sesion["username"]))
+
+    sem = osint.get("semaforo", {})
+    nivel = sem.get("nivel_interpretado") or sem.get("nivel") or "—"
+    score = sem.get("score", 0)
+    color = _color_nivel(nivel)
+    vol = osint.get("volumen", {})
+    factores = osint.get("factores_semaforo", {})
+    puntos = osint.get("puntos", [])
+    cobertura = osint.get("cobertura_factores", "?")
+    sin_dato = osint.get("factores_sin_dato", [])
+    procesado = osint.get("procesado_en", "—")
+
+    # ── Tabla de factores ──
+    filas_fact = ""
+    for fk, fd in factores.items():
+        barra_w = int(fd.get("valor", 0) * 100)
+        filas_fact += (
+            f"<tr><td><b>{escape(fk)}</b><br>"
+            f"<span style='font-size:11px;color:var(--muted)'>{escape(fd.get('nombre',''))}</span></td>"
+            f"<td>{fd.get('valor', 0):.3f}</td>"
+            f"<td>{fd.get('peso', 1.0):.1f}</td>"
+            f"<td>{_origen_badge(fd.get('origen','?'))}</td>"
+            f"<td><div style='background:#ddd;border-radius:3px;height:10px;width:100px'>"
+            f"<div style='background:{color};width:{barra_w}px;height:10px;border-radius:3px'></div>"
+            f"</div></td></tr>"
+        )
+
+    # ── Activadores ──
+    act = sem.get("activador_disparado", False)
+    act_tipo = sem.get("activador_tipo") or "—"
+    act_html = (
+        f'<span class="badge badge-alto">DISPARADO ({escape(act_tipo)})</span>'
+        if act else '<span class="badge badge-ok">ninguno</span>'
+    )
+
+    # ── Puntos del reporte ──
+    puntos_html = ""
+    for p in puntos:
+        capa = p.get("capa", "señal")
+        capa_cls = "badge-warn" if capa == "interpretativa" else "badge-ok"
+        advertencia = (
+            f'<div style="color:var(--alto);font-size:11px;margin-top:4px">'
+            f'⚠ {escape(p.get("advertencia",""))}</div>'
+            if p.get("advertencia") else ""
+        )
+        resultado = p.get("resultado")
+        if isinstance(resultado, list):
+            res_html = "<ul style='margin:4px 0 0 16px'>" + "".join(
+                f"<li>{escape(str(r))}</li>" for r in resultado
+            ) + "</ul>"
+        elif isinstance(resultado, dict):
+            res_html = f"<pre style='font-size:11px;overflow:auto'>{escape(json.dumps(resultado, ensure_ascii=False, indent=2))}</pre>"
+        else:
+            res_html = f"<b>{escape(str(resultado))}</b>"
+
+        puntos_html += f"""
+<div style="border-left:3px solid {color if capa=='interpretativa' else '#4A90D9'};
+     padding:8px 12px;margin-bottom:8px;background:var(--card-bg)">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+    <span style="color:var(--muted);font-size:12px">#{p.get('punto','?')}</span>
+    <b>{escape(p.get('titulo',''))}</b>
+    <span class="badge {capa_cls}">{escape(capa)}</span>
+  </div>
+  {res_html}
+  {advertencia}
+</div>"""
+
+    contenido = f"""
+<div class="card card-accent">
+  <div class="card-title">🚦 Semáforo OSINT — Motor Multiplicativo</div>
+  <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+    <div style="background:{color};color:#fff;border-radius:12px;
+         padding:18px 32px;font-size:28px;font-weight:bold;text-align:center;min-width:160px">
+      {escape(nivel)}<br>
+      <span style="font-size:14px;opacity:.85">score: {score:.4f}</span>
+    </div>
+    <div>
+      <table class="tbl" style="min-width:260px">
+        <tr><th>Volumen</th><td><b>{escape(vol.get('clase','?'))}</b>
+            — {vol.get('n_bruto',0)} artículos · {vol.get('n_fuentes',0)} fuentes</td></tr>
+        <tr><th>Activadores</th><td>{act_html}</td></tr>
+        <tr><th>Cobertura</th><td>{escape(cobertura)}</td></tr>
+        <tr><th>Factores sin dato</th>
+            <td style="font-size:11px;color:var(--muted)">{escape(', '.join(sin_dato)) or '—'}</td></tr>
+        <tr><th>Fórmula</th><td><code>∏(factor_i ^ peso_i)</code></td></tr>
+        <tr><th>Procesado</th><td style="font-size:11px">{escape(procesado)}</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Factores del semáforo</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr><th>Factor</th><th>Valor</th><th>Peso (exp)</th>
+             <th>Origen</th><th>Visual</th></tr></thead>
+      <tbody>{filas_fact}</tbody>
+    </table>
+  </div>
+  <p style="color:var(--muted);font-size:11px;margin-top:8px">
+    Con peso=1.0: score ≡ VC × PA × CE × IA × V (multiplicación pura).
+    <b>estimado</b> = heurística no verificada · <b>proxy</b> = señal indirecta · <b>real</b> = dato computado.
+  </p>
+</div>
+
+<div class="card">
+  <div class="card-title">Reporte de 10 puntos</div>
+  {puntos_html}
+</div>"""
+
+    return HTMLResponse(_page("Semáforo OSINT", contenido, "semaforo", sesion["username"]))

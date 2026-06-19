@@ -409,9 +409,40 @@ def analizar(data: dict, config: dict) -> dict:
     print(f"  · Factores de riesgo: {len(matriz)}  → top: {matriz[0]['nombre']} ({matriz[0]['score']})")
     print(f"  · Alertas activas: {len(alertas)}  ({len([a for a in alertas if a['nivel']=='CRÍTICA'])} críticas)")
     print(f"  · Twitter: {twitter_stats['n']} tweets · {twitter_stats['engagement_total']:,} engagement · {len(twitter_stats['virales'])} virales")
+
+    # ── Motor OSINT con semáforo multiplicativo (Fase C) ──────────────────
+    osint_resultado = None
+    try:
+        import os as _os
+        try:
+            from .analyzers.motor_osint import analizar_osint
+        except ImportError:
+            from apurisk.analyzers.motor_osint import analizar_osint
+        _db_osint = _os.environ.get(
+            "APURISK_DB_PATH",
+            str(_os.path.join(_os.getenv("OUTPUT_DIR", "output"), "apurisk_archive.db"))
+        )
+        osint_resultado = analizar_osint(
+            articles=art,
+            db_path=_db_osint,
+            pais="PE",
+            riesgo_nacional=float(riesgo.get("global", 0)),
+            jaccard_dup=0.0,
+            modo="AUTOMATICO",
+            articulo_id=None,
+            persistir=False,  # sin articulo_id no hay fila que actualizar
+        )
+        sem = osint_resultado.get("semaforo", {})
+        print(f"  · Motor OSINT: semáforo={sem.get('nivel_interpretado', '?')} "
+              f"score={sem.get('score', 0):.4f} "
+              f"activador={sem.get('activador_disparado', False)}")
+    except Exception as _e:
+        print(f"  · ⚠ Motor OSINT falló: {type(_e).__name__}: {_e}")
+
     return {"entidades": entidades, "temas": temas, "riesgo": riesgo,
             "matriz": matriz, "alertas": alertas, "twitter_stats": twitter_stats,
-            "score_v2_completo": score_v2_completo}
+            "score_v2_completo": score_v2_completo,
+            "osint_motor": osint_resultado}
 
 
 def _limpiar_archivos_viejos(out_dir: Path, retencion_snapshots: int = 5,
@@ -549,6 +580,8 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
         # Score v2 completo (Camino B) — 4 horizontes, confidence, evento crítico.
         # Disponible siempre, motor activo se indica en riesgo.motor ("v1" | "v2").
         "score_v2_completo": an.get("score_v2_completo"),
+        # Motor OSINT con semáforo multiplicativo (Fase C).
+        "osint_motor": an.get("osint_motor"),
         "articulos": [a.to_dict() for a in data["todos"]],
         "conflictos": [c.to_dict() for c in data["conflictos"]],
         "proyectos": [p.to_dict() for p in data["proyectos"]],
