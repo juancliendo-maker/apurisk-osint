@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS config_actores (
     capacidad_efectiva  REAL NOT NULL DEFAULT 0.5,
     peso_calculado      REAL NOT NULL DEFAULT 0,
     territorio          TEXT NOT NULL DEFAULT 'nacional',
+    alias               TEXT,    -- variantes del nombre en prensa, separadas por comas
     activo              INTEGER NOT NULL DEFAULT 1,
     notas_analista      TEXT,
     creado_en           TEXT NOT NULL DEFAULT (datetime('now')),
@@ -504,6 +505,8 @@ _DATOS_INICIALES = [
 _MIGRACIONES = [
     # Fase B cierre: añadir peso_analista a instancias existentes (idempotente)
     "ALTER TABLE config_fuentes ADD COLUMN peso_analista REAL NOT NULL DEFAULT 1.0",
+    # Alias de actores para emparejamiento con entidades detectadas en noticias
+    "ALTER TABLE config_actores ADD COLUMN alias TEXT",
 ]
 
 

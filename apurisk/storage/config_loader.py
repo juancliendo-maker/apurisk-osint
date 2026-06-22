@@ -1049,14 +1049,16 @@ def crear_actor(db_path: str, datos: dict, usuario: str) -> dict:
             "(pais, nombre, tipo, nivel, nivel_base, nivel_base_manual, "
             "crit_decision, crit_recursos, crit_articulacion, "
             "crit_legitimidad, crit_resiliencia, crit_proyeccion, "
-            "capacidad_efectiva, peso_calculado, territorio, activo, notas_analista) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "capacidad_efectiva, peso_calculado, territorio, alias, activo, notas_analista) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (datos.get("pais", "PE"), datos["nombre"].strip(),
              datos.get("tipo", "formal"), nivel, nivel_base, nivel_base_manual,
              crits["decision"], crits["recursos"], crits["articulacion"],
              crits["legitimidad"], crits["resiliencia"], crits["proyeccion"],
              cap, peso,
-             datos.get("territorio", "nacional"), 1,
+             datos.get("territorio", "nacional"),
+             datos.get("alias") or None,
+             1,
              datos.get("notas_analista") or None),
         )
         actor_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1167,7 +1169,7 @@ def actualizar_actor(db_path: str, actor_id: int, datos: dict,
             "crit_decision=?, crit_recursos=?, crit_articulacion=?, "
             "crit_legitimidad=?, crit_resiliencia=?, crit_proyeccion=?, "
             "capacidad_efectiva=?, peso_calculado=?, territorio=?, "
-            "notas_analista=?, actualizado_en=datetime('now') WHERE id=?",
+            "alias=?, notas_analista=?, actualizado_en=datetime('now') WHERE id=?",
             (datos.get("nombre", old["nombre"]).strip(),
              datos.get("tipo", old["tipo"]),
              nivel, nivel_base, nivel_base_manual,
@@ -1175,6 +1177,7 @@ def actualizar_actor(db_path: str, actor_id: int, datos: dict,
              crits["legitimidad"], crits["resiliencia"], crits["proyeccion"],
              cap, peso,
              datos.get("territorio", old["territorio"]),
+             datos.get("alias", old.get("alias")) or None,
              datos.get("notas_analista", old["notas_analista"]) or None,
              actor_id),
         )
@@ -1304,6 +1307,87 @@ def propagar_nivel_base(db_path: str, nivel: str, valor_nuevo: float,
                 "valor_anterior": valor_anterior, "valor_nuevo": valor_nuevo}
 
     return _ejecutar_con_reintentos(db_path, _op)
+
+
+def emparejar_entidad_con_actor(
+    entidad: str, actores: list[dict]
+) -> dict | None:
+    """Busca en la lista de actores el que coincide con la entidad detectada en prensa.
+
+    Estrategia (en orden de preferencia):
+      1. Coincidencia exacta (case-insensitive) con actor.nombre
+      2. Coincidencia de substring en actor.alias (campo CSV separado por comas)
+      3. Coincidencia de substring con actor.nombre
+
+    Devuelve el dict del actor si hay match, None si no hay ninguno.
+    """
+    entidad_lower = entidad.lower().strip()
+    # Paso 1: coincidencia exacta por nombre
+    for actor in actores:
+        if actor.get("nombre", "").lower().strip() == entidad_lower:
+            return actor
+    # Paso 2: substring en alias
+    for actor in actores:
+        alias_raw = actor.get("alias") or ""
+        variantes = [v.strip().lower() for v in alias_raw.split(",") if v.strip()]
+        for v in variantes:
+            if v and (v in entidad_lower or entidad_lower in v):
+                return actor
+    # Paso 3: substring en nombre
+    for actor in actores:
+        nombre_lower = actor.get("nombre", "").lower()
+        if nombre_lower and (nombre_lower in entidad_lower or entidad_lower in nombre_lower):
+            return actor
+    return None
+
+
+def cargar_actores_visibles_por_tema(
+    db_path: str,
+    articulos_por_tema: dict,
+    pais: str = "PE",
+) -> dict:
+    """Para cada tema, detecta la entidad más mencionada en sus artículos y la empareja
+    con un actor de config_actores.
+
+    articulos_por_tema: {tema: [article, ...]} — salida de detectar_temas()["articulos_por_tema"].
+
+    Devuelve {tema: {
+        "entidad_visible":   str,           # nombre tal como aparece en prensa
+        "menciones_visible": int,
+        "actor_match":       dict | None,   # actor de la base si hay emparejamiento
+        "emparejado":        bool,
+    }}.
+    """
+    from .entities import INSTITUCIONES, PARTIDOS, EMPRESAS_RIESGO, _find_all
+    from collections import Counter
+
+    actores_db: list[dict] = []
+    try:
+        actores_db = listar_actores(db_path, pais=pais, solo_activos=True)
+    except Exception as e:
+        print(f"[config_loader] cargar_actores_visibles_por_tema: {e}")
+
+    resultado: dict = {}
+    for tema, arts in articulos_por_tema.items():
+        if not arts:
+            continue
+        conteo: Counter = Counter()
+        todas_entidades = INSTITUCIONES + PARTIDOS + EMPRESAS_RIESGO
+        for a in arts:
+            text = (a.title or "") + " " + (a.summary or "")
+            for ent in _find_all(text, todas_entidades):
+                conteo[ent] += 1
+        if not conteo:
+            continue
+        entidad_top, menciones = conteo.most_common(1)[0]
+        actor_match = emparejar_entidad_con_actor(entidad_top, actores_db)
+        resultado[tema] = {
+            "entidad_visible": entidad_top,
+            "menciones_visible": menciones,
+            "actor_match": actor_match,
+            "emparejado": actor_match is not None,
+        }
+    return resultado
 
 
 def cargar_pa_por_tema(db_path: str, pais: str = "PE") -> dict:

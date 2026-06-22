@@ -1736,6 +1736,16 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     p2 = puntos.get(2, {})
     detalle_temas = p2.get("detalle", {})  # {tema: conteo}
     total_menciones = max(1, sum(detalle_temas.values()))
+    entidad_top_por_tema = p2.get("entidad_top_por_tema", {})  # {tema: {entidad, menciones}}
+
+    # Emparejamiento actor visible → actor determinante (por alias y nombre)
+    actores_db_cache: list = []
+    if db_path:
+        try:
+            from ..storage.config_loader import listar_actores, emparejar_entidad_con_actor
+            actores_db_cache = listar_actores(db_path, pais="PE", solo_activos=True)
+        except Exception as e:
+            print(f"[semaforo] no se pudieron cargar actores para emparejamiento: {e}")
 
     # Valores globales de los 5 factores del semáforo (para tabla informativa)
     fval = {k: float(v.get("valor", 0)) for k, v in factores_sem.items()}
@@ -1817,6 +1827,24 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         else:
             cuadrante = "TRANQUILO"
 
+        # Actor visible vs determinante
+        ent_info = entidad_top_por_tema.get(tema)
+        actor_visible_nombre = ent_info["entidad"] if ent_info else None
+        actor_visible_menciones = ent_info["menciones"] if ent_info else 0
+        actor_visible_match = None
+        if actor_visible_nombre and actores_db_cache:
+            actor_visible_match = emparejar_entidad_con_actor(
+                actor_visible_nombre, actores_db_cache
+            )
+        actor_determinante_nombre = pa_info["actor_principal"] if pa_info else None
+        # Brecha: visible ≠ determinante (comparamos nombre de actor emparejado vs determinante)
+        nombre_match = (actor_visible_match or {}).get("nombre") if actor_visible_match else None
+        hay_brecha = (
+            actor_visible_nombre is not None
+            and actor_determinante_nombre is not None
+            and nombre_match != actor_determinante_nombre
+        )
+
         # Nivel de color por gravedad estructural (Y manda en esta matriz)
         nivel = _nivel_score(y)
         globos_b.append({
@@ -1833,6 +1861,11 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
             "color": _COLOR_NIVEL_BURB[nivel],
             "origen_pa": origen_pa,
             "pa_info": pa_info,
+            "actor_visible": actor_visible_nombre,
+            "actor_visible_menciones": actor_visible_menciones,
+            "actor_visible_en_base": actor_visible_match is not None,
+            "actor_determinante": actor_determinante_nombre,
+            "hay_brecha": hay_brecha,
         })
 
     # ── Score Global B — la gravedad manda, la actividad solo agrava ──────────
@@ -1932,19 +1965,39 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
             # Matriz B: actividad vs gravedad estructural
             origen_pa = g.get("origen_pa", "estimado")
             pa_info = g.get("pa_info")
-            if pa_info:
-                pa_str = (
-                    f"PA={pa_info['pa']:g} (actor: {pa_info['actor_principal']}, "
-                    f"bonus +{pa_info['bonus']:g})"
-                )
+
+            # Líneas de actor visible vs determinante
+            actor_vis = g.get("actor_visible")
+            actor_vis_n = g.get("actor_visible_menciones", 0)
+            actor_vis_base = g.get("actor_visible_en_base", False)
+            actor_det = g.get("actor_determinante")
+            hay_brecha = g.get("hay_brecha", False)
+
+            if actor_vis:
+                sin_base_tag = "" if actor_vis_base else " [sin actor en base]"
+                linea_visible = f"ACTOR VISIBLE: {actor_vis} ({actor_vis_n} mencs){sin_base_tag}"
             else:
-                pa_str = f"PA={g.get('impacto_base', 0):g} (estimado — sin actores)"
+                linea_visible = "ACTOR VISIBLE: sin datos de entidades"
+
+            if actor_det:
+                peso_det = pa_info["peso_mayor"] if pa_info else "?"
+                linea_det = f"ACTOR DETERMINANTE: {actor_det} (peso {peso_det:g})"
+            else:
+                linea_det = "ACTOR DETERMINANTE: sin actores vinculados"
+
+            brecha_tag = " | ⚠ percepción ≠ poder real" if hay_brecha else ""
+
+            if pa_info:
+                pa_str = f"PA={pa_info['pa']:g} (bonus +{pa_info['bonus']:g})"
+            else:
+                pa_str = f"PA={g.get('impacto_base', 0):g} (estimado)"
+
             tooltip_extra = (
+                f"{linea_visible} | {linea_det}{brecha_tag} | "
                 f"Cuadrante: {g['cuadrante']} | "
                 f"PA [{origen_pa}]: {pa_str} | "
                 f"Menciones: {g.get('menciones', 0)} | "
-                f"Piso: {g.get('piso', 0)} | "
-                f"Impacto base: {g.get('impacto_base', 0)}"
+                f"Piso: {g.get('piso', 0)}"
             )
         else:
             tooltip_extra = f"Menciones: {g.get('menciones', 0)}"
@@ -2255,13 +2308,38 @@ async def admin_semaforo(request: Request):
     puntos_señal = [_render_punto(p) for p in puntos_lista if p.get("capa") == "señal"]
     puntos_interp = [_render_punto(p) for p in puntos_lista if p.get("capa") == "interpretativa"]
 
-    # ── Tabla PA por tema ────────────────────────────────────────────────────
+    # ── Tabla PA por tema + actores visibles ────────────────────────────────
     filas_pa = ""
+    entidades_sin_match: list[tuple[str, str, int]] = []  # (tema, entidad, menciones)
     for tema, impacto_base in _IMPACTO_TEMA.items():
         nombre_tema = tema.replace("_", " ").title()
         g_b = next((g for g in globos_b if g["tema"] == tema), None)
-        y_actual = g_b["y"] if g_b else max(0.0, float(impacto_base))
         pa_info = pa_por_tema.get(tema)
+
+        # Actor visible
+        actor_vis = g_b.get("actor_visible") if g_b else None
+        actor_vis_n = g_b.get("actor_visible_menciones", 0) if g_b else 0
+        actor_vis_base = g_b.get("actor_visible_en_base", False) if g_b else False
+        actor_det = g_b.get("actor_determinante") if g_b else None
+        hay_brecha = g_b.get("hay_brecha", False) if g_b else False
+
+        if actor_vis:
+            if actor_vis_base:
+                vis_html = f'<span style="color:#94a3b8">{escape(actor_vis)} ({actor_vis_n})</span>'
+            else:
+                vis_html = (
+                    f'<span style="color:#f59e0b" title="Sin actor en base — agrégalo">'
+                    f'⚠ {escape(actor_vis)} ({actor_vis_n})</span>'
+                )
+                entidades_sin_match.append((nombre_tema, actor_vis, actor_vis_n))
+        else:
+            vis_html = '<span style="color:var(--muted)">sin datos</span>'
+
+        if hay_brecha:
+            brecha_html = '<span style="color:#f59e0b;font-size:11px">⚠ percepción ≠ poder real</span>'
+        else:
+            brecha_html = ""
+
         if pa_info:
             pa_val = pa_info["pa"]
             actor_princ = escape(pa_info["actor_principal"])
@@ -2275,7 +2353,7 @@ async def admin_semaforo(request: Request):
             badge_origen = '<span class="badge badge-ok">real</span>'
             detalle_html = (
                 f'Principal: <b>{actor_princ}</b> ({pa_info["peso_mayor"]:g}) · '
-                f'Fuertes (≥{70:g}): {lista_fuertes} · '
+                f'Fuertes (≥70): {lista_fuertes} · '
                 f'Bonus: +{bonus:g}'
             )
         else:
@@ -2284,7 +2362,8 @@ async def admin_semaforo(request: Request):
             n_actores = 0
             detalle_html = (
                 '<span style="color:#f59e0b">⚠ Sin actores vinculados — '
-                'usando impacto base. Vincula actores en /admin/actores.</span>'
+                'usando impacto base. Vincula actores en <a href="/admin/actores" '
+                'style="color:var(--accent)">/admin/actores</a>.</span>'
             )
         delta = round(pa_val - float(impacto_base), 1)
         delta_html = (
@@ -2298,11 +2377,32 @@ async def admin_semaforo(request: Request):
             f"<td style='text-align:center'>{float(impacto_base):g}</td>"
             f"<td style='text-align:center'><b>{pa_val:g}</b></td>"
             f"<td style='text-align:center'>{delta_html}</td>"
+            f"<td>{vis_html}<br>{brecha_html}</td>"
             f"<td style='text-align:center'>{n_actores}</td>"
             f"<td style='text-align:center'>{badge_origen}</td>"
             f"<td style='font-size:11px;color:var(--muted)'>{detalle_html}</td>"
             f"</tr>"
         )
+
+    # ── Lista de entidades sin actor en base (señal de actores a cargar) ────
+    if entidades_sin_match:
+        items_sin_match = "".join(
+            f"<li><b>{escape(ent)}</b> ({n} mencs) — visto en: {escape(t)}</li>"
+            for t, ent, n in sorted(entidades_sin_match, key=lambda x: -x[2])
+        )
+        alerta_sin_match = f"""
+<div class="card" style="border-left:4px solid #f59e0b">
+  <div class="card-title" style="color:#f59e0b">⚠ Entidades visibles sin actor en la base</div>
+  <p style="color:var(--muted);font-size:12px;margin:0 0 8px 0">
+    Estas entidades aparecen en las noticias como las más mencionadas de su tema,
+    pero no tienen actor correspondiente en tu base. Agrégalas en
+    <a href="/admin/actores/nuevo" style="color:var(--accent)">→ Nuevo Actor</a>
+    y vincula los alias (ej. "PNP, Policía") para que el emparejamiento funcione.
+  </p>
+  <ul style="margin:0 0 0 18px;font-size:13px;line-height:2">{items_sin_match}</ul>
+</div>"""
+    else:
+        alerta_sin_match = ""
 
     # ── Chart.js CDN (solo si no está ya en la página) ───────────────────────
     chartjs_cdn = (
@@ -2424,16 +2524,19 @@ async def admin_semaforo(request: Request):
   {''.join(puntos_interp)}
 </div>
 
+{alerta_sin_match}
+
 <!-- ── PA POR TEMA — tabla de actores que alimentan el eje Y de Matriz B ── -->
 <div class="card">
   <div class="card-title">🎭 PA por Tema — actores que alimentan la Matriz B</div>
   <p style="color:var(--muted);font-size:12px;margin:0 0 10px 0">
     El eje Y de la Matriz B usa el PA calculado desde actores reales cuando están
     vinculados. <b>real</b> = calculado desde actores · <b>estimado</b> = impacto
-    base sin actores (vincula actores en
-    <a href="/admin/actores" style="color:var(--accent)">→ Actores</a>).<br>
-    Fórmula: PA = peso_mayor + min(TOPE_BONUS, FACTOR_AGRAVANTE × n_adicionales_fuertes).
-    Parámetros editables en Calibración.
+    base sin actores.<br>
+    <b>Actor visible</b> = entidad más mencionada en noticias del tema ·
+    <b>⚠ percepción ≠ poder real</b> = la prensa nombra un actor distinto al más poderoso ·
+    <b>⚠ naranja</b> en visible = entidad sin actor en tu base (agrégala en
+    <a href="/admin/actores" style="color:var(--accent)">→ Actores</a>).
   </p>
   <div style="overflow-x:auto">
     <table class="tbl">
@@ -2443,9 +2546,10 @@ async def admin_semaforo(request: Request):
           <th style="text-align:center">Impacto base</th>
           <th style="text-align:center">PA actores</th>
           <th style="text-align:center">Δ</th>
-          <th style="text-align:center">Actores</th>
-          <th style="text-align:center">Origen</th>
-          <th>Detalle</th>
+          <th>Actor visible (prensa)</th>
+          <th style="text-align:center">N° actores</th>
+          <th style="text-align:center">Origen PA</th>
+          <th>Detalle determinante</th>
         </tr>
       </thead>
       <tbody>{filas_pa}</tbody>
@@ -2977,6 +3081,21 @@ def _actor_form_html(actor: dict = None, niveles_base: dict = None,
       </div>
     </div>
     <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted)">
+        Alias en prensa
+        <span style="font-weight:400;color:#64748b"> — variantes del nombre que aparecen en noticias</span>
+      </label>
+      <input type="text" name="alias"
+             placeholder="ej: FFAA, Ejército, militares, Fuerzas Armadas"
+             value="{escape(actor.get('alias') or '')}"
+             style="width:100%;box-sizing:border-box;margin-top:3px;
+                    background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:6px 10px;font-size:12px">
+      <div style="font-size:11px;color:#64748b;margin-top:3px">
+        Separa variantes por comas · se usan para emparejar con entidades detectadas en noticias
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
       <label style="font-size:12px;color:var(--muted)">Notas del analista</label>
       <textarea name="notas_analista" rows="3"
                 style="width:100%;box-sizing:border-box;margin-top:3px;
@@ -3192,6 +3311,7 @@ async def admin_actores_crear(request: Request):
             "crit_resiliencia": int(form.get("crit_resiliencia", 3)),
             "crit_proyeccion":  int(form.get("crit_proyeccion", 3)),
             "territorio": form.get("territorio", "nacional"),
+            "alias": form.get("alias", "").strip() or None,
             "notas_analista": form.get("notas_analista", ""),
             "temas": temas,
             "pais": "PE",
@@ -3340,6 +3460,7 @@ async def admin_actores_editar(request: Request, actor_id: int):
             "crit_resiliencia": int(form.get("crit_resiliencia", 3)),
             "crit_proyeccion":  int(form.get("crit_proyeccion", 3)),
             "territorio":  form.get("territorio", "nacional"),
+            "alias": form.get("alias", "").strip() or None,
             "notas_analista": form.get("notas_analista", ""),
             "temas": temas,
         }
