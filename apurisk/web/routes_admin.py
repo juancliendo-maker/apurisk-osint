@@ -318,6 +318,7 @@ def _nav_html(activo: str, username: str) -> str:
         ("ingestas",  "📥", "Ingesta manual", "/admin/ingestas"),
         ("semaforo",  "🚦", "Semáforo OSINT", "/admin/semaforo"),
         ("calibrar",  "🎛️",  "Calibración",    "/admin/semaforo/calibrar"),
+        ("actores",   "🎭", "Actores",        "/admin/actores"),
         ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
         ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
@@ -2691,3 +2692,633 @@ async def admin_calibrar_log(request: Request):
 
     return HTMLResponse(_page("Log calibración · Semáforo", contenido, "calibrar",
                               sesion["username"]))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Actores — Capas 1 y 2 de la base de poder instalada
+# ──────────────────────────────────────────────────────────────────────────────
+
+# JS inline para recálculo en vivo del peso al editar criterios o nivel
+_ACTOR_CALC_JS = """
+<script>
+(function() {
+  var NIVELES = {I:95,II:85,III:72,IV:60,V:48,VI:36,VII:24,VIII:12};
+
+  function recalc() {
+    var form = document.getElementById('actor-form');
+    if (!form) return;
+
+    // nivel_base: si manual checked, usa el campo; si no, usa parámetro del nivel
+    var nivel = form.querySelector('[name=nivel]').value;
+    var manualCb = form.querySelector('[name=nivel_base_manual]');
+    var nbInput  = form.querySelector('[name=nivel_base]');
+    var nb;
+    if (manualCb && manualCb.checked) {
+      nb = parseFloat(nbInput.value) || NIVELES[nivel] || 60;
+    } else {
+      nb = NIVELES[nivel] || 60;
+      if (nbInput) nbInput.value = nb;
+    }
+
+    function v(name) {
+      var el = form.querySelector('[name=' + name + ']');
+      return el ? (parseInt(el.value) || 3) : 3;
+    }
+    var d = v('crit_decision'), r = v('crit_recursos'), a = v('crit_articulacion');
+    var l = v('crit_legitimidad'), rs = v('crit_resiliencia'), p = v('crit_proyeccion');
+    var cap = ((d + r + a) * 2 + (l + rs + p)) / 45.0;
+    var peso = nb * (0.5 + 0.5 * cap);
+
+    var elCap  = document.getElementById('live-cap');
+    var elPeso = document.getElementById('live-peso');
+    var elBar  = document.getElementById('live-bar');
+    if (elCap)  elCap.textContent  = cap.toFixed(3);
+    if (elPeso) elPeso.textContent = peso.toFixed(1);
+    if (elBar)  elBar.style.width  = Math.min(100, peso) + '%';
+
+    // Color del peso
+    var color = peso >= 72 ? '#ef4444' : peso >= 55 ? '#f97316' : peso >= 36 ? '#f59e0b' : '#22c55e';
+    if (elPeso) elPeso.style.color = color;
+    if (elBar)  elBar.style.background = color;
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var form = document.getElementById('actor-form');
+    if (!form) return;
+    form.addEventListener('change', recalc);
+    form.addEventListener('input',  recalc);
+    recalc();
+  });
+})();
+</script>
+"""
+
+
+def _slider_criterio(name: str, label: str, val: int, doble: bool) -> str:
+    """Input range 1-5 con etiqueta y valor visual, para los 6 criterios."""
+    badge = ' <span style="font-size:10px;color:var(--accent)">×2</span>' if doble else ""
+    return f"""
+<div style="margin-bottom:10px">
+  <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+    <span style="font-size:12px;color:var(--muted)">{escape(label)}{badge}</span>
+    <span style="font-size:13px;font-weight:700;color:var(--text)" id="val-{name}">{val}</span>
+  </div>
+  <input type="range" name="{name}" min="1" max="5" value="{val}"
+         style="width:100%;accent-color:var(--accent)"
+         oninput="document.getElementById('val-{name}').textContent=this.value">
+</div>"""
+
+
+def _actor_form_html(actor: dict = None, niveles_base: dict = None,
+                     temas_disponibles: list = None) -> str:
+    """Bloque HTML del formulario de creación/edición de un actor."""
+    if actor is None:
+        actor = {}
+    if niveles_base is None:
+        niveles_base = {"I":95,"II":85,"III":72,"IV":60,"V":48,"VI":36,"VII":24,"VIII":12}
+    if temas_disponibles is None:
+        temas_disponibles = []
+
+    # Importamos NIVELES_ACTOR y TIPOS_ACTOR aquí para no contaminar el módulo
+    from ..storage.config_loader import NIVELES_ACTOR, TIPOS_ACTOR
+
+    nivel_sel = actor.get("nivel", "IV")
+    tipo_sel  = actor.get("tipo", "formal")
+    nb_manual = bool(actor.get("nivel_base_manual", 0))
+
+    opts_nivel = "".join(
+        f'<option value="{k}"{" selected" if k == nivel_sel else ""}>'
+        f'Nivel {k} — {nombre} ({niveles_base.get(k, v):.0f})</option>'
+        for k, (nombre, v) in NIVELES_ACTOR.items()
+    )
+    opts_tipo = "".join(
+        f'<option value="{t}"{" selected" if t == tipo_sel else ""}>{escape(t)}</option>'
+        for t in TIPOS_ACTOR
+    )
+
+    temas_actor = set(actor.get("temas", []))
+    checkboxes = "".join(
+        f'<label style="display:inline-flex;align-items:center;gap:5px;'
+        f'margin:3px 8px 3px 0;font-size:12px;cursor:pointer">'
+        f'<input type="checkbox" name="temas" value="{t}"'
+        f'{"  checked" if t in temas_actor else ""}> '
+        f'{escape(t.replace("_"," ").title())}</label>'
+        for t in temas_disponibles
+    )
+
+    sliders = (
+        _slider_criterio("crit_decision",    "Decisión / Veto",      actor.get("crit_decision",    3), True) +
+        _slider_criterio("crit_recursos",    "Control de recursos",  actor.get("crit_recursos",    3), True) +
+        _slider_criterio("crit_articulacion","Articulación",         actor.get("crit_articulacion",3), True) +
+        _slider_criterio("crit_legitimidad", "Legitimidad",          actor.get("crit_legitimidad", 3), False) +
+        _slider_criterio("crit_resiliencia", "Resiliencia",          actor.get("crit_resiliencia", 3), False) +
+        _slider_criterio("crit_proyeccion",  "Proyección externa",   actor.get("crit_proyeccion",  3), False)
+    )
+
+    nb_val = actor.get("nivel_base", niveles_base.get(nivel_sel, 60))
+    peso_actual = actor.get("peso_calculado", 0)
+
+    return f"""
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+
+  <!-- Columna izquierda: identidad -->
+  <div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted)">Nombre del actor</label>
+      <input type="text" name="nombre" value="{escape(actor.get('nombre',''))}" required
+             style="width:100%;box-sizing:border-box;margin-top:3px;
+                    background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:6px 10px;font-size:13px">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted)">Tipo</label>
+      <select name="tipo"
+              style="width:100%;margin-top:3px;background:var(--bg-3);color:var(--text);
+                     border:1px solid #334155;border-radius:4px;padding:6px 8px;font-size:13px">
+        {opts_tipo}
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted)">Nivel estratégico (Capa 1)</label>
+      <select name="nivel" id="select-nivel"
+              style="width:100%;margin-top:3px;background:var(--bg-3);color:var(--text);
+                     border:1px solid #334155;border-radius:4px;padding:6px 8px;font-size:13px">
+        {opts_nivel}
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
+        <input type="checkbox" name="nivel_base_manual"
+               {"checked" if nb_manual else ""}
+               style="accent-color:var(--accent)">
+        Ajuste manual del valor base (excluye de propagación automática)
+      </label>
+      <input type="number" name="nivel_base" value="{nb_val:g}" min="1" max="100" step="1"
+             style="width:90px;margin-top:5px;background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:5px 8px;font-size:13px"
+             {"" if nb_manual else "disabled"}>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted)">Territorio</label>
+      <input type="text" name="territorio" value="{escape(actor.get('territorio','nacional'))}"
+             style="width:100%;box-sizing:border-box;margin-top:3px;
+                    background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:6px 10px;font-size:13px">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted)">Temas donde influye</label>
+      <div style="margin-top:5px;padding:8px;background:var(--bg-3);border-radius:4px;
+                  border:1px solid #334155">
+        {checkboxes or '<span style="color:var(--muted);font-size:12px">Sin temas configurados</span>'}
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted)">Notas del analista</label>
+      <textarea name="notas_analista" rows="3"
+                style="width:100%;box-sizing:border-box;margin-top:3px;
+                       background:var(--bg-3);color:var(--text);resize:vertical;
+                       border:1px solid #334155;border-radius:4px;padding:6px 10px;font-size:12px"
+      >{escape(actor.get('notas_analista') or '')}</textarea>
+    </div>
+  </div>
+
+  <!-- Columna derecha: criterios Capa 2 + peso en vivo -->
+  <div>
+    <div style="margin-bottom:14px;padding:12px;background:var(--bg-3);border-radius:8px;
+                border:1px solid #334155">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">
+        CAPA 2 — CAPACIDAD EFECTIVA
+        <span style="font-weight:400"> · cap = [(D+R+A)×2 + (L+Rs+P)] / 45</span>
+      </div>
+      {sliders}
+    </div>
+
+    <!-- Peso en vivo -->
+    <div style="padding:14px;background:var(--bg-1);border-radius:8px;
+                border:2px solid #334155;text-align:center">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">
+        PESO DEL ACTOR (en vivo)
+      </div>
+      <div style="font-size:42px;font-weight:800;line-height:1" id="live-peso">
+        {peso_actual:.1f}
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">
+        Capacidad efectiva: <b id="live-cap">{actor.get('capacidad_efectiva', 0):.3f}</b>
+      </div>
+      <div style="background:#1e293b;border-radius:4px;height:6px;margin-top:8px;overflow:hidden">
+        <div id="live-bar"
+             style="height:6px;border-radius:4px;width:{min(100, peso_actual):.0f}%;
+                    background:#22c55e;transition:width .2s,background .2s">
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:6px">
+        nivel_base × (0.5 + 0.5 × capacidad)
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// Habilitar/deshabilitar campo nivel_base manual
+(function() {{
+  var cb = document.querySelector('[name=nivel_base_manual]');
+  var inp = document.querySelector('[name=nivel_base]');
+  if (cb && inp) {{
+    cb.addEventListener('change', function() {{
+      inp.disabled = !cb.checked;
+      if (!cb.checked) {{
+        var sel = document.querySelector('[name=nivel]');
+        if (sel) {{
+          var nivs = {{I:95,II:85,III:72,IV:60,V:48,VI:36,VII:24,VIII:12}};
+          inp.value = nivs[sel.value] || 60;
+        }}
+      }}
+    }});
+  }}
+}})();
+</script>"""
+
+
+@router.get("/actores", response_class=HTMLResponse)
+async def admin_actores(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import listar_actores, NIVELES_ACTOR
+    db = _get_db_path()
+    actores = listar_actores(db, "PE")
+    msg = request.query_params.get("msg", "")
+    err_msg = request.query_params.get("err", "")
+
+    filas = ""
+    for a in actores:
+        nivel_nombre = NIVELES_ACTOR.get(a["nivel"], ("—", 0))[0]
+        temas_str = ", ".join(t.replace("_", " ").title() for t in a["temas"]) or "—"
+        estado_cls = "badge-ok" if a["activo"] else "badge-off"
+        peso = a["peso_calculado"]
+        if peso >= 72:
+            peso_color = "#ef4444"
+        elif peso >= 55:
+            peso_color = "#f97316"
+        elif peso >= 36:
+            peso_color = "#f59e0b"
+        else:
+            peso_color = "#22c55e"
+        filas += f"""<tr>
+  <td><a href="/admin/actores/{a['id']}" style="color:var(--accent);font-weight:600">
+      {escape(a['nombre'])}</a></td>
+  <td><span class="badge badge-off">{escape(a['tipo'])}</span></td>
+  <td style="white-space:nowrap">
+    <b>Nivel {escape(a['nivel'])}</b>
+    <span style="color:var(--muted);font-size:11px"> {escape(nivel_nombre)}</span>
+  </td>
+  <td style="font-size:11px;color:var(--muted)">{escape(a.get('territorio',''))}</td>
+  <td style="text-align:center">
+    <b style="font-size:16px;color:{peso_color}">{peso:.1f}</b>
+  </td>
+  <td style="font-size:11px;color:var(--muted)">{escape(temas_str)}</td>
+  <td><span class="badge {estado_cls}">{"activo" if a['activo'] else "inactivo"}</span></td>
+  <td>
+    <a href="/admin/actores/{a['id']}" style="color:var(--accent);font-size:12px">editar</a>
+  </td>
+</tr>\n"""
+
+    if not filas:
+        filas = '<tr><td colspan="8" style="color:var(--muted);padding:20px;text-align:center">Sin actores registrados. <a href="/admin/actores/nuevo" style="color:var(--accent)">Crear el primero →</a></td></tr>'
+
+    msg_html = (f'<div class="alert-box alert-info" style="margin-bottom:12px">'
+                f'✓ {escape(msg)}</div>') if msg else ""
+    err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">'
+                f'⚠ {escape(err_msg)}</div>') if err_msg else ""
+
+    contenido = f"""
+{msg_html}{err_html}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+  <div style="font-size:13px;color:var(--muted)">
+    {len(actores)} actor{'es' if len(actores)!=1 else ''} registrado{'s' if len(actores)!=1 else ''} · ordenados por peso
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="/admin/actores/log"
+       style="background:var(--bg-3);color:var(--muted);border:1px solid #334155;
+              border-radius:6px;padding:6px 14px;font-size:12px">
+      Historial →
+    </a>
+    <a href="/admin/actores/nuevo"
+       style="background:var(--accent);color:#000;border-radius:6px;
+              padding:7px 18px;font-size:13px;font-weight:600">
+      + Nuevo actor
+    </a>
+  </div>
+</div>
+<div class="card">
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Nombre</th><th>Tipo</th><th>Nivel</th><th>Territorio</th>
+        <th style="text-align:center">Peso</th><th>Temas</th><th>Estado</th><th></th>
+      </tr></thead>
+      <tbody>{filas}</tbody>
+    </table>
+  </div>
+</div>"""
+
+    return HTMLResponse(_page("Actores", contenido, "actores", sesion["username"]))
+
+
+@router.get("/actores/nuevo", response_class=HTMLResponse)
+async def admin_actores_nuevo(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import cargar_niveles_base, NIVELES_ACTOR
+    db = _get_db_path()
+    niveles_base = cargar_niveles_base(db)
+    temas = list(_IMPACTO_TEMA.keys())
+    err_msg = request.query_params.get("err", "")
+    err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">'
+                f'⚠ {escape(err_msg)}</div>') if err_msg else ""
+
+    form_html = _actor_form_html(None, niveles_base, temas)
+    contenido = f"""
+{_ACTOR_CALC_JS}
+{err_html}
+<div class="card">
+  <div class="card-title">Nuevo actor</div>
+  <form id="actor-form" method="post" action="/admin/actores/crear">
+    {form_html}
+    <div style="margin-top:16px;display:flex;gap:10px">
+      <button type="submit"
+              style="background:var(--accent);color:#000;border:none;border-radius:6px;
+                     padding:9px 24px;font-size:14px;font-weight:700;cursor:pointer">
+        Guardar actor
+      </button>
+      <a href="/admin/actores"
+         style="color:var(--muted);padding:9px 16px;font-size:13px">Cancelar</a>
+    </div>
+  </form>
+</div>"""
+
+    return HTMLResponse(_page("Nuevo actor", contenido, "actores", sesion["username"]))
+
+
+@router.post("/actores/crear")
+async def admin_actores_crear(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import crear_actor, LockTimeoutError
+    form = await request.form()
+    try:
+        nombre = form.get("nombre", "").strip()
+        if not nombre:
+            return RedirectResponse("/admin/actores/nuevo?err=El+nombre+es+obligatorio",
+                                    status_code=303)
+        temas = form.getlist("temas")
+        nb_manual = bool(form.get("nivel_base_manual"))
+        nivel = form.get("nivel", "IV")
+        datos = {
+            "nombre": nombre,
+            "tipo": form.get("tipo", "formal"),
+            "nivel": nivel,
+            "nivel_base": float(form.get("nivel_base") or 60),
+            "nivel_base_manual": nb_manual,
+            "crit_decision":    int(form.get("crit_decision", 3)),
+            "crit_recursos":    int(form.get("crit_recursos", 3)),
+            "crit_articulacion":int(form.get("crit_articulacion", 3)),
+            "crit_legitimidad": int(form.get("crit_legitimidad", 3)),
+            "crit_resiliencia": int(form.get("crit_resiliencia", 3)),
+            "crit_proyeccion":  int(form.get("crit_proyeccion", 3)),
+            "territorio": form.get("territorio", "nacional"),
+            "notas_analista": form.get("notas_analista", ""),
+            "temas": temas,
+            "pais": "PE",
+        }
+        r = crear_actor(_get_db_path(), datos, usuario=sesion["username"])
+        return RedirectResponse(
+            f"/admin/actores/{r['id']}?msg=Actor+creado+correctamente", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            "/admin/actores/nuevo?err=BD+ocupada.+El+actor+NO+se+guardó.+Reintenta.",
+            status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/actores/nuevo?err={escape(str(e))}", status_code=303)
+
+
+@router.get("/actores/{actor_id}", response_class=HTMLResponse)
+async def admin_actores_detalle(request: Request, actor_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import (
+        obtener_actor, cargar_niveles_base, listar_log_actores, NIVELES_ACTOR,
+    )
+    db = _get_db_path()
+    actor = obtener_actor(db, actor_id)
+    if not actor:
+        return RedirectResponse("/admin/actores?err=Actor+no+encontrado", status_code=303)
+
+    niveles_base = cargar_niveles_base(db)
+    temas = list(_IMPACTO_TEMA.keys())
+    logs = listar_log_actores(db, actor_id, limite=30)
+
+    msg = request.query_params.get("msg", "")
+    err_msg = request.query_params.get("err", "")
+    msg_html = (f'<div class="alert-box alert-info" style="margin-bottom:12px">'
+                f'✓ {escape(msg)}</div>') if msg else ""
+    err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">'
+                f'⚠ {escape(err_msg)}</div>') if err_msg else ""
+
+    form_html = _actor_form_html(actor, niveles_base, temas)
+
+    filas_log = ""
+    for l in logs:
+        ts = (l.get("cambiado_en") or "")[:19].replace("T", " ")
+        campo = l.get("campo") or "—"
+        va = str(l.get("valor_anterior") or "—")
+        vn = str(l.get("valor_nuevo") or "—")
+        filas_log += f"""<tr>
+  <td style="color:var(--muted);font-size:11px;white-space:nowrap">{ts}</td>
+  <td><span class="badge badge-off">{escape(campo)}</span></td>
+  <td style="color:var(--muted);font-size:12px">
+    {escape(va)} → <b style="color:var(--text)">{escape(vn)}</b>
+  </td>
+  <td style="color:var(--accent);font-size:11px">{escape(l.get('usuario') or '—')}</td>
+  <td style="color:var(--muted);font-size:11px">{escape(l.get('motivo') or '—')}</td>
+</tr>\n"""
+
+    if not filas_log:
+        filas_log = '<tr><td colspan="5" style="color:var(--muted);padding:12px">Sin cambios registrados.</td></tr>'
+
+    nivel_nombre = NIVELES_ACTOR.get(actor["nivel"], ("—",))[0]
+    estado_badge = ('<span class="badge badge-ok">activo</span>'
+                    if actor["activo"] else '<span class="badge badge-off">inactivo</span>')
+
+    contenido = f"""
+{_ACTOR_CALC_JS}
+{msg_html}{err_html}
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+  <div>
+    <h2 style="margin:0;font-size:20px">{escape(actor['nombre'])}</h2>
+    <div style="color:var(--muted);font-size:12px;margin-top:2px">
+      Nivel {escape(actor['nivel'])} — {escape(nivel_nombre)} ·
+      {escape(actor['tipo'])} · {escape(actor.get('territorio',''))}
+      · {estado_badge}
+    </div>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:8px">
+    <form method="post" action="/admin/actores/{actor_id}/toggle" style="display:inline">
+      <button type="submit"
+              style="background:var(--bg-3);color:var(--muted);border:1px solid #334155;
+                     border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">
+        {'Desactivar' if actor['activo'] else 'Activar'}
+      </button>
+    </form>
+    <a href="/admin/actores" style="color:var(--muted);font-size:12px;padding:6px 14px">
+      ← Lista
+    </a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Editar actor</div>
+  <form id="actor-form" method="post" action="/admin/actores/{actor_id}/editar">
+    <input type="hidden" name="actor_id" value="{actor_id}">
+    {form_html}
+    <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
+      <button type="submit"
+              style="background:var(--accent);color:#000;border:none;border-radius:6px;
+                     padding:9px 24px;font-size:14px;font-weight:700;cursor:pointer">
+        Guardar cambios
+      </button>
+      <input type="text" name="motivo" placeholder="motivo del cambio (opcional)"
+             style="width:220px;background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:6px 10px;font-size:12px">
+      <a href="/admin/actores" style="color:var(--muted);font-size:13px">Cancelar</a>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="margin-top:0">
+  <div class="card-title">Historial de cambios (últimos 30)</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Fecha</th><th>Campo</th><th>Cambio</th><th>Usuario</th><th>Motivo</th>
+      </tr></thead>
+      <tbody>{filas_log}</tbody>
+    </table>
+  </div>
+</div>"""
+
+    return HTMLResponse(_page(f"Actor · {actor['nombre']}", contenido, "actores",
+                              sesion["username"]))
+
+
+@router.post("/actores/{actor_id}/editar")
+async def admin_actores_editar(request: Request, actor_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import actualizar_actor, LockTimeoutError
+    form = await request.form()
+    try:
+        temas = form.getlist("temas")
+        nb_manual = bool(form.get("nivel_base_manual"))
+        datos = {
+            "nombre":          form.get("nombre", "").strip(),
+            "tipo":            form.get("tipo", "formal"),
+            "nivel":           form.get("nivel", "IV"),
+            "nivel_base":      float(form.get("nivel_base") or 60),
+            "nivel_base_manual": nb_manual,
+            "crit_decision":    int(form.get("crit_decision", 3)),
+            "crit_recursos":    int(form.get("crit_recursos", 3)),
+            "crit_articulacion":int(form.get("crit_articulacion", 3)),
+            "crit_legitimidad": int(form.get("crit_legitimidad", 3)),
+            "crit_resiliencia": int(form.get("crit_resiliencia", 3)),
+            "crit_proyeccion":  int(form.get("crit_proyeccion", 3)),
+            "territorio":  form.get("territorio", "nacional"),
+            "notas_analista": form.get("notas_analista", ""),
+            "temas": temas,
+        }
+        motivo = form.get("motivo", "").strip() or None
+        r = actualizar_actor(_get_db_path(), actor_id, datos,
+                             usuario=sesion["username"], motivo=motivo)
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?msg=Guardado+·+peso={r['peso_nuevo']}",
+            status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?err=BD+ocupada.+El+cambio+NO+se+guardó.+Reintenta.",
+            status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/actores/{actor_id}?err={escape(str(e))}",
+                                status_code=303)
+
+
+@router.post("/actores/{actor_id}/toggle")
+async def admin_actores_toggle(request: Request, actor_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import toggle_actor, LockTimeoutError
+    try:
+        r = toggle_actor(_get_db_path(), actor_id, usuario=sesion["username"])
+        estado = "activado" if r["activo_nuevo"] else "desactivado"
+        return RedirectResponse(f"/admin/actores/{actor_id}?msg=Actor+{estado}",
+                                status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/actores/{actor_id}?err={escape(str(e))}",
+                                status_code=303)
+
+
+@router.get("/actores/log", response_class=HTMLResponse)
+async def admin_actores_log(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import listar_log_actores
+    logs = listar_log_actores(_get_db_path(), limite=200)
+
+    filas = ""
+    for l in logs:
+        ts = (l.get("cambiado_en") or "")[:19].replace("T", " ")
+        campo = l.get("campo") or "—"
+        va = str(l.get("valor_anterior") or "—")
+        vn = str(l.get("valor_nuevo") or "—")
+        nombre = l.get("actor_nombre") or f"#{l.get('actor_id','?')}"
+        filas += f"""<tr>
+  <td style="color:var(--muted);font-size:11px;white-space:nowrap">{ts}</td>
+  <td style="color:var(--accent);font-size:12px">{escape(nombre)}</td>
+  <td><span class="badge badge-off">{escape(campo)}</span></td>
+  <td style="color:var(--muted);font-size:12px">
+    {escape(va)} → <b style="color:var(--text)">{escape(vn)}</b>
+  </td>
+  <td style="color:var(--accent);font-size:11px">{escape(l.get('usuario') or '—')}</td>
+  <td style="color:var(--muted);font-size:11px">{escape(l.get('motivo') or '—')}</td>
+</tr>\n"""
+
+    cuerpo = (filas if logs else
+              '<tr><td colspan="6" style="color:var(--muted);padding:16px">'
+              'Sin cambios registrados todavía.</td></tr>')
+
+    contenido = f"""
+<div class="alert-box alert-info">
+  Registro completo de cambios en actores (creación, edición, propagación de nivel).
+  <a href="/admin/actores" style="color:var(--accent)">← Volver a actores</a>
+</div>
+<div class="card">
+  <div class="card-title">Historial de actores — config_actores_log ({len(logs)})</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Fecha</th><th>Actor</th><th>Campo</th><th>Cambio</th>
+        <th>Usuario</th><th>Motivo</th>
+      </tr></thead>
+      <tbody>{cuerpo}</tbody>
+    </table>
+  </div>
+</div>"""
+
+    return HTMLResponse(_page("Log actores", contenido, "actores", sesion["username"]))

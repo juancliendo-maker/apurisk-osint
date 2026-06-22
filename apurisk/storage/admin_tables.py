@@ -236,6 +236,74 @@ CREATE TABLE IF NOT EXISTS resultados_analisis (
 CREATE INDEX IF NOT EXISTS idx_resultados_articulo ON resultados_analisis(articulo_id);
 CREATE INDEX IF NOT EXISTS idx_resultados_motor ON resultados_analisis(motor, pais);
 CREATE INDEX IF NOT EXISTS idx_resultados_nivel ON resultados_analisis(nivel_semaforo);
+
+-- ============================================================
+-- REGISTRO DE ACTORES (Fase C — base de poder instalada)
+-- ============================================================
+-- Capas 1 (nivel estratégico) y 2 (capacidad efectiva).
+-- Capas 3 (CVO) y 4 (Dinámica) se añaden en tareas posteriores.
+
+-- Actores relevantes para el análisis de riesgo político
+CREATE TABLE IF NOT EXISTS config_actores (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    pais                TEXT NOT NULL DEFAULT 'PE',
+    nombre              TEXT NOT NULL,
+    tipo                TEXT NOT NULL DEFAULT 'formal',
+                        -- 'formal' | 'fáctico' | 'territorial' | 'informal'
+    nivel               TEXT NOT NULL DEFAULT 'IV',   -- I-VIII
+    nivel_base          REAL NOT NULL DEFAULT 60,
+    nivel_base_manual   INTEGER NOT NULL DEFAULT 0,   -- 1 = ajuste manual, no pisa propagación
+    -- Capa 2: 6 criterios 1-5. Decisión/recursos/articulación pesan doble.
+    crit_decision       INTEGER NOT NULL DEFAULT 3,
+    crit_recursos       INTEGER NOT NULL DEFAULT 3,
+    crit_articulacion   INTEGER NOT NULL DEFAULT 3,
+    crit_legitimidad    INTEGER NOT NULL DEFAULT 3,
+    crit_resiliencia    INTEGER NOT NULL DEFAULT 3,
+    crit_proyeccion     INTEGER NOT NULL DEFAULT 3,
+    -- Calculados y guardados; se recalculan en cada edición
+    capacidad_efectiva  REAL NOT NULL DEFAULT 0.5,
+    peso_calculado      REAL NOT NULL DEFAULT 0,
+    territorio          TEXT NOT NULL DEFAULT 'nacional',
+    activo              INTEGER NOT NULL DEFAULT 1,
+    notas_analista      TEXT,
+    creado_en           TEXT NOT NULL DEFAULT (datetime('now')),
+    actualizado_en      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_actores_pais ON config_actores(pais, activo);
+CREATE INDEX IF NOT EXISTS idx_actores_nivel ON config_actores(nivel);
+CREATE INDEX IF NOT EXISTS idx_actores_peso ON config_actores(peso_calculado DESC);
+
+-- Relación actor ↔ tema de riesgo (muchos-a-muchos)
+-- Un actor puede influir en varios temas; un tema puede tener varios actores.
+-- La agregación de pesos por tema se define en la siguiente tarea.
+CREATE TABLE IF NOT EXISTS config_actor_temas (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id    INTEGER NOT NULL,
+    tema        TEXT NOT NULL,
+    pais        TEXT NOT NULL DEFAULT 'PE',
+    UNIQUE(actor_id, tema),
+    FOREIGN KEY(actor_id) REFERENCES config_actores(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_actor_temas_actor ON config_actor_temas(actor_id);
+CREATE INDEX IF NOT EXISTS idx_actor_temas_tema ON config_actor_temas(tema);
+
+-- Auditoría de cambios en actores
+CREATE TABLE IF NOT EXISTS config_actores_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id        INTEGER,
+    actor_nombre    TEXT,
+    campo           TEXT NOT NULL,
+    valor_anterior  TEXT,
+    valor_nuevo     TEXT,
+    usuario         TEXT NOT NULL,
+    motivo          TEXT,
+    cambiado_en     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_actores_log_actor ON config_actores_log(actor_id);
+CREATE INDEX IF NOT EXISTS idx_actores_log_usuario ON config_actores_log(usuario);
 """
 
 _DATOS_INICIALES = [
@@ -396,6 +464,23 @@ _DATOS_INICIALES = [
         "'Matriz B: tope visible del eje X. 0 = dinámico (máximo real + margen). "
         ">0 fija la escala para comparar semanas. No altera los datos.', 'GLOBAL')", []
     ),
+
+    # ── Valores base por nivel estratégico (I-VIII) — editables desde panel ──
+    # Propagación automática: cambiar un valor aquí actualiza todos los actores
+    # de ese nivel que NO tengan nivel_base_manual=1.
+    *[("INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+       f"VALUES ('ACTOR_NIVEL_{codigo}_BASE', '{valor}', 'float', "
+       f"'Valor base del Nivel {codigo} ({nombre}) para el peso del actor', 'GLOBAL')", [])
+      for codigo, valor, nombre in [
+          ("I",    "95", "Estructural"),
+          ("II",   "85", "Sistémico"),
+          ("III",  "72", "Determinante"),
+          ("IV",   "60", "Relevante"),
+          ("V",    "48", "Incidente"),
+          ("VI",   "36", "Emergente"),
+          ("VII",  "24", "Latente"),
+          ("VIII", "12", "Periférico"),
+      ]],
 ]
 
 
