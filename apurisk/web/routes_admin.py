@@ -317,6 +317,7 @@ def _nav_html(activo: str, username: str) -> str:
         ("factores",  "⚖️",  "Factores",       "/admin/factores"),
         ("ingestas",  "📥", "Ingesta manual", "/admin/ingestas"),
         ("semaforo",  "🚦", "Semáforo OSINT", "/admin/semaforo"),
+        ("calibrar",  "🎛️",  "Calibración",    "/admin/semaforo/calibrar"),
         ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
         ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
@@ -2326,7 +2327,348 @@ async def admin_semaforo(request: Request):
     Requieren validación del analista antes de actuar.
   </div>
   {''.join(puntos_interp)}
+</div>
+
+<div class="card" style="border-left:4px solid var(--accent)">
+  <div class="card-title">🎛️ Calibración de la Matriz B</div>
+  <p style="color:var(--muted);font-size:13px;margin:0 0 10px 0">
+    Edita los pisos estructurales por tema y los parámetros del Score Global B
+    (umbrales, coeficientes, escala visual del eje X) sin necesidad de redeploy.
+    Los cambios se reflejan en la próxima carga de esta página.
+  </p>
+  <a href="/admin/semaforo/calibrar"
+     style="display:inline-block;background:var(--accent);color:#000;
+            border-radius:6px;padding:8px 20px;font-weight:600;font-size:13px">
+    Ir a Calibración →
+  </a>
 </div>"""
 
     return HTMLResponse(_page("Semáforo OSINT", contenido, "semaforo",
+                              sesion["username"]))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Calibración del semáforo — pisos estructurales + parámetros Score_B
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _fila_piso(tema: str, impacto_base: int, piso_actual: float,
+               actualizado_en: str, msg_tema: str = "") -> str:
+    """Fila editable de un tema en la tabla de pisos estructurales."""
+    y_efectivo = max(piso_actual, float(impacto_base))
+    nombre = tema.replace("_", " ").title()
+    flag_piso = (f'<span class="badge badge-warn" title="Piso activo: {piso_actual}">'
+                 f'▲ piso {piso_actual:g}</span>'
+                 if piso_actual > impacto_base else
+                 '<span class="badge badge-off">base</span>')
+    ts = actualizado_en[:16].replace("T", " ") if actualizado_en else "—"
+    ok_html = (f'<span class="badge badge-ok">✓ {escape(msg_tema)}</span>'
+               if msg_tema else "")
+    return f"""<tr>
+  <td><b>{escape(nombre)}</b></td>
+  <td style="text-align:center">{impacto_base}</td>
+  <td style="text-align:center">
+    <form method="post" action="/admin/semaforo/pisos" style="display:inline-flex;gap:6px;align-items:center">
+      <input type="hidden" name="tema" value="{escape(tema)}">
+      <input type="number" name="piso" value="{piso_actual:g}" min="0" max="100" step="1"
+             style="width:70px;background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:4px 8px;font-size:13px">
+      <input type="text" name="notas" placeholder="motivo (opcional)"
+             style="width:160px;background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:4px 8px;font-size:12px">
+      <button type="submit"
+              style="background:var(--accent);color:#000;border:none;border-radius:4px;
+                     padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">
+        Guardar
+      </button>
+    </form>
+    {ok_html}
+  </td>
+  <td style="text-align:center">{flag_piso}</td>
+  <td style="text-align:center;font-weight:700;color:var(--accent)">{y_efectivo:g}</td>
+  <td style="color:var(--muted);font-size:11px">{ts}</td>
+</tr>"""
+
+
+def _campo_param(clave: str, valor: float, descripcion: str,
+                 msg_clave: str = "") -> str:
+    """Campo editable inline para un parámetro numérico del semáforo."""
+    ok_html = (f'<span class="badge badge-ok" style="margin-left:6px">✓ {escape(msg_clave)}</span>'
+               if msg_clave else "")
+    return f"""<tr>
+  <td style="font-family:monospace;color:var(--accent);white-space:nowrap">{escape(clave)}</td>
+  <td style="color:var(--muted);font-size:12px">{escape(descripcion)}</td>
+  <td>
+    <form method="post" action="/admin/semaforo/params"
+          style="display:inline-flex;gap:6px;align-items:center">
+      <input type="hidden" name="clave" value="{escape(clave)}">
+      <input type="number" name="valor" value="{valor:g}" step="0.5"
+             style="width:80px;background:var(--bg-3);color:var(--text);
+                    border:1px solid #334155;border-radius:4px;padding:4px 8px;font-size:13px">
+      <button type="submit"
+              style="background:var(--bg-3);color:var(--accent);border:1px solid var(--accent);
+                     border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer">
+        Guardar
+      </button>
+    </form>
+    {ok_html}
+  </td>
+  <td style="font-weight:700;color:var(--text);text-align:right">{valor:g}</td>
+</tr>"""
+
+
+@router.get("/semaforo/calibrar", response_class=HTMLResponse)
+async def admin_calibrar(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    from ..storage.config_loader import (
+        cargar_pisos_estructurales, cargar_parametros_semaforo,
+    )
+    db = _get_db_path()
+    pisos = cargar_pisos_estructurales(db, "PE")
+    params = cargar_parametros_semaforo(db)
+
+    # Cargar fecha de última actualización por tema
+    fechas: dict[str, str] = {}
+    try:
+        with _db_conn() as c:
+            rows = c.execute(
+                "SELECT tema, actualizado_en FROM config_piso_estructural WHERE pais='PE'"
+            ).fetchall()
+            fechas = {r["tema"]: r["actualizado_en"] for r in rows}
+    except Exception:
+        pass
+
+    # Mensajes de confirmación por campo (query params)
+    msg_piso = request.query_params.get("piso_ok", "")   # "electoral"
+    msg_param = request.query_params.get("param_ok", "")  # "SEMAFORO_UMBRAL_ACTIVIDAD_X"
+    err_msg = request.query_params.get("err", "")
+
+    # ── Tabla de pisos ──────────────────────────────────────────────────────
+    filas_pisos = ""
+    for tema, impacto_base in _IMPACTO_TEMA.items():
+        piso_actual = pisos.get(tema, 0.0)
+        msg_t = tema if msg_piso == tema else ""
+        filas_pisos += _fila_piso(tema, impacto_base, piso_actual,
+                                   fechas.get(tema, ""), msg_t)
+
+    # ── Tabla de parámetros ─────────────────────────────────────────────────
+    PARAMS_META = [
+        ("SEMAFORO_UMBRAL_ACTIVIDAD_X", params["umbral_x"],
+         "Umbral eje X (% vol.) que separa silencioso/activo en cuadrantes"),
+        ("SEMAFORO_UMBRAL_GRAVEDAD_Y",  params["umbral_y"],
+         "Umbral eje Y que separa menor/grave en cuadrantes"),
+        ("SCORE_B_COEF_ACTIVIDAD",      params["coef_actividad"],
+         "Score B: agravante máximo por actividad del tema más grave (puntos sobre Y_max)"),
+        ("SCORE_B_COEF_SIMULTANEIDAD",  params["coef_simultaneidad"],
+         "Score B: agravante por cada tema grave-y-activo adicional (puntos)"),
+        ("SCORE_B_BONUS_MAX",           params["bonus_max"],
+         "Score B: tope total del agravante sobre Y_max (puntos)"),
+        ("SEMAFORO_X_MAX_VIZ",          params["x_max_viz"],
+         "Escala visual eje X. 0 = dinámica (máximo real + margen). >0 = escala fija"),
+    ]
+    filas_params = ""
+    for clave, valor, desc in PARAMS_META:
+        msg_p = clave if msg_param == clave else ""
+        filas_params += _campo_param(clave, valor, desc, msg_p)
+
+    err_html = (
+        f'<div class="alert-box alert-alto" style="margin-bottom:14px">'
+        f'⚠ {escape(err_msg)}</div>'
+    ) if err_msg else ""
+
+    contenido = f"""
+{err_html}
+
+<div class="card">
+  <div class="card-title">Pisos estructurales por tema
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      Y efectivo = max(piso, impacto base). Con piso=0, Y = impacto base.
+    </span>
+  </div>
+  <p style="color:var(--muted);font-size:12px;margin:0 0 12px 0">
+    El piso fija un mínimo de gravedad estructural independientemente de la
+    actividad semanal. Úsalo cuando un tema adquiere peso estructural mayor
+    que su impacto base histórico (ej. electoral en año de elecciones).
+  </p>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Tema</th>
+        <th style="text-align:center">Impacto base</th>
+        <th>Nuevo piso + motivo</th>
+        <th style="text-align:center">Estado</th>
+        <th style="text-align:center">Y efectivo</th>
+        <th>Última edición</th>
+      </tr></thead>
+      <tbody>{filas_pisos}</tbody>
+    </table>
+  </div>
+  <p style="color:var(--muted);font-size:11px;margin-top:10px">
+    Rango válido: 0–100. Piso = 0 significa sin piso definido; Y = impacto base.
+    Los cambios se reflejan en la siguiente carga de la página del semáforo.
+    <a href="/admin/semaforo/calibrar/log" style="color:var(--accent)">
+      Ver historial de cambios →
+    </a>
+  </p>
+</div>
+
+<div class="card" style="margin-top:0">
+  <div class="card-title">Parámetros del Score Global B y escala visual</div>
+  <p style="color:var(--muted);font-size:12px;margin:0 0 12px 0">
+    Score_B = min(100, Y_max + min(bonus_max,
+    coef_actividad·(X_Ymax/100) + coef_simultaneidad·max(0, n_graves_activos−1))).
+    El silencio nunca resta; Y_max fija el piso del score aunque el peor tema esté callado.
+  </p>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Parámetro</th><th>Descripción</th><th>Editar</th>
+        <th style="text-align:right">Valor actual</th>
+      </tr></thead>
+      <tbody>{filas_params}</tbody>
+    </table>
+  </div>
+  <p style="color:var(--muted);font-size:11px;margin-top:10px">
+    Los valores son provisionales — calibrar con criterio analítico tras
+    observar la matriz con datos reales y pisos definidos.
+    <a href="/admin/semaforo/calibrar/log" style="color:var(--accent)">
+      Ver historial de cambios →
+    </a>
+  </p>
+</div>
+
+<div style="margin-top:10px">
+  <a href="/admin/semaforo" style="color:var(--accent);font-size:13px">
+    ← Volver al Semáforo OSINT
+  </a>
+</div>"""
+
+    return HTMLResponse(_page("Calibración · Semáforo", contenido, "calibrar",
+                              sesion["username"]))
+
+
+@router.post("/semaforo/pisos")
+async def admin_calibrar_piso(request: Request):
+    """Guarda el piso estructural de un tema y redirige con confirmación."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import actualizar_piso_estructural, LockTimeoutError
+    form = await request.form()
+    try:
+        tema = form.get("tema", "").strip()
+        piso_raw = form.get("piso", "0").strip()
+        notas = form.get("notas", "").strip() or None
+        if tema not in _IMPACTO_TEMA:
+            return RedirectResponse(
+                f"/admin/semaforo/calibrar?err=Tema+inválido:+{escape(tema)}", status_code=303)
+        piso = float(piso_raw)
+        actualizar_piso_estructural(_get_db_path(), tema, piso,
+                                    usuario=sesion["username"], notas=notas)
+        return RedirectResponse(
+            f"/admin/semaforo/calibrar?piso_ok={tema}", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            "/admin/semaforo/calibrar?err=BD+ocupada+(ciclo+automático).+"
+            "El+cambio+NO+se+guardó.+Reintenta+en+unos+segundos.", status_code=303)
+    except ValueError:
+        return RedirectResponse(
+            "/admin/semaforo/calibrar?err=Valor+de+piso+inválido+(debe+ser+número+0-100).",
+            status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/semaforo/calibrar?err={escape(str(e))}", status_code=303)
+
+
+@router.post("/semaforo/params")
+async def admin_calibrar_param(request: Request):
+    """Guarda un parámetro numérico del semáforo y redirige con confirmación."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import actualizar_parametro_semaforo, LockTimeoutError
+
+    # Claves permitidas (whitelist explícita — nunca escritura arbitraria a config_parametros)
+    _CLAVES_PERMITIDAS = {
+        "SEMAFORO_UMBRAL_ACTIVIDAD_X", "SEMAFORO_UMBRAL_GRAVEDAD_Y",
+        "SCORE_B_COEF_ACTIVIDAD", "SCORE_B_COEF_SIMULTANEIDAD",
+        "SCORE_B_BONUS_MAX", "SEMAFORO_X_MAX_VIZ",
+    }
+    form = await request.form()
+    try:
+        clave = form.get("clave", "").strip()
+        valor_raw = form.get("valor", "").strip()
+        if clave not in _CLAVES_PERMITIDAS:
+            return RedirectResponse(
+                f"/admin/semaforo/calibrar?err=Parámetro+no+editable:+{escape(clave)}",
+                status_code=303)
+        valor = float(valor_raw)
+        actualizar_parametro_semaforo(_get_db_path(), clave, valor,
+                                      usuario=sesion["username"])
+        return RedirectResponse(
+            f"/admin/semaforo/calibrar?param_ok={clave}", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            "/admin/semaforo/calibrar?err=BD+ocupada+(ciclo+automático).+"
+            "El+cambio+NO+se+guardó.+Reintenta+en+unos+segundos.", status_code=303)
+    except ValueError:
+        return RedirectResponse(
+            "/admin/semaforo/calibrar?err=Valor+inválido+(debe+ser+número).",
+            status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/semaforo/calibrar?err={escape(str(e))}", status_code=303)
+
+
+@router.get("/semaforo/calibrar/log", response_class=HTMLResponse)
+async def admin_calibrar_log(request: Request):
+    """Historial de cambios de calibración (pisos, umbrales, coeficientes)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import listar_log_semaforo
+    logs = listar_log_semaforo(_get_db_path(), limite=200)
+
+    filas = ""
+    for l in logs:
+        ts = (l.get("cambiado_en") or "")[:19].replace("T", " ")
+        campo = l.get("campo") or "—"
+        va = str(l.get("valor_anterior") if l.get("valor_anterior") is not None else "—")
+        vn = str(l.get("valor_nuevo") if l.get("valor_nuevo") is not None else "—")
+        # Pisos se llaman "piso:tema" — etiqueta más legible
+        if campo.startswith("piso:"):
+            campo_html = (f'<span class="badge badge-warn">piso</span> '
+                          f'{escape(campo[5:].replace("_"," ").title())}')
+        else:
+            campo_html = f'<span class="badge badge-off">{escape(campo)}</span>'
+        filas += f"""<tr>
+  <td style="color:var(--muted);font-size:12px;white-space:nowrap">{ts}</td>
+  <td>{campo_html}</td>
+  <td style="color:var(--muted)">{escape(va)} → <b style="color:var(--text)">{escape(vn)}</b></td>
+  <td style="color:var(--accent);font-size:12px">{escape(l.get('usuario') or '—')}</td>
+  <td style="color:var(--muted);font-size:12px">{escape(l.get('motivo') or '—')}</td>
+</tr>\n"""
+
+    cuerpo = (filas if logs else
+              '<tr><td colspan="5" style="color:var(--muted);padding:16px">'
+              'Sin cambios registrados todavía.</td></tr>')
+
+    contenido = f"""
+<div class="alert-box alert-info">
+  Registro de todos los cambios de calibración del semáforo (pisos, umbrales, coeficientes).
+  <a href="/admin/semaforo/calibrar" style="color:var(--accent)">← Volver a calibración</a>
+</div>
+<div class="card">
+  <div class="card-title">Historial de calibración — config_semaforo_log ({len(logs)})</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Fecha</th><th>Campo</th><th>Cambio</th><th>Usuario</th><th>Motivo</th>
+      </tr></thead>
+      <tbody>{cuerpo}</tbody>
+    </table>
+  </div>
+</div>"""
+
+    return HTMLResponse(_page("Log calibración · Semáforo", contenido, "calibrar",
                               sesion["username"]))
