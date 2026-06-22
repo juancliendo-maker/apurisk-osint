@@ -42,19 +42,25 @@ CATEGORIAS_TEMAS = {
 
 
 def detectar_temas(articles: list) -> dict:
-    """Cuenta menciones por categoría y devuelve mapa cat -> count, ejemplos."""
+    """Cuenta menciones por categoría y devuelve mapa cat -> count, ejemplos y artículos.
+
+    articulos_por_tema: {tema: [article, ...]} — usado para detectar entidades por tema.
+    """
     counts = Counter()
     ejemplos: dict[str, list[str]] = {k: [] for k in CATEGORIAS_TEMAS}
+    articulos_por_tema: dict[str, list] = {k: [] for k in CATEGORIAS_TEMAS}
     for a in articles:
         text = ((a.title or "") + " " + (a.summary or "")).lower()
         for cat, kws in CATEGORIAS_TEMAS.items():
             for kw in kws:
                 if kw.lower() in text:
                     counts[cat] += 1
+                    articulos_por_tema[cat].append(a)
                     if a.title and len(ejemplos[cat]) < 3:
                         ejemplos[cat].append(a.title)
                     break
     return {
         "conteos": dict(counts),
         "ejemplos": ejemplos,
+        "articulos_por_tema": articulos_por_tema,
     }

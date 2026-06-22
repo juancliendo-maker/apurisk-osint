@@ -389,15 +389,36 @@ def _punto_1_volumen(vol: dict) -> dict:
 
 
 def _punto_2_temas(articles: list) -> dict:
+    from collections import Counter
     temas = detectar_temas(articles)
     conteos = temas.get("conteos", {})
     top3 = sorted(conteos.items(), key=lambda x: x[1], reverse=True)[:3]
+
+    # Entidad más mencionada por tema (mientras los artículos están en memoria)
+    articulos_por_tema = temas.get("articulos_por_tema", {})
+    from .entities import _find_all, PARTIDOS, EMPRESAS_RIESGO
+    todas_entidades = list(INSTITUCIONES) + list(PARTIDOS) + list(EMPRESAS_RIESGO)
+
+    entidad_top_por_tema: dict[str, dict] = {}
+    for tema, arts in articulos_por_tema.items():
+        if not arts:
+            continue
+        conteo_ent: Counter = Counter()
+        for a in arts:
+            text = (a.title or "") + " " + (a.summary or "")
+            for ent in _find_all(text, todas_entidades):
+                conteo_ent[ent] += 1
+        if conteo_ent:
+            top_ent, top_n = conteo_ent.most_common(1)[0]
+            entidad_top_por_tema[tema] = {"entidad": top_ent, "menciones": top_n}
+
     return {
         "punto": 2,
         "titulo": "Temas dominantes detectados",
         "capa": "señal",
         "resultado": [{"tema": t, "menciones": n} for t, n in top3],
         "detalle": conteos,
+        "entidad_top_por_tema": entidad_top_por_tema,
     }
 
 
