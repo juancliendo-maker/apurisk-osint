@@ -1712,15 +1712,18 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         "coef_actividad": 8.0, "coef_simultaneidad": 3.5, "bonus_max": 15.0,
         "x_max_viz": 0.0,  # 0 = dinámico (al máximo real + margen)
     }
+    pa_por_tema: dict = {}
     if db_path:
         try:
             from ..storage.config_loader import (
                 cargar_pisos_estructurales, cargar_parametros_semaforo,
+                cargar_pa_por_tema,
             )
             pisos = cargar_pisos_estructurales(db_path, "PE")
             params = cargar_parametros_semaforo(db_path)
+            pa_por_tema = cargar_pa_por_tema(db_path, "PE")
         except Exception as e:
-            print(f"[semaforo] no se pudieron cargar pisos/params: {e}")
+            print(f"[semaforo] no se pudieron cargar pisos/params/pa: {e}")
 
     umbral_x = params["umbral_x"]
     umbral_y = params["umbral_y"]
@@ -1792,7 +1795,16 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         menciones = detalle_temas.get(tema, 0)
         piso = pisos.get(tema, 0.0)
         x = _actividad(menciones)               # actividad: puede ser 0 (silencioso)
-        y = round(max(piso, float(impacto_base)), 1)  # gravedad estructural
+
+        # Y = gravedad estructural. Si hay actores reales, PA_tema reemplaza impacto_base.
+        pa_info = pa_por_tema.get(tema)
+        if pa_info:
+            y_base = pa_info["pa"]
+            origen_pa = "real"
+        else:
+            y_base = float(impacto_base)
+            origen_pa = "estimado"
+        y = round(max(piso, y_base), 1)
 
         grave = y >= umbral_y
         activo = x >= umbral_x
@@ -1811,15 +1823,16 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
             "tema": tema,
             "x": x,
             "y": y,
-            # Radio por volumen de menciones (no por score). Mín. visible aunque silencioso.
             "r": max(5, min(20, menciones * 2)),
-            "score": y,                  # el "score" del globo en B es su gravedad estructural
+            "score": y,
             "nivel": nivel,
             "menciones": menciones,
             "piso": round(piso, 1),
             "impacto_base": impacto_base,
             "cuadrante": cuadrante,
             "color": _COLOR_NIVEL_BURB[nivel],
+            "origen_pa": origen_pa,
+            "pa_info": pa_info,
         })
 
     # ── Score Global B — la gravedad manda, la actividad solo agrava ──────────
@@ -1885,6 +1898,7 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         "cuadrantes_b": cuadrantes_b,
         "factores_globales": {k: {"valor": fval.get(k, 0), "origen": forigen.get(k, "proxy"),
                                    "peso": fpeso.get(k, 1.0)} for k in ["VC","PA","CE","IA","V"]},
+        "pa_por_tema": pa_por_tema,
     }
 
 
@@ -1916,10 +1930,20 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
         # Construir líneas del tooltip
         if "cuadrante" in g:
             # Matriz B: actividad vs gravedad estructural
+            origen_pa = g.get("origen_pa", "estimado")
+            pa_info = g.get("pa_info")
+            if pa_info:
+                pa_str = (
+                    f"PA={pa_info['pa']:g} (actor: {pa_info['actor_principal']}, "
+                    f"bonus +{pa_info['bonus']:g})"
+                )
+            else:
+                pa_str = f"PA={g.get('impacto_base', 0):g} (estimado — sin actores)"
             tooltip_extra = (
                 f"Cuadrante: {g['cuadrante']} | "
+                f"PA [{origen_pa}]: {pa_str} | "
                 f"Menciones: {g.get('menciones', 0)} | "
-                f"Piso definido: {g.get('piso', 0)} | "
+                f"Piso: {g.get('piso', 0)} | "
                 f"Impacto base: {g.get('impacto_base', 0)}"
             )
         else:
@@ -2098,18 +2122,19 @@ async def admin_semaforo(request: Request):
     # ── Construir datos para ambas matrices ──────────────────────────────────
     db_path = str(Path(OUTPUT_DIR) / "apurisk_archive.db")
     md = _construir_datos_semaforo(osint, db_path)
-    globos_a  = md["globos_a"]
-    globos_b  = md["globos_b"]
-    score_a   = md["score_global_a"]
-    score_b   = md["score_global_b"]
-    nivel_a   = md["nivel_a"]
-    nivel_b   = md["nivel_b"]
-    formula_b = md["formula_score_b"]
-    fact_glob = md["factores_globales"]
-    umbral_x  = md["umbral_x"]
-    umbral_y  = md["umbral_y"]
-    x_max_viz = md["x_max_viz"]
+    globos_a     = md["globos_a"]
+    globos_b     = md["globos_b"]
+    score_a      = md["score_global_a"]
+    score_b      = md["score_global_b"]
+    nivel_a      = md["nivel_a"]
+    nivel_b      = md["nivel_b"]
+    formula_b    = md["formula_score_b"]
+    fact_glob    = md["factores_globales"]
+    umbral_x     = md["umbral_x"]
+    umbral_y     = md["umbral_y"]
+    x_max_viz    = md["x_max_viz"]
     cuadrantes_b = md["cuadrantes_b"]
+    pa_por_tema  = md["pa_por_tema"]
 
     # ── Metadatos generales ──────────────────────────────────────────────────
     sem = osint.get("semaforo", {})
@@ -2230,6 +2255,55 @@ async def admin_semaforo(request: Request):
     puntos_señal = [_render_punto(p) for p in puntos_lista if p.get("capa") == "señal"]
     puntos_interp = [_render_punto(p) for p in puntos_lista if p.get("capa") == "interpretativa"]
 
+    # ── Tabla PA por tema ────────────────────────────────────────────────────
+    filas_pa = ""
+    for tema, impacto_base in _IMPACTO_TEMA.items():
+        nombre_tema = tema.replace("_", " ").title()
+        g_b = next((g for g in globos_b if g["tema"] == tema), None)
+        y_actual = g_b["y"] if g_b else max(0.0, float(impacto_base))
+        pa_info = pa_por_tema.get(tema)
+        if pa_info:
+            pa_val = pa_info["pa"]
+            actor_princ = escape(pa_info["actor_principal"])
+            fuertes = pa_info["actores_fuertes"]
+            bonus = pa_info["bonus"]
+            n_actores = pa_info["n_actores"]
+            lista_fuertes = ", ".join(
+                f'{escape(a["nombre"])} ({a["peso"]:g})'
+                for a in fuertes
+            ) or "ninguno"
+            badge_origen = '<span class="badge badge-ok">real</span>'
+            detalle_html = (
+                f'Principal: <b>{actor_princ}</b> ({pa_info["peso_mayor"]:g}) · '
+                f'Fuertes (≥{70:g}): {lista_fuertes} · '
+                f'Bonus: +{bonus:g}'
+            )
+        else:
+            pa_val = float(impacto_base)
+            badge_origen = '<span class="badge badge-alto">estimado</span>'
+            n_actores = 0
+            detalle_html = (
+                '<span style="color:#f59e0b">⚠ Sin actores vinculados — '
+                'usando impacto base. Vincula actores en /admin/actores.</span>'
+            )
+        delta = round(pa_val - float(impacto_base), 1)
+        delta_html = (
+            f'<span style="color:#4ade80">+{delta:g}</span>' if delta > 0
+            else (f'<span style="color:#f87171">{delta:g}</span>' if delta < 0
+                  else '<span style="color:var(--muted)">—</span>')
+        )
+        filas_pa += (
+            f"<tr>"
+            f"<td><b>{escape(nombre_tema)}</b></td>"
+            f"<td style='text-align:center'>{float(impacto_base):g}</td>"
+            f"<td style='text-align:center'><b>{pa_val:g}</b></td>"
+            f"<td style='text-align:center'>{delta_html}</td>"
+            f"<td style='text-align:center'>{n_actores}</td>"
+            f"<td style='text-align:center'>{badge_origen}</td>"
+            f"<td style='font-size:11px;color:var(--muted)'>{detalle_html}</td>"
+            f"</tr>"
+        )
+
     # ── Chart.js CDN (solo si no está ya en la página) ───────────────────────
     chartjs_cdn = (
         '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>'
@@ -2263,7 +2337,8 @@ async def admin_semaforo(request: Request):
       {_score_chip(score_b, nivel_b)}
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
         Score B = {escape(formula_b)}<br>
-        X = % real del volumen · Y = max(piso, impacto base)<br>
+        X = % real del volumen · Y = max(piso, PA_tema)<br>
+        PA_tema: desde actores reales o impacto base si no hay actores<br>
         Radio = volumen de menciones<br>
         Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g} ·
         eje X 0→{x_max_viz:g}
@@ -2347,6 +2422,35 @@ async def admin_semaforo(request: Request):
     Requieren validación del analista antes de actuar.
   </div>
   {''.join(puntos_interp)}
+</div>
+
+<!-- ── PA POR TEMA — tabla de actores que alimentan el eje Y de Matriz B ── -->
+<div class="card">
+  <div class="card-title">🎭 PA por Tema — actores que alimentan la Matriz B</div>
+  <p style="color:var(--muted);font-size:12px;margin:0 0 10px 0">
+    El eje Y de la Matriz B usa el PA calculado desde actores reales cuando están
+    vinculados. <b>real</b> = calculado desde actores · <b>estimado</b> = impacto
+    base sin actores (vincula actores en
+    <a href="/admin/actores" style="color:var(--accent)">→ Actores</a>).<br>
+    Fórmula: PA = peso_mayor + min(TOPE_BONUS, FACTOR_AGRAVANTE × n_adicionales_fuertes).
+    Parámetros editables en Calibración.
+  </p>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Tema</th>
+          <th style="text-align:center">Impacto base</th>
+          <th style="text-align:center">PA actores</th>
+          <th style="text-align:center">Δ</th>
+          <th style="text-align:center">Actores</th>
+          <th style="text-align:center">Origen</th>
+          <th>Detalle</th>
+        </tr>
+      </thead>
+      <tbody>{filas_pa}</tbody>
+    </table>
+  </div>
 </div>
 
 <div class="card" style="border-left:4px solid var(--accent)">

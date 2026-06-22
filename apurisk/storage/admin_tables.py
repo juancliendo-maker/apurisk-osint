@@ -465,6 +465,23 @@ _DATOS_INICIALES = [
         ">0 fija la escala para comparar semanas. No altera los datos.', 'GLOBAL')", []
     ),
 
+    # ── PA por tema — parámetros de la fórmula de peso de actores ────────────
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('UMBRAL_ACTOR_FUERTE', '70', 'float', "
+        "'PA por tema: peso mínimo (0-100) para que un actor cuente como fuerte y genere bonus', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('FACTOR_AGRAVANTE', '3', 'float', "
+        "'PA por tema: puntos extra por cada actor fuerte adicional al primero', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('TOPE_BONUS', '10', 'float', "
+        "'PA por tema: tope máximo del bonus acumulado por actores fuertes adicionales', 'GLOBAL')", []
+    ),
+
     # ── Valores base por nivel estratégico (I-VIII) — editables desde panel ──
     # Propagación automática: cambiar un valor aquí actualiza todos los actores
     # de ese nivel que NO tengan nivel_base_manual=1.
