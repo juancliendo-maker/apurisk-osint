@@ -1962,16 +1962,35 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
       ctx.beginPath(); ctx.moveTo(xm, ca.top); ctx.lineTo(xm, ca.bottom); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(ca.left, ym); ctx.lineTo(ca.right, ym); ctx.stroke();
       ctx.restore();
-      ctx.fillStyle = '#475569'; ctx.font = '10px sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(etq.ti, ca.left + 6, ca.top + 14);
-      ctx.textAlign = 'right';
-      ctx.fillText(etq.td, ca.right - 6, ca.top + 14);
-      ctx.textAlign = 'left';
-      ctx.fillText(etq.bi, ca.left + 6, ca.bottom - 6);
-      ctx.textAlign = 'right';
-      ctx.fillText(etq.bd, ca.right - 6, ca.bottom - 6);
-      ctx.textAlign = 'left';
+      // Draw quadrant labels — each anchored inside its quadrant,
+      // with a semi-transparent pill background for legibility.
+      // Lines/margins keep them away from the divider and from each other.
+      // [text, hAlign:'left'|'right', vPos:'top'|'bottom']
+      var qlabels = [
+        [etq.ti, 'left',  'top'],
+        [etq.td, 'right', 'top'],
+        [etq.bi, 'left',  'bottom'],
+        [etq.bd, 'right', 'bottom'],
+      ];
+      var PAD = 5, MARG = 8;
+      ctx.font = 'bold 10px sans-serif';
+      qlabels.forEach(function(l) {{
+        var text = l[0], ha = l[1], va = l[2];
+        var isLeft = (ha == 'left');
+        var isTop  = (va == 'top');
+        var tx = isLeft ? (ca.left + MARG) : (ca.right - MARG);
+        var ty = isTop  ? (ca.top + 16)    : (ca.bottom - 8);
+        ctx.textAlign = ha;
+        ctx.textBaseline = isTop ? 'top' : 'bottom';
+        var tw = ctx.measureText(text).width;
+        var bx = isLeft ? (tx - PAD) : (tx - tw - PAD);
+        var by = isTop  ? (ty - PAD) : (ty - 12);
+        ctx.fillStyle = 'rgba(11,18,32,0.75)';
+        ctx.fillRect(bx, by, tw + PAD * 2, 14 + PAD);
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(text, tx, ty);
+      }});
+      ctx.textBaseline = 'alphabetic';
     }}
   }};
   if (window.Chart) {{
