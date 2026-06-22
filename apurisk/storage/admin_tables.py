@@ -343,7 +343,8 @@ _DATOS_INICIALES = [
        f"VALUES ('PE', '{tema}', 0, 'seed inicial — sin piso definido')", [])
       for tema in [
           "estabilidad_gobierno", "corrupcion", "conflictos_sociales",
-          "seguridad", "polarizacion", "economico_inversion", "electoral",
+          "seguridad", "polarizacion", "riesgo_regulatorio",
+          "economico_inversion", "electoral",
       ]],
 
     # ── Parámetros editables de la Matriz B del semáforo ──────────────────────
@@ -373,6 +374,12 @@ _DATOS_INICIALES = [
         "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
         "VALUES ('SCORE_B_BONUS_MAX', '15', 'float', "
         "'Score B: tope del agravante total sobre Y_max (puntos)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SEMAFORO_X_MAX_VIZ', '0', 'float', "
+        "'Matriz B: tope visible del eje X. 0 = dinámico (máximo real + margen). "
+        ">0 fija la escala para comparar semanas. No altera los datos.', 'GLOBAL')", []
     ),
 ]
 

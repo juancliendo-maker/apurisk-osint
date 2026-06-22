@@ -816,6 +816,7 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
         "coef_actividad": 8.0,
         "coef_simultaneidad": 3.5,
         "bonus_max": 15.0,
+        "x_max_viz": 0.0,   # 0 = escala dinámica del eje X (máximo real + margen)
     }
     mapa = {
         "SEMAFORO_UMBRAL_ACTIVIDAD_X": "umbral_x",
@@ -823,13 +824,15 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
         "SCORE_B_COEF_ACTIVIDAD": "coef_actividad",
         "SCORE_B_COEF_SIMULTANEIDAD": "coef_simultaneidad",
         "SCORE_B_BONUS_MAX": "bonus_max",
+        "SEMAFORO_X_MAX_VIZ": "x_max_viz",
     }
     try:
         with _conn(db_path) as c:
             rows = c.execute(
                 "SELECT clave, valor FROM config_parametros WHERE clave IN "
                 "('SEMAFORO_UMBRAL_ACTIVIDAD_X','SEMAFORO_UMBRAL_GRAVEDAD_Y',"
-                "'SCORE_B_COEF_ACTIVIDAD','SCORE_B_COEF_SIMULTANEIDAD','SCORE_B_BONUS_MAX')",
+                "'SCORE_B_COEF_ACTIVIDAD','SCORE_B_COEF_SIMULTANEIDAD','SCORE_B_BONUS_MAX',"
+                "'SEMAFORO_X_MAX_VIZ')",
             ).fetchall()
         for r in rows:
             k = mapa.get(r["clave"])

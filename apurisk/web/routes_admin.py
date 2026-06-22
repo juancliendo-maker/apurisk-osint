@@ -1649,6 +1649,7 @@ _IMPACTO_TEMA: dict[str, int] = {
     "conflictos_sociales":   72,
     "seguridad":             70,
     "polarizacion":          65,
+    "riesgo_regulatorio":    62,
     "economico_inversion":   60,
     "electoral":             55,
 }
@@ -1707,6 +1708,7 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     params = {
         "umbral_x": 25.0, "umbral_y": 65.0,
         "coef_actividad": 8.0, "coef_simultaneidad": 3.5, "bonus_max": 15.0,
+        "x_max_viz": 0.0,  # 0 = dinámico (al máximo real + margen)
     }
     if db_path:
         try:
@@ -1735,10 +1737,12 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     forigen = {k: v.get("origen", "proxy") for k, v in factores_sem.items()}
     fpeso = {k: float(v.get("peso", 1.0)) for k, v in factores_sem.items()}
 
-    # Actividad del tema: frecuencia relativa escalada ×3 para spread visual.
-    # Mismo cálculo que el eje X de la Matriz A → ejes X comparables entre matrices.
+    # Actividad del tema = proporción REAL del volumen (% de menciones), sin
+    # amplificador. Un tema con 35% de menciones marca 35, no 100. Honesto y
+    # comparable entre semanas. El "acercamiento" visual lo hace el eje dinámico,
+    # no el dato. Mismo cálculo que el eje X de la Matriz A → ejes comparables.
     def _actividad(menciones: int) -> float:
-        return round(min(100, (menciones / total_menciones) * 100 * 3), 1)
+        return round((menciones / total_menciones) * 100, 1)
 
     # ── MATRIZ A — por volumen ────────────────────────────────────────────────
     globos_a = []
@@ -1846,6 +1850,17 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         score_global_b = round(min(100, y_max + bonus_total), 1)
     nivel_b = _nivel_score(score_global_b)
 
+    # ── Escala visible del eje X (no toca los datos, solo el "zoom") ──────────
+    # x_max_viz=0 → dinámico: ceil(X_max_real/10)×10 + 10, acotado a [30, 100].
+    # Acerca la vista cuando ningún tema supera ~40% del volumen, sin inflar X.
+    # Cualquier valor >0 fija la escala (útil para comparar semanas).
+    import math as _math
+    x_real_max = max([g["x"] for g in (globos_a + globos_b)] or [0])
+    if params["x_max_viz"] and params["x_max_viz"] > 0:
+        x_max_viz = float(params["x_max_viz"])
+    else:
+        x_max_viz = min(100, max(30, _math.ceil(x_real_max / 10) * 10 + 10))
+
     # Etiquetas de cuadrante para el dibujo de la matriz B (esquinas)
     cuadrantes_b = {
         "ti": "GRAVE PERO SILENCIOSO",   # top-left
@@ -1864,6 +1879,7 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         "formula_score_b": formula_score_b,
         "umbral_x": umbral_x,
         "umbral_y": umbral_y,
+        "x_max_viz": x_max_viz,
         "cuadrantes_b": cuadrantes_b,
         "factores_globales": {k: {"valor": fval.get(k, 0), "origen": forigen.get(k, "proxy"),
                                    "peso": fpeso.get(k, 1.0)} for k in ["VC","PA","CE","IA","V"]},
@@ -1874,7 +1890,8 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
                          titulo_y: str, altura: int = 340,
                          umbral_x: float = 50, umbral_y: float = 50,
                          etiquetas: dict = None,
-                         eje_x_corto: str = "X", eje_y_corto: str = "Y") -> str:
+                         eje_x_corto: str = "X", eje_y_corto: str = "Y",
+                         x_max: float = 100) -> str:
     """Genera el bloque <canvas> + <script> de una matriz de burbujas con Chart.js.
 
     globos: lista de dicts con x, y, r, score, nivel, tema, menciones, color.
@@ -1882,6 +1899,7 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
     umbral_x / umbral_y: posición de las líneas divisorias de cuadrante (0-100).
     etiquetas: {ti, td, bi, bd} con los textos de cada esquina. Si None, usa P×I.
     eje_x_corto / eje_y_corto: prefijos de la primera línea del tooltip.
+    x_max: tope visible del eje X (los datos no cambian; solo el "zoom" del eje).
     """
     if etiquetas is None:
         etiquetas = {
@@ -1994,7 +2012,7 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
           }}
         }},
         scales: {{
-          x: {{ min: 0, max: 100,
+          x: {{ min: 0, max: {x_max},
                title: {{ display: true, text: '{titulo_x}', color: '#94a3b8',
                          font: {{ size: 10, weight: '600' }} }},
                grid: {{ color: '#1e293b' }}, ticks: {{ color: '#94a3b8' }} }},
@@ -2069,6 +2087,7 @@ async def admin_semaforo(request: Request):
     fact_glob = md["factores_globales"]
     umbral_x  = md["umbral_x"]
     umbral_y  = md["umbral_y"]
+    x_max_viz = md["x_max_viz"]
     cuadrantes_b = md["cuadrantes_b"]
 
     # ── Metadatos generales ──────────────────────────────────────────────────
@@ -2089,12 +2108,13 @@ async def admin_semaforo(request: Request):
     # ── Matrices HTML ────────────────────────────────────────────────────────
     matriz_a_html = _matriz_bubble_html(
         "matrizVolumenChart", globos_a,
-        "FRECUENCIA (menciones relativas) →", "IMPACTO POLÍTICO →",
+        "FRECUENCIA (% del volumen) →", "IMPACTO POLÍTICO →",
         eje_x_corto="Frecuencia", eje_y_corto="Impacto",
+        x_max=x_max_viz,
     )
     matriz_b_html = _matriz_bubble_html(
         "matrizEstructuralChart", globos_b,
-        "ACTIVIDAD ACTUAL (volumen del tema) →", "GRAVEDAD ESTRUCTURAL →",
+        "ACTIVIDAD ACTUAL (% del volumen) →", "GRAVEDAD ESTRUCTURAL →",
         umbral_x=umbral_x, umbral_y=umbral_y,
         etiquetas={
             "ti": cuadrantes_b["ti"],   # GRAVE PERO SILENCIOSO
@@ -2103,6 +2123,7 @@ async def admin_semaforo(request: Request):
             "bd": cuadrantes_b["bd"],   # RUIDOSO PERO MENOR
         },
         eje_x_corto="Actividad", eje_y_corto="Gravedad",
+        x_max=x_max_viz,
     )
 
     # ── Leyenda de colores de burbujas ───────────────────────────────────────
@@ -2221,9 +2242,10 @@ async def admin_semaforo(request: Request):
       {_score_chip(score_b, nivel_b)}
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
         Score B = {escape(formula_b)}<br>
-        X = actividad actual · Y = max(piso, impacto base)<br>
+        X = % real del volumen · Y = max(piso, impacto base)<br>
         Radio = volumen de menciones<br>
-        Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g}
+        Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g} ·
+        eje X 0→{x_max_viz:g}
       </div>
     </div>
     {matriz_b_html}
