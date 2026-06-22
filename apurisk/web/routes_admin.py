@@ -1685,13 +1685,41 @@ def _origen_badge(origen: str) -> str:
     return f'<span class="badge badge-{cls}">{escape(origen)}</span>'
 
 
-def _construir_datos_semaforo(osint: dict) -> dict:
+def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     """Construye los datos de ambas matrices y sus Score Globales desde el snapshot OSINT.
 
+    Matriz A (volumen):    X = frecuencia relativa, Y = impacto político base.
+    Matriz B (estructural): X = actividad actual del tema (mismo cálculo que A),
+                            Y = gravedad estructural = max(piso, impacto_base).
+    Los ejes de B son independientes: X cambia semana a semana, Y es estructural.
+
+    db_path: BD para cargar pisos estructurales y parámetros editables. Si es None
+             o falla, pisos=0 (Y=impacto_base) y se usan defaults documentados.
+
     Devuelve {globos_a, globos_b, score_global_a, score_global_b,
-              nivel_a, nivel_b, formula_score_b}.
+              nivel_a, nivel_b, formula_score_b, umbral_x, umbral_y,
+              cuadrantes_b, factores_globales}.
     """
     import math
+
+    # ── Parámetros editables y pisos estructurales (BD, con defaults) ─────────
+    pisos = {}
+    params = {
+        "umbral_x": 25.0, "umbral_y": 65.0,
+        "coef_actividad": 8.0, "coef_simultaneidad": 3.5, "bonus_max": 15.0,
+    }
+    if db_path:
+        try:
+            from ..storage.config_loader import (
+                cargar_pisos_estructurales, cargar_parametros_semaforo,
+            )
+            pisos = cargar_pisos_estructurales(db_path, "PE")
+            params = cargar_parametros_semaforo(db_path)
+        except Exception as e:
+            print(f"[semaforo] no se pudieron cargar pisos/params: {e}")
+
+    umbral_x = params["umbral_x"]
+    umbral_y = params["umbral_y"]
 
     # ── Extraer datos base del snapshot ──────────────────────────────────────
     puntos = {p["punto"]: p for p in osint.get("puntos", [])}
@@ -1702,10 +1730,15 @@ def _construir_datos_semaforo(osint: dict) -> dict:
     detalle_temas = p2.get("detalle", {})  # {tema: conteo}
     total_menciones = max(1, sum(detalle_temas.values()))
 
-    # Valores globales de los 5 factores del semáforo
+    # Valores globales de los 5 factores del semáforo (para tabla informativa)
     fval = {k: float(v.get("valor", 0)) for k, v in factores_sem.items()}
     forigen = {k: v.get("origen", "proxy") for k, v in factores_sem.items()}
     fpeso = {k: float(v.get("peso", 1.0)) for k, v in factores_sem.items()}
+
+    # Actividad del tema: frecuencia relativa escalada ×3 para spread visual.
+    # Mismo cálculo que el eje X de la Matriz A → ejes X comparables entre matrices.
+    def _actividad(menciones: int) -> float:
+        return round(min(100, (menciones / total_menciones) * 100 * 3), 1)
 
     # ── MATRIZ A — por volumen ────────────────────────────────────────────────
     globos_a = []
@@ -1713,7 +1746,7 @@ def _construir_datos_semaforo(osint: dict) -> dict:
         menciones = detalle_temas.get(tema, 0)
         if menciones == 0:
             continue
-        x = round(min(100, (menciones / total_menciones) * 100 * 3), 1)  # ×3 para spread visual
+        x = _actividad(menciones)
         y = impacto_base
         score_ab = round(math.sqrt(x * y), 1)
         nivel = _nivel_score(score_ab)
@@ -1721,7 +1754,8 @@ def _construir_datos_semaforo(osint: dict) -> dict:
             "tema": tema,
             "x": x,
             "y": y,
-            "r": max(8, min(35, menciones * 4)),
+            # Radio reducido 50% respecto al diseño anterior (menciones×4 → ×2)
+            "r": max(4, min(18, menciones * 2)),
             "score": score_ab,
             "nivel": nivel,
             "menciones": menciones,
@@ -1730,8 +1764,6 @@ def _construir_datos_semaforo(osint: dict) -> dict:
         })
 
     # Score Global A = promedio ponderado por proporción de volumen
-    # Cada tema pesa según su fracción del total de menciones → temas dominantes pesan más.
-    # Fórmula: Σ(score_tema × pct_tema) / 100
     score_global_a = 0.0
     if globos_a:
         score_global_a = round(
@@ -1739,86 +1771,88 @@ def _construir_datos_semaforo(osint: dict) -> dict:
         )
     nivel_a = _nivel_score(score_global_a)
 
-    # ── MATRIZ B — por fórmula semáforo ──────────────────────────────────────
-    # Los 5 factores globales (VC, PA, CE, IA, V) se aplican a cada tema escalados
-    # por la presencia relativa del tema en el corpus.
-    # Eje X (probabilidad de escalada) = PA × CE × V — factores de propagación
-    # Eje Y (impacto potencial)        = VC × IA    — factores de gravedad
-    # Radio                            = score multiplicativo del tema
-    # Los valores globales de los factores son los calculados por el motor OSINT.
-
-    vc  = fval.get("VC", 0.5)
-    pa  = fval.get("PA", 0.4)
-    ce  = fval.get("CE", 0.4)
-    ia  = fval.get("IA", 0.4)
-    v   = fval.get("V",  0.3)
-
+    # ── MATRIZ B — actividad (X) vs gravedad estructural (Y) ──────────────────
+    # X = actividad actual del tema (volumen relativo, cambia semana a semana).
+    # Y = gravedad estructural = max(piso_estructural, impacto_base). Piso lo fija
+    #     el analista; con piso=0, Y = impacto_base.
+    # Ejes independientes → ningún cuadrante queda vacío por construcción.
+    # Cuadrantes (umbrales editables umbral_x / umbral_y):
+    #   Y≥umbral_y, X<umbral_x  → GRAVE PERO SILENCIOSO (prioridad de inteligencia)
+    #   Y≥umbral_y, X≥umbral_x  → GRAVE Y ACTIVO
+    #   Y<umbral_y, X≥umbral_x  → RUIDOSO PERO MENOR
+    #   Y<umbral_y, X<umbral_x  → TRANQUILO
     globos_b = []
     for tema, impacto_base in _IMPACTO_TEMA.items():
         menciones = detalle_temas.get(tema, 0)
-        # Escalar factores globales por presencia del tema (0.3 de base + 0.7 × presencia)
-        presencia = min(1.0, (menciones / total_menciones) * 3) if menciones > 0 else 0.0
-        escala = 0.3 + 0.7 * presencia  # [0.3, 1.0]
+        piso = pisos.get(tema, 0.0)
+        x = _actividad(menciones)               # actividad: puede ser 0 (silencioso)
+        y = round(max(piso, float(impacto_base)), 1)  # gravedad estructural
 
-        vc_t  = min(1.0, vc  * escala)
-        pa_t  = min(1.0, pa  * (0.5 + 0.5 * presencia))
-        ce_t  = min(1.0, ce  * escala)
-        ia_t  = min(1.0, ia  * escala)
-        v_t   = min(1.0, v   * (0.4 + 0.6 * presencia))
+        grave = y >= umbral_y
+        activo = x >= umbral_x
+        if grave and not activo:
+            cuadrante = "GRAVE PERO SILENCIOSO"
+        elif grave and activo:
+            cuadrante = "GRAVE Y ACTIVO"
+        elif (not grave) and activo:
+            cuadrante = "RUIDOSO PERO MENOR"
+        else:
+            cuadrante = "TRANQUILO"
 
-        # Ejes: X = combinación PA+CE+V (escalada 0-100), Y = combinación VC+IA (0-100)
-        x = round(min(100, (pa_t ** fpeso.get("PA", 1.0) *
-                             ce_t ** fpeso.get("CE", 1.0) *
-                             v_t  ** fpeso.get("V",  1.0)) ** (1/3) * 100), 1)
-        y = round(min(100, (vc_t ** fpeso.get("VC", 1.0) *
-                             ia_t ** fpeso.get("IA", 1.0)) ** (1/2) * 100), 1)
-
-        # Score multiplicativo completo del tema
-        score_mult = (vc_t ** fpeso.get("VC", 1.0) *
-                      pa_t ** fpeso.get("PA", 1.0) *
-                      ce_t ** fpeso.get("CE", 1.0) *
-                      ia_t ** fpeso.get("IA", 1.0) *
-                      v_t  ** fpeso.get("V",  1.0))
-        # Convertir a escala 0-100: √(score_mult) × 100 (suaviza la compresión multiplicativa)
-        score_b100 = round(min(100, math.sqrt(score_mult) * 100), 1)
-        nivel = _nivel_score(score_b100)
-
+        # Nivel de color por gravedad estructural (Y manda en esta matriz)
+        nivel = _nivel_score(y)
         globos_b.append({
             "tema": tema,
             "x": x,
             "y": y,
-            "r": max(8, min(35, int(score_b100 / 3) + 5)),
-            "score": score_b100,
-            "score_mult_raw": round(score_mult, 6),
+            # Radio por volumen de menciones (no por score). Mín. visible aunque silencioso.
+            "r": max(5, min(20, menciones * 2)),
+            "score": y,                  # el "score" del globo en B es su gravedad estructural
             "nivel": nivel,
             "menciones": menciones,
+            "piso": round(piso, 1),
+            "impacto_base": impacto_base,
+            "cuadrante": cuadrante,
             "color": _COLOR_NIVEL_BURB[nivel],
-            "factores": {
-                "VC": {"valor": round(vc_t, 3), "origen": forigen.get("VC", "real")},
-                "PA": {"valor": round(pa_t, 3), "origen": forigen.get("PA", "estimado")},
-                "CE": {"valor": round(ce_t, 3), "origen": forigen.get("CE", "proxy")},
-                "IA": {"valor": round(ia_t, 3), "origen": forigen.get("IA", "proxy")},
-                "V":  {"valor": round(v_t,  3), "origen": forigen.get("V",  "real")},
-            },
         })
 
-    # Score Global B:
-    # Toma el score del tema más alto (peor frente).
-    # Si ≥2 temas están en zona crítica (score ≥ 70), se aplica un bono de
-    # +5 puntos por cada tema crítico adicional (cap: 100).
-    # Refleja que la simultaneidad de crisis agrava el riesgo.
-    UMBRAL_CRITICO_B = 70.0
-    BONO_POR_CRITICO_ADICIONAL = 5.0
+    # ── Score Global B — la gravedad manda, la actividad solo agrava ──────────
+    # Score_B = min(100, Y_max + min(bonus_max, coef_act·(X_Ymax/100) +
+    #                                coef_sim·max(0, n_graves_activos − 1)))
+    # · Y_max = gravedad estructural del peor frente (fija el piso, esté silencioso o no).
+    # · bonus por actividad del propio tema más grave (acotado).
+    # · bonus por simultaneidad de temas graves-y-activos.
+    # · El silencio nunca resta: sin actividad, Score_B = Y_max exacto.
+    coef_act = params["coef_actividad"]
+    coef_sim = params["coef_simultaneidad"]
+    bonus_max = params["bonus_max"]
 
     score_global_b = 0.0
-    formula_score_b = "max(score_tema) + 5 × max(0, n_críticos − 1) · umbral_crítico=70"
+    formula_score_b = (
+        f"min(100, Y_max + min({bonus_max:g}, {coef_act:g}·(X_Ymax/100) + "
+        f"{coef_sim:g}·max(0, n_graves_activos−1)))"
+    )
     if globos_b:
-        scores_b = sorted([g["score"] for g in globos_b], reverse=True)
-        n_criticos = sum(1 for s in scores_b if s >= UMBRAL_CRITICO_B)
-        score_global_b = round(
-            min(100, scores_b[0] + BONO_POR_CRITICO_ADICIONAL * max(0, n_criticos - 1)), 1
+        # Tema con mayor gravedad estructural (peor frente)
+        g_peor = max(globos_b, key=lambda g: g["y"])
+        y_max = g_peor["y"]
+        x_ymax = g_peor["x"]
+        n_graves_activos = sum(
+            1 for g in globos_b if g["y"] >= umbral_y and g["x"] >= umbral_x
         )
+        bonus_actividad = coef_act * (x_ymax / 100.0)
+        bonus_simultaneidad = coef_sim * max(0, n_graves_activos - 1)
+        bonus_total = min(bonus_max, bonus_actividad + bonus_simultaneidad)
+        score_global_b = round(min(100, y_max + bonus_total), 1)
     nivel_b = _nivel_score(score_global_b)
+
+    # Etiquetas de cuadrante para el dibujo de la matriz B (esquinas)
+    cuadrantes_b = {
+        "ti": "GRAVE PERO SILENCIOSO",   # top-left
+        "td": "GRAVE Y ACTIVO",          # top-right
+        "bi": "TRANQUILO",               # bottom-left
+        "bd": "RUIDOSO PERO MENOR",      # bottom-right
+    }
 
     return {
         "globos_a": globos_a,
@@ -1828,32 +1862,50 @@ def _construir_datos_semaforo(osint: dict) -> dict:
         "nivel_a": nivel_a,
         "nivel_b": nivel_b,
         "formula_score_b": formula_score_b,
+        "umbral_x": umbral_x,
+        "umbral_y": umbral_y,
+        "cuadrantes_b": cuadrantes_b,
         "factores_globales": {k: {"valor": fval.get(k, 0), "origen": forigen.get(k, "proxy"),
                                    "peso": fpeso.get(k, 1.0)} for k in ["VC","PA","CE","IA","V"]},
     }
 
 
 def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
-                         titulo_y: str, altura: int = 340) -> str:
-    """Genera el bloque <canvas> + <script> de una matriz P×I con Chart.js.
+                         titulo_y: str, altura: int = 340,
+                         umbral_x: float = 50, umbral_y: float = 50,
+                         etiquetas: dict = None,
+                         eje_x_corto: str = "X", eje_y_corto: str = "Y") -> str:
+    """Genera el bloque <canvas> + <script> de una matriz de burbujas con Chart.js.
 
-    globos: lista de dicts con x, y, r, score, nivel, tema, menciones,
-            color, y opcionalmente factores (para tooltip extendido de Matriz B).
+    globos: lista de dicts con x, y, r, score, nivel, tema, menciones, color.
+            Matriz B añade: piso, impacto_base, cuadrante (tooltip extendido).
+    umbral_x / umbral_y: posición de las líneas divisorias de cuadrante (0-100).
+    etiquetas: {ti, td, bi, bd} con los textos de cada esquina. Si None, usa P×I.
+    eje_x_corto / eje_y_corto: prefijos de la primera línea del tooltip.
     """
+    if etiquetas is None:
+        etiquetas = {
+            "ti": "Alto Imp · Baja Prob",
+            "td": "Alto Imp · Alta Prob (CRÍTICO)",
+            "bi": "Bajo Imp · Baja Prob",
+            "bd": "Bajo Imp · Alta Prob",
+        }
+
     datasets = []
     for g in globos:
         # Construir líneas del tooltip
-        tooltip_extra = f"Menciones: {g.get('menciones', 0)}"
-        if "pct_volumen" in g:
-            tooltip_extra += f" ({g['pct_volumen']}% vol)"
-        if "score_mult_raw" in g:
-            tooltip_extra = f"Score mult raw: {g['score_mult_raw']}"
-        if "factores" in g:
-            flines = " | ".join(
-                f"{k}={v['valor']} [{v['origen']}]"
-                for k, v in g["factores"].items()
+        if "cuadrante" in g:
+            # Matriz B: actividad vs gravedad estructural
+            tooltip_extra = (
+                f"Cuadrante: {g['cuadrante']} | "
+                f"Menciones: {g.get('menciones', 0)} | "
+                f"Piso definido: {g.get('piso', 0)} | "
+                f"Impacto base: {g.get('impacto_base', 0)}"
             )
-            tooltip_extra += f" | {flines}"
+        else:
+            tooltip_extra = f"Menciones: {g.get('menciones', 0)}"
+            if "pct_volumen" in g:
+                tooltip_extra += f" ({g['pct_volumen']}% vol)"
 
         nombre_display = g["tema"].replace("_", " ").title()
         datasets.append({
@@ -1868,6 +1920,7 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
         })
 
     datasets_json = json.dumps(datasets, ensure_ascii=False)
+    etiquetas_json = json.dumps(etiquetas, ensure_ascii=False)
 
     return f"""
 <div style="position:relative;height:{altura}px;">
@@ -1876,6 +1929,8 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
 <script>
 (function() {{
   var raw = {datasets_json};
+  var etq = {etiquetas_json};
+  var umbralX = {umbral_x}, umbralY = {umbral_y};
   var drawQ = {{
     id: 'quadrants_{canvas_id}',
     afterDraw: function(chart) {{
@@ -1884,15 +1939,20 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
       var x = chart.scales.x, y = chart.scales.y;
       ctx.save();
       ctx.strokeStyle = '#334155'; ctx.setLineDash([4,4]); ctx.lineWidth = 1;
-      var xm = x.getPixelForValue(50), ym = y.getPixelForValue(50);
+      var xm = x.getPixelForValue(umbralX), ym = y.getPixelForValue(umbralY);
       ctx.beginPath(); ctx.moveTo(xm, ca.top); ctx.lineTo(xm, ca.bottom); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(ca.left, ym); ctx.lineTo(ca.right, ym); ctx.stroke();
       ctx.restore();
       ctx.fillStyle = '#475569'; ctx.font = '10px sans-serif';
-      ctx.fillText('Alto Imp · Baja Prob', ca.left + 6, ca.top + 14);
-      ctx.fillText('Alto Imp · Alta Prob (CRÍTICO)', xm + 6, ca.top + 14);
-      ctx.fillText('Bajo Imp · Baja Prob', ca.left + 6, ca.bottom - 6);
-      ctx.fillText('Bajo Imp · Alta Prob', xm + 6, ca.bottom - 6);
+      ctx.textAlign = 'left';
+      ctx.fillText(etq.ti, ca.left + 6, ca.top + 14);
+      ctx.textAlign = 'right';
+      ctx.fillText(etq.td, ca.right - 6, ca.top + 14);
+      ctx.textAlign = 'left';
+      ctx.fillText(etq.bi, ca.left + 6, ca.bottom - 6);
+      ctx.textAlign = 'right';
+      ctx.fillText(etq.bd, ca.right - 6, ca.bottom - 6);
+      ctx.textAlign = 'left';
     }}
   }};
   if (window.Chart) {{
@@ -1926,7 +1986,7 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
               }},
               label: function(item) {{
                 return [
-                  'Prob: ' + item.raw.x + '  ·  Imp: ' + item.raw.y,
+                  '{eje_x_corto}: ' + item.raw.x + '  ·  {eje_y_corto}: ' + item.raw.y,
                   item.dataset._extra
                 ];
               }}
@@ -1997,7 +2057,8 @@ async def admin_semaforo(request: Request):
                                   sesion["username"]))
 
     # ── Construir datos para ambas matrices ──────────────────────────────────
-    md = _construir_datos_semaforo(osint)
+    db_path = str(Path(OUTPUT_DIR) / "apurisk_archive.db")
+    md = _construir_datos_semaforo(osint, db_path)
     globos_a  = md["globos_a"]
     globos_b  = md["globos_b"]
     score_a   = md["score_global_a"]
@@ -2006,6 +2067,9 @@ async def admin_semaforo(request: Request):
     nivel_b   = md["nivel_b"]
     formula_b = md["formula_score_b"]
     fact_glob = md["factores_globales"]
+    umbral_x  = md["umbral_x"]
+    umbral_y  = md["umbral_y"]
+    cuadrantes_b = md["cuadrantes_b"]
 
     # ── Metadatos generales ──────────────────────────────────────────────────
     sem = osint.get("semaforo", {})
@@ -2025,11 +2089,20 @@ async def admin_semaforo(request: Request):
     # ── Matrices HTML ────────────────────────────────────────────────────────
     matriz_a_html = _matriz_bubble_html(
         "matrizVolumenChart", globos_a,
-        "FRECUENCIA (menciones relativas) →", "IMPACTO POLÍTICO →"
+        "FRECUENCIA (menciones relativas) →", "IMPACTO POLÍTICO →",
+        eje_x_corto="Frecuencia", eje_y_corto="Impacto",
     )
     matriz_b_html = _matriz_bubble_html(
-        "matrizFormulaChart", globos_b,
-        "PROBABILIDAD DE ESCALADA (PA×CE×V) →", "GRAVEDAD POTENCIAL (VC×IA) →"
+        "matrizEstructuralChart", globos_b,
+        "ACTIVIDAD ACTUAL (volumen del tema) →", "GRAVEDAD ESTRUCTURAL →",
+        umbral_x=umbral_x, umbral_y=umbral_y,
+        etiquetas={
+            "ti": cuadrantes_b["ti"],   # GRAVE PERO SILENCIOSO
+            "td": cuadrantes_b["td"],   # GRAVE Y ACTIVO
+            "bi": cuadrantes_b["bi"],   # TRANQUILO
+            "bd": cuadrantes_b["bd"],   # RUIDOSO PERO MENOR
+        },
+        eje_x_corto="Actividad", eje_y_corto="Gravedad",
     )
 
     # ── Leyenda de colores de burbujas ───────────────────────────────────────
@@ -2128,12 +2201,12 @@ async def admin_semaforo(request: Request):
 
   <!-- MATRIZ A — VOLUMEN -->
   <div class="card">
-    <div class="card-title">Matriz A — Por Volumen</div>
+    <div class="card-title">Matriz A — Frecuencia × Impacto</div>
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
       {_score_chip(score_a, nivel_a)}
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
         Score = Σ(score_tema × % volumen)<br>
-        Burbujas = temas de riesgo<br>
+        X = frecuencia · Y = impacto político<br>
         Radio = menciones absolutas
       </div>
     </div>
@@ -2141,19 +2214,26 @@ async def admin_semaforo(request: Request):
     <div style="margin-top:10px">{leyenda_html}</div>
   </div>
 
-  <!-- MATRIZ B — FÓRMULA SEMÁFORO -->
+  <!-- MATRIZ B — ACTIVIDAD × GRAVEDAD ESTRUCTURAL -->
   <div class="card">
-    <div class="card-title">Matriz B — Por Fórmula VC×PA×CE×IA×V</div>
+    <div class="card-title">Matriz B — Actividad × Gravedad Estructural</div>
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
       {_score_chip(score_b, nivel_b)}
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
-        Score = {escape(formula_b)}<br>
-        X = PA×CE×V &nbsp;|&nbsp; Y = VC×IA<br>
-        Radio = √score_mult × 100
+        Score B = {escape(formula_b)}<br>
+        X = actividad actual · Y = max(piso, impacto base)<br>
+        Radio = volumen de menciones<br>
+        Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g}
       </div>
     </div>
     {matriz_b_html}
     <div style="margin-top:10px">{leyenda_html}</div>
+    <p style="color:var(--muted);font-size:11px;margin-top:8px;line-height:1.5">
+      <b>La gravedad manda, la actividad solo agrava.</b> El piso del Score lo fija
+      el tema estructuralmente más grave, esté silencioso o no. El cuadrante
+      <b>GRAVE PERO SILENCIOSO</b> (arriba-izquierda) es la prioridad de inteligencia:
+      temas estructuralmente graves que aún no están en la agenda.
+    </p>
   </div>
 
 </div>
@@ -2167,7 +2247,7 @@ async def admin_semaforo(request: Request):
 
 <!-- ── FACTORES GLOBALES DEL SEMÁFORO ── -->
 <div class="card">
-  <div class="card-title">Factores del semáforo (globales — base de la Matriz B)</div>
+  <div class="card-title">Factores del semáforo (globales — nivel general del corpus)</div>
   <div style="overflow-x:auto">
     <table class="tbl">
       <thead><tr><th>Factor</th><th>Valor</th><th>Peso (exp)</th>
@@ -2176,8 +2256,10 @@ async def admin_semaforo(request: Request):
     </table>
   </div>
   <p style="color:var(--muted);font-size:11px;margin-top:8px">
-    Cada burbuja de Matriz B escala estos valores por la presencia del tema en el corpus
-    (escala 0.3–1.0). <b>real</b> = dato computado · <b>proxy</b> = señal indirecta ·
+    Estos 5 factores (VC·PA·CE·IA·V) se calculan globales para todo el corpus, no por
+    tema. Definen el nivel general del semáforo, no los ejes de la Matriz B (cuyos ejes
+    son actividad por tema y gravedad estructural).
+    <b>real</b> = dato computado · <b>proxy</b> = señal indirecta ·
     <b>estimado</b> = heurística no verificada.<br>
     Sin dato: <span style="color:var(--muted)">{escape(', '.join(sin_dato)) or 'ninguno'}</span>
     (requieren señales sociales/Twitter — pausadas).
@@ -2226,147 +2308,3 @@ async def admin_semaforo(request: Request):
 
     return HTMLResponse(_page("Semáforo OSINT", contenido, "semaforo",
                               sesion["username"]))
-
-
-@router.get("/semaforo")
-async def admin_semaforo(request: Request):
-    sesion, err = _admin_guard(request)
-    if err:
-        return err
-
-    db_path = str(Path(OUTPUT_DIR) / "apurisk_archive.db")
-
-    # Leer último resultado OSINT desde snapshot JSON más reciente
-    osint = None
-    out_dir = Path(OUTPUT_DIR)
-    snaps = sorted(out_dir.glob("apurisk_snapshot_*.json"),
-                       key=lambda p: p.stat().st_mtime, reverse=True)
-    for s in snaps[:1]:
-        try:
-            data = json.loads(s.read_text(encoding="utf-8"))
-            osint = data.get("osint_motor")
-            break
-        except Exception:
-            pass
-
-    if not osint:
-        contenido = """
-<div class="card card-accent">
-  <div class="card-title">🚦 Semáforo OSINT</div>
-  <p style="color:var(--muted)">Sin resultado disponible aún.
-  El motor OSINT corre automáticamente en cada ciclo del scheduler.
-  Espera el próximo ciclo o ejecuta una corrida manual.</p>
-</div>"""
-        return HTMLResponse(_page("Semáforo OSINT", contenido, "semaforo", sesion["username"]))
-
-    sem = osint.get("semaforo", {})
-    nivel = sem.get("nivel_interpretado") or sem.get("nivel") or "—"
-    score = sem.get("score", 0)
-    color = _color_nivel(nivel)
-    vol = osint.get("volumen", {})
-    factores = osint.get("factores_semaforo", {})
-    puntos = osint.get("puntos", [])
-    cobertura = osint.get("cobertura_factores", "?")
-    sin_dato = osint.get("factores_sin_dato", [])
-    procesado = osint.get("procesado_en", "—")
-
-    # ── Tabla de factores ──
-    filas_fact = ""
-    for fk, fd in factores.items():
-        barra_w = int(fd.get("valor", 0) * 100)
-        filas_fact += (
-            f"<tr><td><b>{escape(fk)}</b><br>"
-            f"<span style='font-size:11px;color:var(--muted)'>{escape(fd.get('nombre',''))}</span></td>"
-            f"<td>{fd.get('valor', 0):.3f}</td>"
-            f"<td>{fd.get('peso', 1.0):.1f}</td>"
-            f"<td>{_origen_badge(fd.get('origen','?'))}</td>"
-            f"<td><div style='background:#ddd;border-radius:3px;height:10px;width:100px'>"
-            f"<div style='background:{color};width:{barra_w}px;height:10px;border-radius:3px'></div>"
-            f"</div></td></tr>"
-        )
-
-    # ── Activadores ──
-    act = sem.get("activador_disparado", False)
-    act_tipo = sem.get("activador_tipo") or "—"
-    act_html = (
-        f'<span class="badge badge-alto">DISPARADO ({escape(act_tipo)})</span>'
-        if act else '<span class="badge badge-ok">ninguno</span>'
-    )
-
-    # ── Puntos del reporte ──
-    puntos_html = ""
-    for p in puntos:
-        capa = p.get("capa", "señal")
-        capa_cls = "badge-warn" if capa == "interpretativa" else "badge-ok"
-        advertencia = (
-            f'<div style="color:var(--alto);font-size:11px;margin-top:4px">'
-            f'⚠ {escape(p.get("advertencia",""))}</div>'
-            if p.get("advertencia") else ""
-        )
-        resultado = p.get("resultado")
-        if isinstance(resultado, list):
-            res_html = "<ul style='margin:4px 0 0 16px'>" + "".join(
-                f"<li>{escape(str(r))}</li>" for r in resultado
-            ) + "</ul>"
-        elif isinstance(resultado, dict):
-            res_html = f"<pre style='font-size:11px;overflow:auto'>{escape(json.dumps(resultado, ensure_ascii=False, indent=2))}</pre>"
-        else:
-            res_html = f"<b>{escape(str(resultado))}</b>"
-
-        puntos_html += f"""
-<div style="border-left:3px solid {color if capa=='interpretativa' else '#4A90D9'};
-     padding:8px 12px;margin-bottom:8px;background:var(--card-bg)">
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-    <span style="color:var(--muted);font-size:12px">#{p.get('punto','?')}</span>
-    <b>{escape(p.get('titulo',''))}</b>
-    <span class="badge {capa_cls}">{escape(capa)}</span>
-  </div>
-  {res_html}
-  {advertencia}
-</div>"""
-
-    contenido = f"""
-<div class="card card-accent">
-  <div class="card-title">🚦 Semáforo OSINT — Motor Multiplicativo</div>
-  <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
-    <div style="background:{color};color:#fff;border-radius:12px;
-         padding:18px 32px;font-size:28px;font-weight:bold;text-align:center;min-width:160px">
-      {escape(nivel)}<br>
-      <span style="font-size:14px;opacity:.85">score: {score:.4f}</span>
-    </div>
-    <div>
-      <table class="tbl" style="min-width:260px">
-        <tr><th>Volumen</th><td><b>{escape(vol.get('clase','?'))}</b>
-            — {vol.get('n_bruto',0)} artículos · {vol.get('n_fuentes',0)} fuentes</td></tr>
-        <tr><th>Activadores</th><td>{act_html}</td></tr>
-        <tr><th>Cobertura</th><td>{escape(cobertura)}</td></tr>
-        <tr><th>Factores sin dato</th>
-            <td style="font-size:11px;color:var(--muted)">{escape(', '.join(sin_dato)) or '—'}</td></tr>
-        <tr><th>Fórmula</th><td><code>∏(factor_i ^ peso_i)</code></td></tr>
-        <tr><th>Procesado</th><td style="font-size:11px">{escape(procesado)}</td></tr>
-      </table>
-    </div>
-  </div>
-</div>
-
-<div class="card">
-  <div class="card-title">Factores del semáforo</div>
-  <div style="overflow-x:auto">
-    <table class="tbl">
-      <thead><tr><th>Factor</th><th>Valor</th><th>Peso (exp)</th>
-             <th>Origen</th><th>Visual</th></tr></thead>
-      <tbody>{filas_fact}</tbody>
-    </table>
-  </div>
-  <p style="color:var(--muted);font-size:11px;margin-top:8px">
-    Con peso=1.0: score ≡ VC × PA × CE × IA × V (multiplicación pura).
-    <b>estimado</b> = heurística no verificada · <b>proxy</b> = señal indirecta · <b>real</b> = dato computado.
-  </p>
-</div>
-
-<div class="card">
-  <div class="card-title">Reporte de 10 puntos</div>
-  {puntos_html}
-</div>"""
-
-    return HTMLResponse(_page("Semáforo OSINT", contenido, "semaforo", sesion["username"]))

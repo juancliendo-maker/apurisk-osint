@@ -759,6 +759,90 @@ def cargar_activadores_rojo(db_path: str, pais: str = "PE") -> list:
         return []
 
 
+def cargar_pisos_estructurales(db_path: str, pais: str = "PE") -> dict:
+    """Devuelve {tema: piso} con el piso estructural definido por el analista.
+
+    El eje Y de la Matriz B = max(piso, impacto_base). piso=0 → Y = impacto_base.
+    {} si vacío/falla → el motor usa solo el impacto base de cada tema.
+    """
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT tema, piso FROM config_piso_estructural WHERE pais=?",
+                (pais,),
+            ).fetchall()
+        return {r["tema"]: float(r["piso"]) for r in rows}
+    except Exception as e:
+        print(f"[config_loader] cargar_pisos_estructurales falló: {e}")
+        return {}
+
+
+def actualizar_piso_estructural(db_path: str, tema: str, piso: float,
+                                pais: str = "PE", notas: str = None) -> dict:
+    """Upsert del piso estructural de un tema (0-100). Devuelve {ok, accion}."""
+    piso = max(0.0, min(100.0, float(piso)))
+
+    def _op(c: sqlite3.Connection) -> dict:
+        existe = c.execute(
+            "SELECT id FROM config_piso_estructural WHERE pais=? AND tema=?",
+            (pais, tema),
+        ).fetchone()
+        if existe:
+            c.execute(
+                "UPDATE config_piso_estructural SET piso=?, notas=?, "
+                "actualizado_en=datetime('now') WHERE pais=? AND tema=?",
+                (piso, notas, pais, tema),
+            )
+            return {"ok": True, "accion": "actualizado"}
+        c.execute(
+            "INSERT INTO config_piso_estructural (pais, tema, piso, notas) "
+            "VALUES (?, ?, ?, ?)",
+            (pais, tema, piso, notas),
+        )
+        return {"ok": True, "accion": "creado"}
+
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def cargar_parametros_semaforo(db_path: str) -> dict:
+    """Devuelve los parámetros editables de la Matriz B con defaults seguros.
+
+    Claves: umbral_x, umbral_y, coef_actividad, coef_simultaneidad, bonus_max.
+    Si la BD no responde, devuelve los defaults documentados.
+    """
+    defaults = {
+        "umbral_x": 25.0,
+        "umbral_y": 65.0,
+        "coef_actividad": 8.0,
+        "coef_simultaneidad": 3.5,
+        "bonus_max": 15.0,
+    }
+    mapa = {
+        "SEMAFORO_UMBRAL_ACTIVIDAD_X": "umbral_x",
+        "SEMAFORO_UMBRAL_GRAVEDAD_Y": "umbral_y",
+        "SCORE_B_COEF_ACTIVIDAD": "coef_actividad",
+        "SCORE_B_COEF_SIMULTANEIDAD": "coef_simultaneidad",
+        "SCORE_B_BONUS_MAX": "bonus_max",
+    }
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT clave, valor FROM config_parametros WHERE clave IN "
+                "('SEMAFORO_UMBRAL_ACTIVIDAD_X','SEMAFORO_UMBRAL_GRAVEDAD_Y',"
+                "'SCORE_B_COEF_ACTIVIDAD','SCORE_B_COEF_SIMULTANEIDAD','SCORE_B_BONUS_MAX')",
+            ).fetchall()
+        for r in rows:
+            k = mapa.get(r["clave"])
+            if k:
+                try:
+                    defaults[k] = float(r["valor"])
+                except (TypeError, ValueError):
+                    pass
+    except Exception as e:
+        print(f"[config_loader] cargar_parametros_semaforo falló: {e}")
+    return defaults
+
+
 def guardar_resultado_analisis(db_path: str, articulo_id: int, motor: str,
                                score_sustancia: float = None, score_ruido: float = None,
                                score_semaforo: float = None, nivel_semaforo: str = None,

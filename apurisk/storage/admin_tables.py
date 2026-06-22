@@ -182,6 +182,22 @@ CREATE TABLE IF NOT EXISTS config_activadores_rojo (
 
 CREATE INDEX IF NOT EXISTS idx_activadores_pais ON config_activadores_rojo(pais, activo);
 
+-- Piso estructural de gravedad por tema (editable por analista, por país)
+-- El analista fija un mínimo de gravedad estructural para un tema (0-100).
+-- El eje Y de la Matriz B del semáforo = max(piso_estructural, impacto_base).
+-- piso=0 → la gravedad estructural la define solo el impacto base del tema.
+CREATE TABLE IF NOT EXISTS config_piso_estructural (
+    id              INTEGER PRIMARY KEY,
+    pais            TEXT NOT NULL DEFAULT 'PE',
+    tema            TEXT NOT NULL,
+    piso            REAL NOT NULL DEFAULT 0,    -- 0-100
+    notas           TEXT,
+    actualizado_en  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(pais, tema)
+);
+
+CREATE INDEX IF NOT EXISTS idx_piso_pais ON config_piso_estructural(pais);
+
 -- Resultados de análisis por artículo y por motor
 -- Una sola tabla con campo 'motor' (extensible sin ALTER TABLE).
 -- Unicidad: (articulo_id, motor) — un resultado por motor por artículo.
@@ -319,6 +335,44 @@ _DATOS_INICIALES = [
         "VALUES ('FORMULA_SEMAFORO_TIPO', 'multiplicativa', 'string', "
         "'Fórmula del semáforo: VC x PA x CE x IA x V. Pesos = exponentes. "
         "Un factor en 0 colapsa el resultado.', 'GLOBAL')", []
+    ),
+
+    # ── Piso estructural por tema — seed en 0 (el analista lo edita) ───────────
+    # Y de la Matriz B = max(piso, impacto_base). Con piso=0, Y = impacto_base.
+    *[("INSERT OR IGNORE INTO config_piso_estructural (pais, tema, piso, notas) "
+       f"VALUES ('PE', '{tema}', 0, 'seed inicial — sin piso definido')", [])
+      for tema in [
+          "estabilidad_gobierno", "corrupcion", "conflictos_sociales",
+          "seguridad", "polarizacion", "economico_inversion", "electoral",
+      ]],
+
+    # ── Parámetros editables de la Matriz B del semáforo ──────────────────────
+    # Umbrales de cuadrante (líneas divisorias y cómputo de n_graves_activos)
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SEMAFORO_UMBRAL_ACTIVIDAD_X', '25', 'float', "
+        "'Matriz B: umbral del eje X (actividad) que separa silencioso/activo', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SEMAFORO_UMBRAL_GRAVEDAD_Y', '65', 'float', "
+        "'Matriz B: umbral del eje Y (gravedad estructural) que separa menor/grave', 'GLOBAL')", []
+    ),
+    # Coeficientes del Score Global B (provisionales, calibrables sin tocar código)
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SCORE_B_COEF_ACTIVIDAD', '8', 'float', "
+        "'Score B: máximo agravante por actividad del tema más grave (puntos)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SCORE_B_COEF_SIMULTANEIDAD', '3.5', 'float', "
+        "'Score B: agravante por cada tema grave-y-activo adicional (puntos)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SCORE_B_BONUS_MAX', '15', 'float', "
+        "'Score B: tope del agravante total sobre Y_max (puntos)', 'GLOBAL')", []
     ),
 ]
 
