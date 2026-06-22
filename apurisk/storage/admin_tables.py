@@ -198,6 +198,21 @@ CREATE TABLE IF NOT EXISTS config_piso_estructural (
 
 CREATE INDEX IF NOT EXISTS idx_piso_pais ON config_piso_estructural(pais);
 
+-- Auditoría de cambios de calibración del semáforo (pisos, umbrales, coeficientes)
+-- Estructura idéntica a config_fuentes_log para consistencia.
+CREATE TABLE IF NOT EXISTS config_semaforo_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    campo       TEXT NOT NULL,          -- 'piso:electoral' | 'umbral_x' | 'coef_actividad' …
+    valor_anterior  TEXT,
+    valor_nuevo     TEXT,
+    usuario     TEXT NOT NULL,
+    motivo      TEXT,
+    cambiado_en TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_semaforo_log_campo ON config_semaforo_log(campo);
+CREATE INDEX IF NOT EXISTS idx_semaforo_log_usuario ON config_semaforo_log(usuario);
+
 -- Resultados de análisis por artículo y por motor
 -- Una sola tabla con campo 'motor' (extensible sin ALTER TABLE).
 -- Unicidad: (articulo_id, motor) — un resultado por motor por artículo.

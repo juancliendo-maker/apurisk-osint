@@ -777,31 +777,98 @@ def cargar_pisos_estructurales(db_path: str, pais: str = "PE") -> dict:
         return {}
 
 
+def guardar_log_semaforo(db_path: str, campo: str, valor_anterior,
+                         valor_nuevo, usuario: str, motivo: str = None) -> None:
+    """Registra un cambio de calibración en config_semaforo_log (fire-and-forget)."""
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "INSERT INTO config_semaforo_log (campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (campo, str(valor_anterior) if valor_anterior is not None else None,
+             str(valor_nuevo), usuario, motivo),
+        )
+        return {"ok": True}
+    try:
+        _ejecutar_con_reintentos(db_path, _op)
+    except Exception as e:
+        print(f"[config_loader] guardar_log_semaforo falló (no crítico): {e}")
+
+
 def actualizar_piso_estructural(db_path: str, tema: str, piso: float,
-                                pais: str = "PE", notas: str = None) -> dict:
-    """Upsert del piso estructural de un tema (0-100). Devuelve {ok, accion}."""
+                                usuario: str, pais: str = "PE",
+                                notas: str = None) -> dict:
+    """Upsert del piso estructural de un tema (0-100). Registra en log. Devuelve {ok, accion}."""
     piso = max(0.0, min(100.0, float(piso)))
 
     def _op(c: sqlite3.Connection) -> dict:
-        existe = c.execute(
-            "SELECT id FROM config_piso_estructural WHERE pais=? AND tema=?",
+        row = c.execute(
+            "SELECT id, piso FROM config_piso_estructural WHERE pais=? AND tema=?",
             (pais, tema),
         ).fetchone()
-        if existe:
+        valor_anterior = row["piso"] if row else None
+        if row:
             c.execute(
                 "UPDATE config_piso_estructural SET piso=?, notas=?, "
                 "actualizado_en=datetime('now') WHERE pais=? AND tema=?",
                 (piso, notas, pais, tema),
             )
-            return {"ok": True, "accion": "actualizado"}
-        c.execute(
-            "INSERT INTO config_piso_estructural (pais, tema, piso, notas) "
-            "VALUES (?, ?, ?, ?)",
-            (pais, tema, piso, notas),
-        )
-        return {"ok": True, "accion": "creado"}
+        else:
+            c.execute(
+                "INSERT INTO config_piso_estructural (pais, tema, piso, notas) "
+                "VALUES (?, ?, ?, ?)",
+                (pais, tema, piso, notas),
+            )
+        return {"ok": True, "valor_anterior": valor_anterior}
 
-    return _ejecutar_con_reintentos(db_path, _op)
+    r = _ejecutar_con_reintentos(db_path, _op)
+    guardar_log_semaforo(db_path, f"piso:{tema}", r.get("valor_anterior"), piso,
+                         usuario, notas)
+    return r
+
+
+def actualizar_parametro_semaforo(db_path: str, clave: str, valor: float,
+                                  usuario: str, motivo: str = None) -> dict:
+    """Actualiza un parámetro editable del semáforo en config_parametros.
+
+    Registra el cambio en config_semaforo_log. Devuelve {ok, valor_anterior, valor_nuevo}.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        row = c.execute(
+            "SELECT valor FROM config_parametros WHERE clave=?", (clave,)
+        ).fetchone()
+        valor_anterior = row["valor"] if row else None
+        if row:
+            c.execute(
+                "UPDATE config_parametros SET valor=? WHERE clave=?",
+                (str(valor), clave),
+            )
+        else:
+            c.execute(
+                "INSERT INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+                "VALUES (?, ?, 'float', 'Parámetro del semáforo', 'GLOBAL')",
+                (clave, str(valor)),
+            )
+        return {"ok": True, "valor_anterior": valor_anterior, "valor_nuevo": str(valor)}
+
+    r = _ejecutar_con_reintentos(db_path, _op)
+    guardar_log_semaforo(db_path, clave, r.get("valor_anterior"), r["valor_nuevo"],
+                         usuario, motivo)
+    return r
+
+
+def listar_log_semaforo(db_path: str, limite: int = 100) -> list:
+    """Devuelve las últimas entradas del log de calibración del semáforo."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT campo, valor_anterior, valor_nuevo, usuario, motivo, cambiado_en "
+                "FROM config_semaforo_log ORDER BY id DESC LIMIT ?",
+                (limite,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_log_semaforo falló: {e}")
+        return []
 
 
 def cargar_parametros_semaforo(db_path: str) -> dict:
