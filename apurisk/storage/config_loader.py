@@ -1306,6 +1306,87 @@ def propagar_nivel_base(db_path: str, nivel: str, valor_nuevo: float,
     return _ejecutar_con_reintentos(db_path, _op)
 
 
+def cargar_pa_por_tema(db_path: str, pais: str = "PE") -> dict:
+    """Calcula PA_tema desde los actores activos vinculados a cada tema.
+
+    Fórmula:
+      PA_tema = peso_mayor + min(TOPE_BONUS, FACTOR_AGRAVANTE × n_adicionales)
+      donde:
+        peso_mayor   = max(peso_calculado) de actores activos vinculados al tema
+        actores_fuertes = actores con peso_calculado >= UMBRAL_ACTOR_FUERTE
+        n_adicionales   = len(actores_fuertes) - 1
+
+    Devuelve {tema: {pa, origen, peso_mayor, actor_principal, actores_fuertes,
+                     n_actores, n_adicionales, bonus}}.
+    Temas sin actores vinculados NO aparecen en el dict (el caller usa fallback).
+    """
+    umbral = 70.0
+    factor = 3.0
+    tope   = 10.0
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT clave, valor FROM config_parametros "
+                "WHERE clave IN ('UMBRAL_ACTOR_FUERTE','FACTOR_AGRAVANTE','TOPE_BONUS')"
+            ).fetchall()
+        for r in rows:
+            try:
+                val = float(r["valor"])
+                if r["clave"] == "UMBRAL_ACTOR_FUERTE":
+                    umbral = val
+                elif r["clave"] == "FACTOR_AGRAVANTE":
+                    factor = val
+                elif r["clave"] == "TOPE_BONUS":
+                    tope = val
+            except (TypeError, ValueError):
+                pass
+    except Exception as e:
+        print(f"[config_loader] cargar_pa_por_tema: fallo al leer params: {e}")
+
+    resultado: dict = {}
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT t.tema, a.nombre, a.peso_calculado "
+                "FROM config_actor_temas t "
+                "JOIN config_actores a ON a.id = t.actor_id "
+                "WHERE a.activo = 1 AND a.pais = ? "
+                "ORDER BY t.tema, a.peso_calculado DESC",
+                (pais,),
+            ).fetchall()
+
+        por_tema: dict[str, list] = {}
+        for r in rows:
+            tema = r["tema"]
+            if tema not in por_tema:
+                por_tema[tema] = []
+            por_tema[tema].append({
+                "nombre": r["nombre"],
+                "peso": round(float(r["peso_calculado"]), 1),
+            })
+
+        for tema, actores in por_tema.items():
+            peso_mayor = actores[0]["peso"]
+            actores_fuertes = [a for a in actores if a["peso"] >= umbral]
+            n_adicionales = max(0, len(actores_fuertes) - 1)
+            bonus = round(min(tope, factor * n_adicionales), 1)
+            pa = round(min(100.0, peso_mayor + bonus), 1)
+            resultado[tema] = {
+                "pa": pa,
+                "origen": "real",
+                "peso_mayor": peso_mayor,
+                "actor_principal": actores[0]["nombre"],
+                "actores_fuertes": actores_fuertes,
+                "n_actores": len(actores),
+                "n_adicionales": n_adicionales,
+                "bonus": bonus,
+            }
+    except Exception as e:
+        print(f"[config_loader] cargar_pa_por_tema: fallo al calcular: {e}")
+
+    return resultado
+
+
 def listar_log_actores(db_path: str, actor_id: int = None,
                        limite: int = 100) -> list:
     """Devuelve el log de cambios de actores, filtrado por actor_id si se provee."""
