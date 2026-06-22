@@ -964,3 +964,365 @@ def listar_resultados_articulo(db_path: str, articulo_id: int) -> list:
     except Exception as e:
         print(f"[config_loader] listar_resultados_articulo falló: {e}")
         return []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Registro de actores — Capas 1 y 2
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Niveles estratégicos: código → (nombre, valor_base_default)
+NIVELES_ACTOR = {
+    "I":    ("Estructural",  95),
+    "II":   ("Sistémico",    85),
+    "III":  ("Determinante", 72),
+    "IV":   ("Relevante",    60),
+    "V":    ("Incidente",    48),
+    "VI":   ("Emergente",    36),
+    "VII":  ("Latente",      24),
+    "VIII": ("Periférico",   12),
+}
+
+TIPOS_ACTOR = ("formal", "fáctico", "territorial", "informal")
+
+
+def calcular_peso_actor(nivel_base: float, crits: dict) -> tuple[float, float]:
+    """Calcula (capacidad_efectiva, peso_calculado) a partir del nivel_base y los 6 criterios.
+
+    crits: {decision, recursos, articulacion, legitimidad, resiliencia, proyeccion}
+    Fórmula: cap = [(d+r+a)×2 + (l+rs+p)] / 45
+             peso = nivel_base × (0.5 + 0.5 × cap)
+    """
+    d  = max(1, min(5, int(crits.get("decision",    3))))
+    r  = max(1, min(5, int(crits.get("recursos",    3))))
+    a  = max(1, min(5, int(crits.get("articulacion",3))))
+    l  = max(1, min(5, int(crits.get("legitimidad", 3))))
+    rs = max(1, min(5, int(crits.get("resiliencia", 3))))
+    p  = max(1, min(5, int(crits.get("proyeccion",  3))))
+    cap = ((d + r + a) * 2 + (l + rs + p)) / 45.0
+    peso = nivel_base * (0.5 + 0.5 * cap)
+    return round(cap, 4), round(peso, 1)
+
+
+def cargar_niveles_base(db_path: str) -> dict:
+    """Devuelve {nivel: valor_base} leyendo config_parametros. Usa defaults si falla."""
+    defaults = {k: float(v) for k, (_, v) in NIVELES_ACTOR.items()}
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT clave, valor FROM config_parametros "
+                "WHERE clave LIKE 'ACTOR_NIVEL_%_BASE'"
+            ).fetchall()
+        for r in rows:
+            # clave = 'ACTOR_NIVEL_II_BASE' → nivel = 'II'
+            partes = r["clave"].split("_")
+            if len(partes) == 4:
+                nivel = partes[2]
+                if nivel in defaults:
+                    try:
+                        defaults[nivel] = float(r["valor"])
+                    except (TypeError, ValueError):
+                        pass
+    except Exception as e:
+        print(f"[config_loader] cargar_niveles_base falló: {e}")
+    return defaults
+
+
+def crear_actor(db_path: str, datos: dict, usuario: str) -> dict:
+    """Inserta un nuevo actor. Calcula y persiste peso_calculado. Devuelve {ok, id}."""
+    niveles = cargar_niveles_base(db_path)
+    nivel = datos.get("nivel", "IV")
+    nivel_base = float(datos.get("nivel_base", niveles.get(nivel, 60)))
+    nivel_base_manual = int(bool(datos.get("nivel_base_manual", False)))
+    crits = {
+        "decision": datos.get("crit_decision", 3),
+        "recursos": datos.get("crit_recursos", 3),
+        "articulacion": datos.get("crit_articulacion", 3),
+        "legitimidad": datos.get("crit_legitimidad", 3),
+        "resiliencia": datos.get("crit_resiliencia", 3),
+        "proyeccion": datos.get("crit_proyeccion", 3),
+    }
+    cap, peso = calcular_peso_actor(nivel_base, crits)
+
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "INSERT INTO config_actores "
+            "(pais, nombre, tipo, nivel, nivel_base, nivel_base_manual, "
+            "crit_decision, crit_recursos, crit_articulacion, "
+            "crit_legitimidad, crit_resiliencia, crit_proyeccion, "
+            "capacidad_efectiva, peso_calculado, territorio, activo, notas_analista) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (datos.get("pais", "PE"), datos["nombre"].strip(),
+             datos.get("tipo", "formal"), nivel, nivel_base, nivel_base_manual,
+             crits["decision"], crits["recursos"], crits["articulacion"],
+             crits["legitimidad"], crits["resiliencia"], crits["proyeccion"],
+             cap, peso,
+             datos.get("territorio", "nacional"), 1,
+             datos.get("notas_analista") or None),
+        )
+        actor_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        # Temas relacionados
+        for tema in datos.get("temas", []):
+            c.execute(
+                "INSERT OR IGNORE INTO config_actor_temas (actor_id, tema, pais) VALUES (?,?,?)",
+                (actor_id, tema, datos.get("pais", "PE")),
+            )
+        c.execute(
+            "INSERT INTO config_actores_log "
+            "(actor_id, actor_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "VALUES (?,?,'creado',NULL,?,?,?)",
+            (actor_id, datos["nombre"].strip(),
+             f"peso={peso}", usuario, "creación"),
+        )
+        return {"ok": True, "id": actor_id}
+
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def obtener_actor(db_path: str, actor_id: int) -> dict | None:
+    """Devuelve el dict completo de un actor + su lista de temas. None si no existe."""
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                "SELECT * FROM config_actores WHERE id=?", (actor_id,)
+            ).fetchone()
+            if not row:
+                return None
+            actor = dict(row)
+            temas = c.execute(
+                "SELECT tema FROM config_actor_temas WHERE actor_id=? ORDER BY tema",
+                (actor_id,),
+            ).fetchall()
+            actor["temas"] = [t["tema"] for t in temas]
+        return actor
+    except Exception as e:
+        print(f"[config_loader] obtener_actor falló: {e}")
+        return None
+
+
+def listar_actores(db_path: str, pais: str = "PE",
+                   solo_activos: bool = False) -> list:
+    """Devuelve lista de actores ordenada por peso DESC, con sus temas."""
+    try:
+        filtro = "WHERE a.pais=?" + (" AND a.activo=1" if solo_activos else "")
+        with _conn(db_path) as c:
+            rows = c.execute(
+                f"SELECT a.*, GROUP_CONCAT(t.tema, ',') as temas_str "
+                f"FROM config_actores a "
+                f"LEFT JOIN config_actor_temas t ON t.actor_id=a.id "
+                f"{filtro} "
+                f"GROUP BY a.id ORDER BY a.peso_calculado DESC",
+                (pais,),
+            ).fetchall()
+        result = []
+        for r in rows:
+            a = dict(r)
+            ts = a.pop("temas_str", "") or ""
+            a["temas"] = [t for t in ts.split(",") if t]
+            result.append(a)
+        return result
+    except Exception as e:
+        print(f"[config_loader] listar_actores falló: {e}")
+        return []
+
+
+def actualizar_actor(db_path: str, actor_id: int, datos: dict,
+                     usuario: str, motivo: str = None) -> dict:
+    """Actualiza campos de un actor, recalcula peso, registra cambios en log.
+
+    Devuelve {ok, peso_nuevo, cap_nueva}.
+    """
+    niveles = cargar_niveles_base(db_path)
+
+    def _op(c: sqlite3.Connection) -> dict:
+        old = c.execute("SELECT * FROM config_actores WHERE id=?", (actor_id,)).fetchone()
+        if not old:
+            raise ValueError(f"Actor {actor_id} no existe")
+        old = dict(old)
+
+        nivel = datos.get("nivel", old["nivel"])
+        # nivel_base: usa el del formulario si viene; si no, hereda el del actor
+        if "nivel_base" in datos and datos.get("nivel_base_manual"):
+            nivel_base = float(datos["nivel_base"])
+            nivel_base_manual = 1
+        elif "nivel_base" in datos and not datos.get("nivel_base_manual"):
+            nivel_base = float(datos["nivel_base"])
+            nivel_base_manual = 0
+        else:
+            nivel_base = old["nivel_base"]
+            nivel_base_manual = old["nivel_base_manual"]
+
+        crits = {
+            "decision":    int(datos.get("crit_decision",    old["crit_decision"])),
+            "recursos":    int(datos.get("crit_recursos",    old["crit_recursos"])),
+            "articulacion":int(datos.get("crit_articulacion",old["crit_articulacion"])),
+            "legitimidad": int(datos.get("crit_legitimidad", old["crit_legitimidad"])),
+            "resiliencia": int(datos.get("crit_resiliencia", old["crit_resiliencia"])),
+            "proyeccion":  int(datos.get("crit_proyeccion",  old["crit_proyeccion"])),
+        }
+        cap, peso = calcular_peso_actor(nivel_base, crits)
+
+        c.execute(
+            "UPDATE config_actores SET "
+            "nombre=?, tipo=?, nivel=?, nivel_base=?, nivel_base_manual=?, "
+            "crit_decision=?, crit_recursos=?, crit_articulacion=?, "
+            "crit_legitimidad=?, crit_resiliencia=?, crit_proyeccion=?, "
+            "capacidad_efectiva=?, peso_calculado=?, territorio=?, "
+            "notas_analista=?, actualizado_en=datetime('now') WHERE id=?",
+            (datos.get("nombre", old["nombre"]).strip(),
+             datos.get("tipo", old["tipo"]),
+             nivel, nivel_base, nivel_base_manual,
+             crits["decision"], crits["recursos"], crits["articulacion"],
+             crits["legitimidad"], crits["resiliencia"], crits["proyeccion"],
+             cap, peso,
+             datos.get("territorio", old["territorio"]),
+             datos.get("notas_analista", old["notas_analista"]) or None,
+             actor_id),
+        )
+        # Actualizar temas si vienen en datos
+        if "temas" in datos:
+            c.execute("DELETE FROM config_actor_temas WHERE actor_id=?", (actor_id,))
+            for tema in datos["temas"]:
+                c.execute(
+                    "INSERT OR IGNORE INTO config_actor_temas (actor_id, tema, pais) "
+                    "VALUES (?,?,?)",
+                    (actor_id, tema, datos.get("pais", old["pais"])),
+                )
+        # Log: registra campo por campo solo los que cambiaron
+        cambios = []
+        for campo_log, v_old, v_new in [
+            ("nivel",        old["nivel"],        nivel),
+            ("nivel_base",   old["nivel_base"],   nivel_base),
+            ("crit_decision",old["crit_decision"],crits["decision"]),
+            ("crit_recursos",old["crit_recursos"],crits["recursos"]),
+            ("crit_articulacion",old["crit_articulacion"],crits["articulacion"]),
+            ("crit_legitimidad",old["crit_legitimidad"],crits["legitimidad"]),
+            ("crit_resiliencia",old["crit_resiliencia"],crits["resiliencia"]),
+            ("crit_proyeccion",old["crit_proyeccion"],crits["proyeccion"]),
+            ("peso_calculado",old["peso_calculado"],peso),
+        ]:
+            if str(v_old) != str(v_new):
+                cambios.append((campo_log, str(v_old), str(v_new)))
+        for campo_log, va, vn in cambios:
+            c.execute(
+                "INSERT INTO config_actores_log "
+                "(actor_id, actor_nombre, campo, valor_anterior, valor_nuevo, "
+                "usuario, motivo) VALUES (?,?,?,?,?,?,?)",
+                (actor_id, old["nombre"], campo_log, va, vn, usuario, motivo),
+            )
+        return {"ok": True, "peso_nuevo": peso, "cap_nueva": cap,
+                "n_cambios": len(cambios)}
+
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def toggle_actor(db_path: str, actor_id: int, usuario: str) -> dict:
+    """Activa o desactiva un actor. Devuelve {ok, activo_nuevo}."""
+    def _op(c: sqlite3.Connection) -> dict:
+        row = c.execute(
+            "SELECT activo, nombre FROM config_actores WHERE id=?", (actor_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Actor {actor_id} no existe")
+        nuevo = 1 - row["activo"]
+        c.execute(
+            "UPDATE config_actores SET activo=?, actualizado_en=datetime('now') WHERE id=?",
+            (nuevo, actor_id),
+        )
+        c.execute(
+            "INSERT INTO config_actores_log "
+            "(actor_id, actor_nombre, campo, valor_anterior, valor_nuevo, usuario) "
+            "VALUES (?,?,'activo',?,?,?)",
+            (actor_id, row["nombre"], str(row["activo"]), str(nuevo), usuario),
+        )
+        return {"ok": True, "activo_nuevo": nuevo}
+
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def propagar_nivel_base(db_path: str, nivel: str, valor_nuevo: float,
+                        usuario: str, motivo: str = None) -> dict:
+    """Actualiza nivel_base en config_parametros y propaga a todos los actores del nivel
+    que NO tengan nivel_base_manual=1. Recalcula peso_calculado de cada uno.
+    Registra un log por actor afectado. Devuelve {ok, n_afectados, valor_anterior}.
+    """
+    clave = f"ACTOR_NIVEL_{nivel}_BASE"
+
+    def _op(c: sqlite3.Connection) -> dict:
+        row = c.execute("SELECT valor FROM config_parametros WHERE clave=?",
+                        (clave,)).fetchone()
+        valor_anterior = float(row["valor"]) if row else None
+        # Actualizar parámetro
+        if row:
+            c.execute("UPDATE config_parametros SET valor=? WHERE clave=?",
+                      (str(valor_nuevo), clave))
+        else:
+            c.execute(
+                "INSERT INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+                "VALUES (?,?,'float','Valor base de nivel actor','GLOBAL')",
+                (clave, str(valor_nuevo)),
+            )
+        # Propagar a actores del nivel que no tienen ajuste manual
+        actores = c.execute(
+            "SELECT id, nombre, crit_decision, crit_recursos, crit_articulacion, "
+            "crit_legitimidad, crit_resiliencia, crit_proyeccion "
+            "FROM config_actores WHERE nivel=? AND nivel_base_manual=0 AND activo=1",
+            (nivel,),
+        ).fetchall()
+        for a in actores:
+            crits = {
+                "decision":     a["crit_decision"],
+                "recursos":     a["crit_recursos"],
+                "articulacion": a["crit_articulacion"],
+                "legitimidad":  a["crit_legitimidad"],
+                "resiliencia":  a["crit_resiliencia"],
+                "proyeccion":   a["crit_proyeccion"],
+            }
+            cap, peso = calcular_peso_actor(valor_nuevo, crits)
+            old_peso = c.execute(
+                "SELECT peso_calculado FROM config_actores WHERE id=?", (a["id"],)
+            ).fetchone()["peso_calculado"]
+            c.execute(
+                "UPDATE config_actores SET nivel_base=?, capacidad_efectiva=?, "
+                "peso_calculado=?, actualizado_en=datetime('now') WHERE id=?",
+                (valor_nuevo, cap, peso, a["id"]),
+            )
+            c.execute(
+                "INSERT INTO config_actores_log "
+                "(actor_id, actor_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+                "VALUES (?,?,'nivel_base',?,?,?,?)",
+                (a["id"], a["nombre"], str(valor_anterior), str(valor_nuevo),
+                 usuario, f"propagación nivel {nivel}: {motivo or 'cambio de parámetro'}"),
+            )
+            c.execute(
+                "INSERT INTO config_actores_log "
+                "(actor_id, actor_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+                "VALUES (?,?,'peso_calculado',?,?,?,?)",
+                (a["id"], a["nombre"], str(old_peso), str(peso),
+                 usuario, f"recálculo por propagación nivel {nivel}"),
+            )
+        return {"ok": True, "n_afectados": len(actores),
+                "valor_anterior": valor_anterior, "valor_nuevo": valor_nuevo}
+
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def listar_log_actores(db_path: str, actor_id: int = None,
+                       limite: int = 100) -> list:
+    """Devuelve el log de cambios de actores, filtrado por actor_id si se provee."""
+    try:
+        with _conn(db_path) as c:
+            if actor_id:
+                rows = c.execute(
+                    "SELECT * FROM config_actores_log WHERE actor_id=? "
+                    "ORDER BY id DESC LIMIT ?",
+                    (actor_id, limite),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT * FROM config_actores_log ORDER BY id DESC LIMIT ?",
+                    (limite,),
+                ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_log_actores falló: {e}")
+        return []
