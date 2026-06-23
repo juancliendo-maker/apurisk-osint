@@ -1732,9 +1732,14 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     puntos = {p["punto"]: p for p in osint.get("puntos", [])}
     factores_sem = osint.get("factores_semaforo", {})
 
-    # Conteos por tema (punto 2 del reporte)
+    # Conteos por tema — preferimos la ventana deslizante 7D si está disponible.
+    # temas_7d_conteos se calcula en _guardar() de main.py con rolling 7D desde BD.
+    # Fallback al punto 2 del ciclo actual (comportamiento anterior) si no existe.
     p2 = puntos.get(2, {})
-    detalle_temas = p2.get("detalle", {})  # {tema: conteo}
+    conteos_ciclo = p2.get("detalle", {})           # {tema: conteo} — solo ciclo actual
+    conteos_7d = osint.get("temas_7d_conteos", {})  # {tema: conteo} — ventana 7D rolling
+    detalle_temas = conteos_7d if conteos_7d else conteos_ciclo
+    usando_7d = bool(conteos_7d)
     total_menciones = max(1, sum(detalle_temas.values()))
     entidad_top_por_tema = p2.get("entidad_top_por_tema", {})  # {tema: {entidad, menciones}}
 
@@ -1752,10 +1757,8 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     forigen = {k: v.get("origen", "proxy") for k, v in factores_sem.items()}
     fpeso = {k: float(v.get("peso", 1.0)) for k, v in factores_sem.items()}
 
-    # Actividad del tema = proporción REAL del volumen (% de menciones), sin
-    # amplificador. Un tema con 35% de menciones marca 35, no 100. Honesto y
-    # comparable entre semanas. El "acercamiento" visual lo hace el eje dinámico,
-    # no el dato. Mismo cálculo que el eje X de la Matriz A → ejes comparables.
+    # Actividad del tema = % del volumen total de la ventana activa (7D o ciclo).
+    # Con ventana 7D: mismo criterio que la P×I del dashboard — comparable entre matrices.
     def _actividad(menciones: int) -> float:
         return round((menciones / total_menciones) * 100, 1)
 
@@ -1932,6 +1935,8 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         "factores_globales": {k: {"valor": fval.get(k, 0), "origen": forigen.get(k, "proxy"),
                                    "peso": fpeso.get(k, 1.0)} for k in ["VC","PA","CE","IA","V"]},
         "pa_por_tema": pa_por_tema,
+        "usando_7d": usando_7d,
+        "total_menciones_7d": total_menciones if usando_7d else 0,
     }
 
 
@@ -2186,8 +2191,10 @@ async def admin_semaforo(request: Request):
     umbral_x     = md["umbral_x"]
     umbral_y     = md["umbral_y"]
     x_max_viz    = md["x_max_viz"]
-    cuadrantes_b = md["cuadrantes_b"]
-    pa_por_tema  = md["pa_por_tema"]
+    cuadrantes_b      = md["cuadrantes_b"]
+    pa_por_tema       = md["pa_por_tema"]
+    usando_7d         = md["usando_7d"]
+    total_menc_7d     = md["total_menciones_7d"]
 
     # ── Metadatos generales ──────────────────────────────────────────────────
     sem = osint.get("semaforo", {})
@@ -2422,8 +2429,8 @@ async def admin_semaforo(request: Request):
       {_score_chip(score_a, nivel_a)}
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
         Score = Σ(score_tema × % volumen)<br>
-        X = frecuencia · Y = impacto político<br>
-        Radio = menciones absolutas
+        X = {'% del volumen 7 días (rolling)' if usando_7d else '% del volumen del ciclo'} · Y = impacto político<br>
+        Radio = menciones {'7D' if usando_7d else 'del ciclo'} · {'<b style="color:#4ade80">ventana 7D activa</b> · ' + str(total_menc_7d) + ' artículos' if usando_7d else '<span style="color:#f59e0b">ventana 7D no disponible — usando ciclo actual</span>'}
       </div>
     </div>
     {matriz_a_html}
@@ -2437,11 +2444,9 @@ async def admin_semaforo(request: Request):
       {_score_chip(score_b, nivel_b)}
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
         Score B = {escape(formula_b)}<br>
-        X = % real del volumen · Y = max(piso, PA_tema)<br>
+        X = {'% del volumen 7 días (rolling)' if usando_7d else '% del volumen del ciclo'} · Y = max(piso, PA_tema)<br>
         PA_tema: desde actores reales o impacto base si no hay actores<br>
-        Radio = volumen de menciones<br>
-        Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g} ·
-        eje X 0→{x_max_viz:g}
+        Radio = menciones · Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g} · eje X 0→{x_max_viz:g}
       </div>
     </div>
     {matriz_b_html}
@@ -2451,6 +2456,7 @@ async def admin_semaforo(request: Request):
       el tema estructuralmente más grave, esté silencioso o no. El cuadrante
       <b>GRAVE PERO SILENCIOSO</b> (arriba-izquierda) es la prioridad de inteligencia:
       temas estructuralmente graves que aún no están en la agenda.
+      {'La actividad (eje X) usa la <b>ventana deslizante 7 días</b> — mismo criterio que la Matriz P×I del dashboard.' if usando_7d else ''}
     </p>
   </div>
 

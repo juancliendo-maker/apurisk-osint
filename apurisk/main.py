@@ -560,6 +560,52 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
     acled_events = data.get("acled_events", [])
     crimen_items = data.get("crimen_items", [])
 
+    # ── Conteos de temas últimos 7 días (ventana deslizante) ─────────────────
+    # Se calculan ANTES de archivar para que el snapshot los incluya.
+    # Usa la BD de archive para leer artículos publicados/capturados en los
+    # últimos 7 días exactos desde el momento actual (rolling, no corte fijo).
+    _temas_7d_conteos: dict = {}
+    try:
+        from datetime import timedelta as _td7
+        _db_7d = out_dir / "apurisk_archive.db"
+        if _db_7d.exists():
+            import sqlite3 as _sq7
+            _cutoff_7d = (now_pe() - _td7(days=7)).isoformat(timespec="seconds")
+            with _sq7.connect(str(_db_7d)) as _c7:
+                _rows7 = _c7.execute(
+                    "SELECT title, summary FROM articulos "
+                    "WHERE capturado_en >= ? OR published >= ?",
+                    (_cutoff_7d, _cutoff_7d),
+                ).fetchall()
+            if _rows7:
+                try:
+                    from .analyzers.topics import detectar_temas as _dt7
+                except ImportError:
+                    from apurisk.analyzers.topics import detectar_temas as _dt7
+
+                class _FakeArt:
+                    __slots__ = ("title", "summary")
+                    def __init__(self, t, s):
+                        self.title = t or ""
+                        self.summary = s or ""
+
+                _arts7 = [_FakeArt(r[0], r[1]) for r in _rows7]
+                _temas_7d_conteos = _dt7(_arts7).get("conteos", {})
+                _n7 = len(_arts7)
+                print(f"  · Temas 7D: {_n7} artículos desde {_cutoff_7d[:16]} → conteos={_temas_7d_conteos}")
+            else:
+                print(f"  · Temas 7D: sin artículos en BD desde {_cutoff_7d[:16]} — usando ciclo actual")
+        else:
+            print("  · Temas 7D: BD no existe aún — usando ciclo actual")
+    except Exception as _e7d:
+        print(f"  · [warn] Temas 7D falló: {type(_e7d).__name__}: {_e7d}")
+
+    # Inyectar conteos 7D en el resultado del motor OSINT antes de serializar
+    _osint_motor = an.get("osint_motor")
+    if _osint_motor and _temas_7d_conteos:
+        _osint_motor = dict(_osint_motor)
+        _osint_motor["temas_7d_conteos"] = _temas_7d_conteos
+
     # Snapshot JSON
     snapshot = {
         "generado": now_pe_iso(),
@@ -581,7 +627,8 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
         # Disponible siempre, motor activo se indica en riesgo.motor ("v1" | "v2").
         "score_v2_completo": an.get("score_v2_completo"),
         # Motor OSINT con semáforo multiplicativo (Fase C).
-        "osint_motor": an.get("osint_motor"),
+        # Incluye temas_7d_conteos (ventana deslizante 7 días desde BD).
+        "osint_motor": _osint_motor,
         "articulos": [a.to_dict() for a in data["todos"]],
         "conflictos": [c.to_dict() for c in data["conflictos"]],
         "proyectos": [p.to_dict() for p in data["proyectos"]],
