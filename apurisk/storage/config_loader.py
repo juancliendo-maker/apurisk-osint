@@ -884,6 +884,11 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
         "coef_simultaneidad": 3.5,
         "bonus_max": 15.0,
         "x_max_viz": 0.0,   # 0 = escala dinámica del eje X (máximo real + margen)
+        # Urgencia por velocidad + Score "temperatura del momento"
+        "vel_urgente": 30.0,
+        "vel_prioritario": 10.0,
+        "piso_gravedad": 65.0,
+        "urgencia_ref": 50.0,
     }
     mapa = {
         "SEMAFORO_UMBRAL_ACTIVIDAD_X": "umbral_x",
@@ -892,6 +897,10 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
         "SCORE_B_COEF_SIMULTANEIDAD": "coef_simultaneidad",
         "SCORE_B_BONUS_MAX": "bonus_max",
         "SEMAFORO_X_MAX_VIZ": "x_max_viz",
+        "SEMAFORO_VELOCIDAD_URGENTE": "vel_urgente",
+        "SEMAFORO_VELOCIDAD_PRIORITARIO": "vel_prioritario",
+        "SCORE_B_PISO_GRAVEDAD": "piso_gravedad",
+        "SCORE_B_URGENCIA_REF": "urgencia_ref",
     }
     try:
         with _conn(db_path) as c:
@@ -899,7 +908,8 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
                 "SELECT clave, valor FROM config_parametros WHERE clave IN "
                 "('SEMAFORO_UMBRAL_ACTIVIDAD_X','SEMAFORO_UMBRAL_GRAVEDAD_Y',"
                 "'SCORE_B_COEF_ACTIVIDAD','SCORE_B_COEF_SIMULTANEIDAD','SCORE_B_BONUS_MAX',"
-                "'SEMAFORO_X_MAX_VIZ')",
+                "'SEMAFORO_X_MAX_VIZ','SEMAFORO_VELOCIDAD_URGENTE','SEMAFORO_VELOCIDAD_PRIORITARIO',"
+                "'SCORE_B_PISO_GRAVEDAD','SCORE_B_URGENCIA_REF')",
             ).fetchall()
         for r in rows:
             k = mapa.get(r["clave"])

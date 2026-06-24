@@ -560,51 +560,71 @@ def reportar(data: dict, an: dict, config: dict, modo: str, refresh_seconds: int
     acled_events = data.get("acled_events", [])
     crimen_items = data.get("crimen_items", [])
 
-    # ── Conteos de temas últimos 7 días (ventana deslizante) ─────────────────
+    # ── Conteos de temas: ventana reciente (0-7d) y previa (7-14d) ───────────
     # Se calculan ANTES de archivar para que el snapshot los incluya.
-    # Usa la BD de archive para leer artículos publicados/capturados en los
-    # últimos 7 días exactos desde el momento actual (rolling, no corte fijo).
+    # · temas_7d_conteos     → ventana deslizante 0-7 días (actividad actual, eje X)
+    # · temas_prev7d_conteos → ventana deslizante 7-14 días (para velocidad/urgencia)
+    # Ambas rolling desde el momento exacto del ciclo (no corte de calendario).
     _temas_7d_conteos: dict = {}
+    _temas_prev7d_conteos: dict = {}
     try:
         from datetime import timedelta as _td7
         _db_7d = out_dir / "apurisk_archive.db"
         if _db_7d.exists():
             import sqlite3 as _sq7
-            _cutoff_7d = (now_pe() - _td7(days=7)).isoformat(timespec="seconds")
+            _ahora7 = now_pe()
+            _cutoff_7d  = (_ahora7 - _td7(days=7)).isoformat(timespec="seconds")
+            _cutoff_14d = (_ahora7 - _td7(days=14)).isoformat(timespec="seconds")
+
+            try:
+                from .analyzers.topics import detectar_temas as _dt7
+            except ImportError:
+                from apurisk.analyzers.topics import detectar_temas as _dt7
+
+            class _FakeArt:
+                __slots__ = ("title", "summary")
+                def __init__(self, t, s):
+                    self.title = t or ""
+                    self.summary = s or ""
+
             with _sq7.connect(str(_db_7d)) as _c7:
+                # Ventana reciente 0-7d
                 _rows7 = _c7.execute(
                     "SELECT title, summary FROM articulos "
                     "WHERE capturado_en >= ? OR published >= ?",
                     (_cutoff_7d, _cutoff_7d),
                 ).fetchall()
+                # Ventana previa 7-14d (entre 14d y 7d atrás)
+                _rows_prev = _c7.execute(
+                    "SELECT title, summary FROM articulos "
+                    "WHERE (capturado_en >= ? AND capturado_en < ?) "
+                    "   OR (published >= ? AND published < ?)",
+                    (_cutoff_14d, _cutoff_7d, _cutoff_14d, _cutoff_7d),
+                ).fetchall()
+
             if _rows7:
-                try:
-                    from .analyzers.topics import detectar_temas as _dt7
-                except ImportError:
-                    from apurisk.analyzers.topics import detectar_temas as _dt7
-
-                class _FakeArt:
-                    __slots__ = ("title", "summary")
-                    def __init__(self, t, s):
-                        self.title = t or ""
-                        self.summary = s or ""
-
-                _arts7 = [_FakeArt(r[0], r[1]) for r in _rows7]
-                _temas_7d_conteos = _dt7(_arts7).get("conteos", {})
-                _n7 = len(_arts7)
-                print(f"  · Temas 7D: {_n7} artículos desde {_cutoff_7d[:16]} → conteos={_temas_7d_conteos}")
+                _temas_7d_conteos = _dt7([_FakeArt(r[0], r[1]) for r in _rows7]).get("conteos", {})
+                print(f"  · Temas 7D (0-7d): {len(_rows7)} artículos desde {_cutoff_7d[:16]} → {_temas_7d_conteos}")
             else:
-                print(f"  · Temas 7D: sin artículos en BD desde {_cutoff_7d[:16]} — usando ciclo actual")
+                print(f"  · Temas 7D: sin artículos desde {_cutoff_7d[:16]} — usando ciclo actual")
+            if _rows_prev:
+                _temas_prev7d_conteos = _dt7([_FakeArt(r[0], r[1]) for r in _rows_prev]).get("conteos", {})
+                print(f"  · Temas previa (7-14d): {len(_rows_prev)} artículos → {_temas_prev7d_conteos}")
+            else:
+                print("  · Temas previa (7-14d): sin artículos — velocidad arrancará en 0")
         else:
             print("  · Temas 7D: BD no existe aún — usando ciclo actual")
     except Exception as _e7d:
-        print(f"  · [warn] Temas 7D falló: {type(_e7d).__name__}: {_e7d}")
+        print(f"  · [warn] Temas 7D/previa falló: {type(_e7d).__name__}: {_e7d}")
 
-    # Inyectar conteos 7D en el resultado del motor OSINT antes de serializar
+    # Inyectar conteos de ambas ventanas en el resultado del motor OSINT
     _osint_motor = an.get("osint_motor")
-    if _osint_motor and _temas_7d_conteos:
+    if _osint_motor and (_temas_7d_conteos or _temas_prev7d_conteos):
         _osint_motor = dict(_osint_motor)
-        _osint_motor["temas_7d_conteos"] = _temas_7d_conteos
+        if _temas_7d_conteos:
+            _osint_motor["temas_7d_conteos"] = _temas_7d_conteos
+        if _temas_prev7d_conteos:
+            _osint_motor["temas_prev7d_conteos"] = _temas_prev7d_conteos
 
     # Snapshot JSON
     snapshot = {
