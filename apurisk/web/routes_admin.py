@@ -1762,6 +1762,38 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     def _actividad(menciones: int) -> float:
         return round((menciones / total_menciones) * 100, 1)
 
+    # ── Velocidad por tema: %actividad(0-7d) − %actividad(7-14d) ──────────────
+    # Mide si el tema gana cuota de cobertura mediática. El color del globo (urgencia)
+    # se deriva de esto. Si no hay ventana previa, velocidad = 0 (todo "latente").
+    conteos_prev = osint.get("temas_prev7d_conteos", {})  # {tema: conteo} ventana 7-14d
+    total_prev = max(1, sum(conteos_prev.values()))
+    hay_velocidad = bool(conteos_prev)
+
+    def _velocidad(tema: str) -> float:
+        act_reciente = (detalle_temas.get(tema, 0) / total_menciones) * 100
+        act_previa = (conteos_prev.get(tema, 0) / total_prev) * 100
+        return round(act_reciente - act_previa, 1)
+
+    # Umbrales de urgencia (editables desde calibración)
+    vel_urgente = params.get("vel_urgente", 30.0)
+    vel_prioritario = params.get("vel_prioritario", 10.0)
+
+    # Colores de urgencia (no de gravedad). Alineados con la Plantilla Madre.
+    _COLOR_URGENTE     = "#dc2626"  # rojo brillante — grave + escalando fuerte
+    _COLOR_PRIORITARIO = "#f59e0b"  # ámbar — grave + movimiento moderado
+    _COLOR_IMPORTANTE  = "#94a3b8"  # gris — grave pero quieto (latente)
+    _COLOR_NO_GRAVE    = "#475569"  # slate apagado — no grave (sin importar velocidad)
+
+    def _clasificar_urgencia(y: float, velocidad: float) -> tuple[str, str]:
+        """Devuelve (clase_urgencia, color_hex) desde gravedad + velocidad."""
+        if y < umbral_y:
+            return "no_grave", _COLOR_NO_GRAVE
+        if velocidad >= vel_urgente:
+            return "URGENTE", _COLOR_URGENTE
+        if velocidad >= vel_prioritario:
+            return "PRIORITARIO", _COLOR_PRIORITARIO
+        return "IMPORTANTE", _COLOR_IMPORTANTE
+
     # ── MATRIZ A — por volumen ────────────────────────────────────────────────
     globos_a = []
     for tema, impacto_base in _IMPACTO_TEMA.items():
@@ -1848,20 +1880,28 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
             and nombre_match != actor_determinante_nombre
         )
 
-        # Nivel de color por gravedad estructural (Y manda en esta matriz)
+        # Velocidad 7d y clasificación de URGENCIA (define el color, no la gravedad)
+        velocidad = _velocidad(tema)
+        urgencia, color_urgencia = _clasificar_urgencia(y, velocidad)
+
+        # nivel de gravedad se conserva para tablas/leyendas que aún lo usan
         nivel = _nivel_score(y)
         globos_b.append({
             "tema": tema,
             "x": x,
             "y": y,
-            "r": max(5, min(20, menciones * 2)),
+            # Radio reducido (anti-encimado): máx 14 en vez de 20
+            "r": max(4, min(14, round(menciones * 1.5))),
             "score": y,
             "nivel": nivel,
             "menciones": menciones,
             "piso": round(piso, 1),
             "impacto_base": impacto_base,
             "cuadrante": cuadrante,
-            "color": _COLOR_NIVEL_BURB[nivel],
+            # color ahora codifica URGENCIA (velocidad), no gravedad
+            "color": color_urgencia,
+            "urgencia": urgencia,
+            "velocidad": velocidad,
             "origen_pa": origen_pa,
             "pa_info": pa_info,
             "actor_visible": actor_visible_nombre,
@@ -1871,34 +1911,40 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
             "hay_brecha": hay_brecha,
         })
 
-    # ── Score Global B — la gravedad manda, la actividad solo agrava ──────────
-    # Score_B = min(100, Y_max + min(bonus_max, coef_act·(X_Ymax/100) +
-    #                                coef_sim·max(0, n_graves_activos − 1)))
-    # · Y_max = gravedad estructural del peor frente (fija el piso, esté silencioso o no).
-    # · bonus por actividad del propio tema más grave (acotado).
-    # · bonus por simultaneidad de temas graves-y-activos.
-    # · El silencio nunca resta: sin actividad, Score_B = Y_max exacto.
-    coef_act = params["coef_actividad"]
+    # ── Score Global B — "temperatura del momento" (urgencia, no gravedad) ────
+    # La gravedad de fondo ya se ve en la POSICIÓN de los globos (eje Y). El Score
+    # mide el momentum: sube con temas escalando, baja cuando todo está grave pero
+    # quieto. Nunca se pega en 100 salvo escalada extrema simultánea.
+    #
+    #   G_base  = PISO_GRAVEDAD · (n_graves / n_total)      ← piso "todo grave pero quieto"
+    #   U_score = max(0, vel_max_grave) + coef_sim · max(0, n_escalando − 1)
+    #   U_norm  = min(1, U_score / URGENCIA_REF)            ← urgencia normalizada 0–1
+    #   Score_B = G_base + (100 − G_base) · U_norm          ← el headroom lo llena la urgencia
     coef_sim = params["coef_simultaneidad"]
-    bonus_max = params["bonus_max"]
+    piso_gravedad = params.get("piso_gravedad", 65.0)
+    urgencia_ref = max(1.0, params.get("urgencia_ref", 50.0))
 
     score_global_b = 0.0
     formula_score_b = (
-        f"min(100, Y_max + min({bonus_max:g}, {coef_act:g}·(X_Ymax/100) + "
-        f"{coef_sim:g}·max(0, n_graves_activos−1)))"
+        f"G_base + (100−G_base)·U_norm · "
+        f"G_base={piso_gravedad:g}·(n_graves/n_total) · "
+        f"U_norm=min(1, [vel_max_grave + {coef_sim:g}·(n_escalando−1)] / {urgencia_ref:g})"
     )
     if globos_b:
-        # Tema con mayor gravedad estructural (peor frente)
-        g_peor = max(globos_b, key=lambda g: g["y"])
-        y_max = g_peor["y"]
-        x_ymax = g_peor["x"]
-        n_graves_activos = sum(
-            1 for g in globos_b if g["y"] >= umbral_y and g["x"] >= umbral_x
-        )
-        bonus_actividad = coef_act * (x_ymax / 100.0)
-        bonus_simultaneidad = coef_sim * max(0, n_graves_activos - 1)
-        bonus_total = min(bonus_max, bonus_actividad + bonus_simultaneidad)
-        score_global_b = round(min(100, y_max + bonus_total), 1)
+        n_total = len(globos_b)
+        graves = [g for g in globos_b if g["y"] >= umbral_y]
+        n_graves = len(graves)
+        frac_graves = n_graves / max(1, n_total)
+        g_base = piso_gravedad * frac_graves
+
+        # Velocidad máxima entre los temas graves (frente más caliente)
+        vel_max_grave = max([max(0.0, g["velocidad"]) for g in graves], default=0.0)
+        # Temas graves escalando (velocidad ≥ umbral prioritario)
+        n_escalando = sum(1 for g in graves if g["velocidad"] >= vel_prioritario)
+
+        u_score = vel_max_grave + coef_sim * max(0, n_escalando - 1)
+        u_norm = min(1.0, u_score / urgencia_ref)
+        score_global_b = round(min(100.0, g_base + (100.0 - g_base) * u_norm), 1)
     nivel_b = _nivel_score(score_global_b)
 
     # ── Escala visible del eje X (no toca los datos, solo el "zoom") ──────────
@@ -1937,6 +1983,9 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         "pa_por_tema": pa_por_tema,
         "usando_7d": usando_7d,
         "total_menciones_7d": total_menciones if usando_7d else 0,
+        "hay_velocidad": hay_velocidad,
+        "vel_urgente": vel_urgente,
+        "vel_prioritario": vel_prioritario,
     }
 
 
@@ -1997,7 +2046,14 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
             else:
                 pa_str = f"PA={g.get('impacto_base', 0):g} (estimado)"
 
+            # Línea de urgencia/velocidad
+            _vel = g.get("velocidad", 0)
+            _urg = g.get("urgencia", "—")
+            _vel_signo = f"+{_vel:g}" if _vel > 0 else f"{_vel:g}"
+            linea_urg = f"URGENCIA: {_urg} · velocidad 7d {_vel_signo} pts"
+
             tooltip_extra = (
+                f"{linea_urg} | "
                 f"{linea_visible} | {linea_det}{brecha_tag} | "
                 f"Cuadrante: {g['cuadrante']} | "
                 f"PA [{origen_pa}]: {pa_str} | "
@@ -2010,12 +2066,17 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
                 tooltip_extra += f" ({g['pct_volumen']}% vol)"
 
         nombre_display = g["tema"].replace("_", " ").title()
+        # Matriz B (tiene 'cuadrante'): más transparente y borde fino para que
+        # globos superpuestos se vean ambos. Matriz A conserva su estilo.
+        es_matriz_b = "cuadrante" in g
+        alpha_hex = "B3" if es_matriz_b else "CC"   # B3≈0.70 · CC≈0.80
+        borde_px = 1.5 if es_matriz_b else 2
         datasets.append({
             "label": nombre_display,
             "data": [{"x": g["x"], "y": g["y"], "r": g["r"]}],
-            "backgroundColor": g["color"] + "CC",
+            "backgroundColor": g["color"] + alpha_hex,
             "borderColor": g["color"],
-            "borderWidth": 2,
+            "borderWidth": borde_px,
             "_tooltip_extra": tooltip_extra,
             "_score": g["score"],
             "_nivel": g["nivel"],
@@ -2195,6 +2256,23 @@ async def admin_semaforo(request: Request):
     pa_por_tema       = md["pa_por_tema"]
     usando_7d         = md["usando_7d"]
     total_menc_7d     = md["total_menciones_7d"]
+    hay_velocidad     = md["hay_velocidad"]
+    vel_urgente_p     = md["vel_urgente"]
+    vel_prioritario_p = md["vel_prioritario"]
+
+    # Leyenda de URGENCIA para la Matriz B (color = velocidad, no gravedad)
+    _leyenda_urgencia = [
+        ("#dc2626", f"Urgente (grave, vel ≥ {vel_urgente_p:g})"),
+        ("#f59e0b", f"Prioritario (grave, vel ≥ {vel_prioritario_p:g})"),
+        ("#94a3b8", "Importante (grave, sin movimiento)"),
+        ("#475569", "No grave"),
+    ]
+    leyenda_urgencia_html = " ".join(
+        f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px">'
+        f'<span style="width:12px;height:12px;border-radius:50%;background:{c};display:inline-block"></span>'
+        f'<span style="font-size:11px;color:#94a3b8">{n}</span></span>'
+        for c, n in _leyenda_urgencia
+    )
 
     # ── Metadatos generales ──────────────────────────────────────────────────
     sem = osint.get("semaforo", {})
@@ -2378,12 +2456,31 @@ async def admin_semaforo(request: Request):
             else (f'<span style="color:#f87171">{delta:g}</span>' if delta < 0
                   else '<span style="color:var(--muted)">—</span>')
         )
+
+        # Velocidad 7d + urgencia (color del globo)
+        velocidad = g_b.get("velocidad", 0) if g_b else 0
+        urgencia = g_b.get("urgencia", "—") if g_b else "—"
+        _urg_color = {
+            "URGENTE": "#dc2626", "PRIORITARIO": "#f59e0b",
+            "IMPORTANTE": "#94a3b8", "no_grave": "#475569",
+        }.get(urgencia, "#64748b")
+        _urg_label = "No grave" if urgencia == "no_grave" else urgencia
+        _vel_signo = f"+{velocidad:g}" if velocidad > 0 else f"{velocidad:g}"
+        urgencia_html = (
+            f'<span style="display:inline-flex;align-items:center;gap:5px">'
+            f'<span style="width:9px;height:9px;border-radius:50%;background:{_urg_color};'
+            f'display:inline-block"></span>'
+            f'<span style="color:{_urg_color};font-weight:600">{escape(_urg_label)}</span></span>'
+            f'<br><span style="font-size:10px;color:var(--muted)">vel {_vel_signo} pts/7d</span>'
+        )
+
         filas_pa += (
             f"<tr>"
             f"<td><b>{escape(nombre_tema)}</b></td>"
             f"<td style='text-align:center'>{float(impacto_base):g}</td>"
             f"<td style='text-align:center'><b>{pa_val:g}</b></td>"
             f"<td style='text-align:center'>{delta_html}</td>"
+            f"<td>{urgencia_html}</td>"
             f"<td>{vis_html}<br>{brecha_html}</td>"
             f"<td style='text-align:center'>{n_actores}</td>"
             f"<td style='text-align:center'>{badge_origen}</td>"
@@ -2437,26 +2534,28 @@ async def admin_semaforo(request: Request):
     <div style="margin-top:10px">{leyenda_html}</div>
   </div>
 
-  <!-- MATRIZ B — ACTIVIDAD × GRAVEDAD ESTRUCTURAL -->
+  <!-- MATRIZ B — ACTIVIDAD × GRAVEDAD ESTRUCTURAL · color = URGENCIA -->
   <div class="card">
-    <div class="card-title">Matriz B — Actividad × Gravedad Estructural</div>
+    <div class="card-title">Matriz B — Urgencia (color) × Gravedad (posición)</div>
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
       {_score_chip(score_b, nivel_b)}
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
-        Score B = {escape(formula_b)}<br>
+        Score B = temperatura del momento (sube con temas escalando)<br>
         X = {'% del volumen 7 días (rolling)' if usando_7d else '% del volumen del ciclo'} · Y = max(piso, PA_tema)<br>
-        PA_tema: desde actores reales o impacto base si no hay actores<br>
-        Radio = menciones · Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g} · eje X 0→{x_max_viz:g}
+        <b>Color = urgencia</b> (velocidad 7d) · posición = actividad × gravedad<br>
+        Cuadrantes: umbral X={umbral_x:g} · Y={umbral_y:g} · eje X 0→{x_max_viz:g}
+        {'· <span style="color:#f59e0b">velocidad no disponible aún (falta ventana previa 7-14d)</span>' if not hay_velocidad else ''}
       </div>
     </div>
     {matriz_b_html}
-    <div style="margin-top:10px">{leyenda_html}</div>
+    <div style="margin-top:10px">{leyenda_urgencia_html}</div>
     <p style="color:var(--muted);font-size:11px;margin-top:8px;line-height:1.5">
-      <b>La gravedad manda, la actividad solo agrava.</b> El piso del Score lo fija
-      el tema estructuralmente más grave, esté silencioso o no. El cuadrante
-      <b>GRAVE PERO SILENCIOSO</b> (arriba-izquierda) es la prioridad de inteligencia:
-      temas estructuralmente graves que aún no están en la agenda.
-      {'La actividad (eje X) usa la <b>ventana deslizante 7 días</b> — mismo criterio que la Matriz P×I del dashboard.' if usando_7d else ''}
+      <b>La gravedad ya no separa (casi todo es grave): lo que separa es el MOVIMIENTO.</b>
+      El color codifica <b>urgencia</b> = velocidad de cambio en 7 días. Un tema grave
+      <b>escalando fuerte</b> es urgente (rojo); grave pero quieto es importante (gris).
+      La posición sigue mostrando la gravedad estructural (eje Y) y la actividad (eje X).
+      El Score Global mide la <b>temperatura del momento</b>: sube cuando hay frentes
+      escalando, baja cuando todo está grave pero quieto.
     </p>
   </div>
 
@@ -2552,6 +2651,7 @@ async def admin_semaforo(request: Request):
           <th style="text-align:center">Impacto base</th>
           <th style="text-align:center">PA actores</th>
           <th style="text-align:center">Δ</th>
+          <th>Urgencia (vel 7d)</th>
           <th>Actor visible (prensa)</th>
           <th style="text-align:center">N° actores</th>
           <th style="text-align:center">Origen PA</th>

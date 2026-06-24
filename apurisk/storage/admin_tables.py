@@ -483,6 +483,30 @@ _DATOS_INICIALES = [
         "'PA por tema: tope máximo del bonus acumulado por actores fuertes adicionales', 'GLOBAL')", []
     ),
 
+    # ── Matriz B: urgencia por velocidad de cambio + Score "temperatura del momento" ──
+    # El color del globo codifica URGENCIA (velocidad 7d), no gravedad. Un tema grave
+    # escalando fuerte = urgente (rojo); grave pero quieto = importante (gris).
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SEMAFORO_VELOCIDAD_URGENTE', '30', 'float', "
+        "'Matriz B: salto de actividad en 7d (pts) para marcar un tema grave como URGENTE (rojo)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SEMAFORO_VELOCIDAD_PRIORITARIO', '10', 'float', "
+        "'Matriz B: salto de actividad en 7d (pts) para marcar un tema grave como PRIORITARIO (ámbar)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SCORE_B_PISO_GRAVEDAD', '65', 'float', "
+        "'Score B: piso del score cuando todo está grave pero quieto (temperatura base 0-100)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SCORE_B_URGENCIA_REF', '50', 'float', "
+        "'Score B: agregado de urgencia (vel_max + simultaneidad) que mapea a urgencia plena (1.0)', 'GLOBAL')", []
+    ),
+
     # ── Valores base por nivel estratégico (I-VIII) — editables desde panel ──
     # Propagación automática: cambiar un valor aquí actualiza todos los actores
     # de ese nivel que NO tengan nivel_base_manual=1.
