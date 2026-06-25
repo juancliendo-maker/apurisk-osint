@@ -2138,51 +2138,57 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
   var raw = {datasets_json};
   var etq = {etiquetas_json};
   var umbralX = {umbral_x}, umbralY = {umbral_y};
+  // Inline plugin — NOT registered globally so it only fires for this chart instance.
+  // Global Chart.register would apply the plugin to every chart on the page,
+  // causing both sets of quadrant labels to overlap on each matrix.
   var drawQ = {{
     id: 'quadrants_{canvas_id}',
     afterDraw: function(chart) {{
       var ctx = chart.ctx;
       var ca = chart.chartArea;
-      var x = chart.scales.x, y = chart.scales.y;
+      var xs = chart.scales.x, ys = chart.scales.y;
       ctx.save();
+      // ── Divider lines ──────────────────────────────────────────────────────
       ctx.strokeStyle = '#334155'; ctx.setLineDash([4,4]); ctx.lineWidth = 1;
-      var xm = x.getPixelForValue(umbralX), ym = y.getPixelForValue(umbralY);
+      var xm = xs.getPixelForValue(umbralX), ym = ys.getPixelForValue(umbralY);
       ctx.beginPath(); ctx.moveTo(xm, ca.top); ctx.lineTo(xm, ca.bottom); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(ca.left, ym); ctx.lineTo(ca.right, ym); ctx.stroke();
-      ctx.restore();
-      // Draw quadrant labels — each anchored inside its quadrant,
-      // with a semi-transparent pill background for legibility.
-      // Lines/margins keep them away from the divider and from each other.
-      // [text, hAlign:'left'|'right', vPos:'top'|'bottom']
+      ctx.setLineDash([]);
+      // ── Quadrant labels at the extreme corners, on top of the border ───────
+      // Each label is anchored to its corner pixel (ca.left/right, ca.top/bottom)
+      // so it sits in the ~4px gutter right at the chart edge, away from bubbles.
       var qlabels = [
         [etq.ti, 'left',  'top'],
         [etq.td, 'right', 'top'],
         [etq.bi, 'left',  'bottom'],
         [etq.bd, 'right', 'bottom'],
       ];
-      var PAD = 5, MARG = 8;
-      ctx.font = 'bold 10px sans-serif';
+      ctx.font = 'bold 9px sans-serif';
+      var PAD = 3;
       qlabels.forEach(function(l) {{
         var text = l[0], ha = l[1], va = l[2];
-        var isLeft = (ha == 'left');
-        var isTop  = (va == 'top');
-        var tx = isLeft ? (ca.left + MARG) : (ca.right - MARG);
-        var ty = isTop  ? (ca.top + 16)    : (ca.bottom - 8);
-        ctx.textAlign = ha;
-        ctx.textBaseline = isTop ? 'top' : 'bottom';
+        var isLeft  = (ha === 'left');
+        var isTop   = (va === 'top');
+        // Pixel anchor: 4px inside each corner of the chart area border
+        var tx = isLeft ? (ca.left  + 4) : (ca.right  - 4);
+        var ty = isTop  ? (ca.top   + 3) : (ca.bottom - 3);
+        ctx.textAlign     = ha;
+        ctx.textBaseline  = isTop ? 'top' : 'bottom';
         var tw = ctx.measureText(text).width;
+        var th = 11; // text height ~9px + 2
+        // Background pill: darkens the corner so text reads clearly over gridlines
         var bx = isLeft ? (tx - PAD) : (tx - tw - PAD);
-        var by = isTop  ? (ty - PAD) : (ty - 12);
-        ctx.fillStyle = 'rgba(11,18,32,0.75)';
-        ctx.fillRect(bx, by, tw + PAD * 2, 14 + PAD);
-        ctx.fillStyle = '#94a3b8';
+        var by = isTop  ? (ty - PAD) : (ty - th - PAD);
+        ctx.fillStyle = 'rgba(8,14,26,0.88)';
+        ctx.fillRect(bx, by, tw + PAD * 2, th + PAD * 2);
+        ctx.fillStyle = '#64748b';
         ctx.fillText(text, tx, ty);
       }});
       ctx.textBaseline = 'alphabetic';
+      ctx.restore();
     }}
   }};
   if (window.Chart) {{
-    window.Chart.register(drawQ);
     var ctx = document.getElementById('{canvas_id}');
     if (ctx) new window.Chart(ctx.getContext('2d'), {{
       type: 'bubble',
@@ -2229,7 +2235,8 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
                          font: {{ size: 10, weight: '600' }} }},
                grid: {{ color: '#1e293b' }}, ticks: {{ color: '#94a3b8' }} }}
         }}
-      }}
+      }},
+      plugins: [drawQ]
     }});
   }}
 }})();
