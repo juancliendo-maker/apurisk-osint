@@ -2685,6 +2685,109 @@ async def admin_semaforo(request: Request):
 # Calibración del semáforo — pisos estructurales + parámetros Score_B
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _tabla_velocidades_html(
+    vel_temas: dict,
+    params: dict,
+    hay_prev: bool,
+    snapshot_ts: str,
+) -> str:
+    """Bloque HTML: tabla de velocidades 7d de los 8 temas para calibración de umbrales."""
+    vel_urgente     = params.get("vel_urgente", 30.0)
+    vel_prioritario = params.get("vel_prioritario", 10.0)
+
+    if not vel_temas:
+        return """
+<div class="card" style="margin-top:0">
+  <div class="card-title">Velocidades 7d por tema</div>
+  <p style="color:var(--muted);font-size:13px">
+    Sin snapshot disponible — ejecuta un ciclo del motor primero.
+  </p>
+</div>"""
+
+    sin_prev_aviso = (
+        '<div style="color:#f59e0b;font-size:12px;margin-bottom:8px">'
+        '⚠ Ventana previa (7-14d) aún no disponible — velocidades serán 0 hasta completar 14 días.</div>'
+    ) if not hay_prev else ""
+
+    filas = ""
+    temas_nombres = {
+        "estabilidad_gobierno": "Estabilidad gobierno",
+        "conflictos_sociales": "Conflictos sociales",
+        "riesgo_regulatorio": "Riesgo regulatorio",
+        "polarizacion": "Polarización",
+        "corrupcion": "Corrupción",
+        "seguridad": "Seguridad / Criminalidad",
+        "electoral": "Electoral",
+        "economico_inversion": "Económico / Inversión",
+    }
+    for tema in _IMPACTO_TEMA:
+        vel = vel_temas.get(tema, 0.0)
+        vel_str = f"+{vel:g}" if vel > 0 else f"{vel:g}"
+        if vel >= vel_urgente:
+            color = "#dc2626"
+            etiq  = "URGENTE"
+        elif vel >= vel_prioritario:
+            color = "#f59e0b"
+            etiq  = "PRIORITARIO"
+        elif vel > 0:
+            color = "#94a3b8"
+            etiq  = "activo"
+        elif vel < 0:
+            color = "#64748b"
+            etiq  = "enfriando"
+        else:
+            color = "#64748b"
+            etiq  = "latente"
+        barra_w = min(100, max(0, int(abs(vel) * 6))) if hay_prev else 0
+        barra_color = "#dc2626" if vel >= vel_urgente else ("#f59e0b" if vel >= vel_prioritario else ("#22c55e" if vel > 0 else "#94a3b8"))
+        barra_html = (
+            f'<div style="width:{barra_w}px;height:8px;background:{barra_color};'
+            f'border-radius:3px;display:inline-block;vertical-align:middle"></div>'
+            if hay_prev and barra_w > 0 else
+            '<div style="width:4px;height:8px;background:#334155;border-radius:3px;display:inline-block;vertical-align:middle"></div>'
+        )
+        filas += (
+            f'<tr>'
+            f'<td>{temas_nombres.get(tema, tema)}</td>'
+            f'<td style="text-align:center;font-weight:600;color:{color}">{vel_str}</td>'
+            f'<td>{barra_html}</td>'
+            f'<td><span style="background:{color}22;color:{color};padding:2px 7px;'
+            f'border-radius:4px;font-size:11px;font-weight:600">{etiq}</span></td>'
+            f'</tr>'
+        )
+
+    ts_str = f' · snapshot {snapshot_ts}' if snapshot_ts else ""
+    return f"""
+<div class="card" style="margin-top:0">
+  <div class="card-title">Velocidades 7d por tema
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      vel = %actividad(0-7d) − %actividad(7-14d){ts_str}
+    </span>
+  </div>
+  {sin_prev_aviso}
+  <p style="color:var(--muted);font-size:12px;margin:0 0 10px 0">
+    Umbrales actuales: Urgente ≥ <b>{vel_urgente:g}</b> · Prioritario ≥ <b>{vel_prioritario:g}</b>.
+    Ajusta los umbrales en la tabla de parámetros de arriba y recarga para ver el efecto.
+  </p>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Tema</th>
+        <th style="text-align:center">Velocidad 7d</th>
+        <th>Magnitud</th>
+        <th>Clasificación actual</th>
+      </tr></thead>
+      <tbody>{filas}</tbody>
+    </table>
+  </div>
+  <p style="color:var(--muted);font-size:11px;margin-top:8px">
+    Velocidad positiva = el tema gana cuota de cobertura mediática respecto a la semana anterior.
+    Referencia de calibración: observa el rango real de tus temas y elige umbrales que
+    distingan los picos genuinos del ruido de fondo.
+  </p>
+</div>"""
+
+
 def _fila_piso(tema: str, impacto_base: int, piso_actual: float,
                actualizado_en: str, msg_tema: str = "") -> str:
     """Fila editable de un tema en la tabla de pisos estructurales."""
@@ -2774,6 +2877,30 @@ async def admin_calibrar(request: Request):
     except Exception:
         pass
 
+    # Velocidades 7d desde último snapshot (para tabla de referencia)
+    _vel_temas: dict[str, float] = {}
+    _vel_hay_prev = False
+    _vel_snapshot_ts = ""
+    try:
+        out_dir = Path(OUTPUT_DIR)
+        _snaps = sorted(out_dir.glob("apurisk_snapshot_*.json"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        for _s in _snaps[:1]:
+            _sdata = json.loads(_s.read_text(encoding="utf-8"))
+            _osint = _sdata.get("osint_motor", {})
+            _vel_snapshot_ts = _sdata.get("timestamp", "")[:16].replace("T", " ")
+            _conteos_rec  = _osint.get("temas_7d_conteos", {})
+            _conteos_prev = _osint.get("temas_prev7d_conteos", {})
+            _total_rec  = max(1, sum(_conteos_rec.values()))
+            _total_prev = max(1, sum(_conteos_prev.values()))
+            _vel_hay_prev = bool(_conteos_prev)
+            for _tema in _IMPACTO_TEMA:
+                _act_rec  = (_conteos_rec.get(_tema, 0)  / _total_rec)  * 100
+                _act_prev = (_conteos_prev.get(_tema, 0) / _total_prev) * 100
+                _vel_temas[_tema] = round(_act_rec - _act_prev, 1)
+    except Exception:
+        pass
+
     # Mensajes de confirmación por campo (query params)
     msg_piso = request.query_params.get("piso_ok", "")   # "electoral"
     msg_param = request.query_params.get("param_ok", "")  # "SEMAFORO_UMBRAL_ACTIVIDAD_X"
@@ -2801,6 +2928,14 @@ async def admin_calibrar(request: Request):
          "Score B: tope total del agravante sobre Y_max (puntos)"),
         ("SEMAFORO_X_MAX_VIZ",          params["x_max_viz"],
          "Escala visual eje X. 0 = dinámica (máximo real + margen). >0 = escala fija"),
+        ("SEMAFORO_VELOCIDAD_URGENTE",   params["vel_urgente"],
+         "Velocidad 7d mínima para color URGENTE (rojo) en Matriz B"),
+        ("SEMAFORO_VELOCIDAD_PRIORITARIO", params["vel_prioritario"],
+         "Velocidad 7d mínima para color PRIORITARIO (ámbar) en Matriz B"),
+        ("SCORE_B_PISO_GRAVEDAD",        params["piso_gravedad"],
+         "Score B: peso del componente estructural G_base = piso × frac_graves"),
+        ("SCORE_B_URGENCIA_REF",         params["urgencia_ref"],
+         "Score B: velocidad de referencia para normalizar el componente de urgencia (U_norm=1 cuando u_score≥ref)"),
     ]
     filas_params = ""
     for clave, valor, desc in PARAMS_META:
@@ -2872,6 +3007,8 @@ async def admin_calibrar(request: Request):
     </a>
   </p>
 </div>
+
+{_tabla_velocidades_html(_vel_temas, params, _vel_hay_prev, _vel_snapshot_ts)}
 
 <div style="margin-top:10px">
   <a href="/admin/semaforo" style="color:var(--accent);font-size:13px">
