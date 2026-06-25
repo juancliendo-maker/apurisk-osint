@@ -889,6 +889,15 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
         "vel_prioritario": 10.0,
         "piso_gravedad": 65.0,
         "urgencia_ref": 50.0,
+        # Urgencia combinada (gravedad + actividad + velocidad) con intensidad graduada
+        "act_urgente": 10.0,
+        "act_prioritario": 5.0,
+        "peso_gravedad": 0.6,
+        "peso_actividad": 0.25,
+        "peso_velocidad": 0.15,
+        "act_ref": 15.0,
+        "vel_ref": 5.0,
+        "coef_sim_idx": 0.03,
     }
     mapa = {
         "SEMAFORO_UMBRAL_ACTIVIDAD_X": "umbral_x",
@@ -901,6 +910,14 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
         "SEMAFORO_VELOCIDAD_PRIORITARIO": "vel_prioritario",
         "SCORE_B_PISO_GRAVEDAD": "piso_gravedad",
         "SCORE_B_URGENCIA_REF": "urgencia_ref",
+        "SEMAFORO_ACTIVIDAD_URGENTE": "act_urgente",
+        "SEMAFORO_ACTIVIDAD_PRIORITARIO": "act_prioritario",
+        "URGENCIA_PESO_GRAVEDAD": "peso_gravedad",
+        "URGENCIA_PESO_ACTIVIDAD": "peso_actividad",
+        "URGENCIA_PESO_VELOCIDAD": "peso_velocidad",
+        "URGENCIA_ACT_REF": "act_ref",
+        "URGENCIA_VEL_REF": "vel_ref",
+        "SCORE_B_COEF_SIM_IDX": "coef_sim_idx",
     }
     try:
         with _conn(db_path) as c:
@@ -909,7 +926,10 @@ def cargar_parametros_semaforo(db_path: str) -> dict:
                 "('SEMAFORO_UMBRAL_ACTIVIDAD_X','SEMAFORO_UMBRAL_GRAVEDAD_Y',"
                 "'SCORE_B_COEF_ACTIVIDAD','SCORE_B_COEF_SIMULTANEIDAD','SCORE_B_BONUS_MAX',"
                 "'SEMAFORO_X_MAX_VIZ','SEMAFORO_VELOCIDAD_URGENTE','SEMAFORO_VELOCIDAD_PRIORITARIO',"
-                "'SCORE_B_PISO_GRAVEDAD','SCORE_B_URGENCIA_REF')",
+                "'SCORE_B_PISO_GRAVEDAD','SCORE_B_URGENCIA_REF',"
+                "'SEMAFORO_ACTIVIDAD_URGENTE','SEMAFORO_ACTIVIDAD_PRIORITARIO',"
+                "'URGENCIA_PESO_GRAVEDAD','URGENCIA_PESO_ACTIVIDAD','URGENCIA_PESO_VELOCIDAD',"
+                "'URGENCIA_ACT_REF','URGENCIA_VEL_REF','SCORE_B_COEF_SIM_IDX')",
             ).fetchall()
         for r in rows:
             k = mapa.get(r["clave"])
