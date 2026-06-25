@@ -575,6 +575,16 @@ _MIGRACIONES = [
     "ALTER TABLE config_fuentes ADD COLUMN peso_analista REAL NOT NULL DEFAULT 1.0",
     # Alias de actores para emparejamiento con entidades detectadas en noticias
     "ALTER TABLE config_actores ADD COLUMN alias TEXT",
+    # Capa 3 CVO — Índice de Activación Estratégica por actor-tema
+    # Voluntad: interes_directo pesa doble; Oportunidad: ventana_coyuntural pesa doble.
+    # Default 3 = neutro en escala 1-5. indice_activacion se recalcula al editar.
+    "ALTER TABLE config_actor_temas ADD COLUMN interes_directo       INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE config_actor_temas ADD COLUMN postura_declarada     INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE config_actor_temas ADD COLUMN antecedente_accion    INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE config_actor_temas ADD COLUMN ventana_coyuntural    INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE config_actor_temas ADD COLUMN ausencia_contrapesos  INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE config_actor_temas ADD COLUMN recursos_movilizables INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE config_actor_temas ADD COLUMN indice_activacion     REAL",
 ]
 
 
