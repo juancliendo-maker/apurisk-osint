@@ -3537,6 +3537,11 @@ async def admin_actores(request: Request):
     {len(actores)} actor{'es' if len(actores)!=1 else ''} registrado{'s' if len(actores)!=1 else ''} · ordenados por peso
   </div>
   <div style="display:flex;gap:8px">
+    <a href="/admin/actores/activacion"
+       style="background:var(--bg-3);color:var(--muted);border:1px solid #334155;
+              border-radius:6px;padding:6px 14px;font-size:12px">
+      Activación CVO →
+    </a>
     <a href="/admin/actores/log"
        style="background:var(--bg-3);color:var(--muted);border:1px solid #334155;
               border-radius:6px;padding:6px 14px;font-size:12px">
@@ -3651,6 +3656,7 @@ async def admin_actores_detalle(request: Request, actor_id: int):
         return err
     from ..storage.config_loader import (
         obtener_actor, cargar_niveles_base, listar_log_actores, NIVELES_ACTOR,
+        cargar_cvo_actor,
     )
     db = _get_db_path()
     actor = obtener_actor(db, actor_id)
@@ -3660,6 +3666,7 @@ async def admin_actores_detalle(request: Request, actor_id: int):
     niveles_base = cargar_niveles_base(db)
     temas = list(_IMPACTO_TEMA.keys())
     logs = listar_log_actores(db, actor_id, limite=30)
+    cvo_rows = {r["tema"]: r for r in cargar_cvo_actor(db, actor_id)}
 
     msg = request.query_params.get("msg", "")
     err_msg = request.query_params.get("err", "")
@@ -3693,8 +3700,48 @@ async def admin_actores_detalle(request: Request, actor_id: int):
     estado_badge = ('<span class="badge badge-ok">activo</span>'
                     if actor["activo"] else '<span class="badge badge-off">inactivo</span>')
 
+    # Bloque de Capa 3 CVO: un formulario independiente por tema vinculado.
+    # Los temas vinculados provienen de actor["temas"]; cvo_rows tiene los datos guardados.
+    temas_actor = actor.get("temas", [])
+    cvo_bloques_html = ""
+    peso_actor = actor.get("peso_calculado", 0)
+    for t in sorted(temas_actor):
+        row = cvo_rows.get(t, {
+            "tema": t, "interes_directo": 3, "postura_declarada": 3,
+            "antecedente_accion": 3, "ventana_coyuntural": 3,
+            "ausencia_contrapesos": 3, "recursos_movilizables": 3,
+            "indice_activacion": None,
+        })
+        cvo_bloques_html += f"""
+<form id="cvo-form-{escape(t)}" method="post"
+      action="/admin/actores/{actor_id}/cvo" style="display:none">
+  <input type="hidden" name="tema" value="{escape(t)}">
+</form>
+{_cvo_tema_bloque(t, row, peso_actor)}"""
+
+    if temas_actor:
+        cvo_section = f"""
+<div class="card" style="margin-top:0">
+  <div class="card-title">Capa 3 — Índice de Activación Estratégica (CVO)
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      Índice = (C × V × O)^(1/3) × 100 · C = peso/100
+    </span>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+    Por cada tema vinculado: evalúa las 6 señales y guarda por separado.
+    El recálculo es inmediato en pantalla; el guardar persiste en la BD y aparece en el log.
+    <a href="/admin/actores/activacion?tema={escape(temas_actor[0])}"
+       style="color:var(--accent)">Ver activación por tema →</a>
+  </p>
+  <div id="actor-peso-value" data-peso="{peso_actor}" style="display:none"></div>
+  {cvo_bloques_html}
+</div>"""
+    else:
+        cvo_section = ""
+
     contenido = f"""
 {_ACTOR_CALC_JS}
+{_CVO_CALC_JS}
 {msg_html}{err_html}
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
   <div>
@@ -3737,6 +3784,8 @@ async def admin_actores_detalle(request: Request, actor_id: int):
     </div>
   </form>
 </div>
+
+{cvo_section}
 
 <div class="card" style="margin-top:0">
   <div class="card-title">Historial de cambios (últimos 30)</div>
@@ -3864,3 +3913,325 @@ async def admin_actores_log(request: Request):
 </div>"""
 
     return HTMLResponse(_page("Log actores", contenido, "actores", sesion["username"]))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Capa 3 CVO — Índice de Activación Estratégica
+# ──────────────────────────────────────────────────────────────────────────────
+
+_CVO_CALC_JS = """
+<script>
+(function() {
+  // Recalcula el índice CVO en tiempo real para cada bloque de tema.
+  // indice = (C × V × O)^(1/3) × 100
+  // V = (interes×2 + postura + antecedente) / 20
+  // O = (ventana×2 + contrapesos + recursos) / 20
+  // C = peso_actor / 100
+  function recalcCvo(tema) {
+    var prefix = 'cvo_' + tema + '_';
+    function gi(name) {
+      var el = document.querySelector('[name="' + prefix + name + '"]');
+      return el ? (parseInt(el.value) || 3) : 3;
+    }
+    var pesoEl = document.getElementById('actor-peso-value');
+    var C = pesoEl ? (parseFloat(pesoEl.dataset.peso) || 0) / 100 : 0;
+    var interes = gi('interes_directo');
+    var postura = gi('postura_declarada');
+    var anteced = gi('antecedente_accion');
+    var ventana = gi('ventana_coyuntural');
+    var contrap = gi('ausencia_contrapesos');
+    var recurs  = gi('recursos_movilizables');
+    var V = (interes * 2 + postura + anteced) / 20;
+    var O = (ventana * 2 + contrap + recurs) / 20;
+    var idx = (C > 0 && V > 0 && O > 0) ? Math.pow(C * V * O, 1/3) * 100 : 0;
+
+    var elIdx = document.getElementById('cvo-idx-' + tema);
+    var elV   = document.getElementById('cvo-v-'   + tema);
+    var elO   = document.getElementById('cvo-o-'   + tema);
+    var elBar = document.getElementById('cvo-bar-' + tema);
+    if (elIdx) {
+      elIdx.textContent = idx.toFixed(1);
+      var color = idx >= 70 ? '#ef4444' : idx >= 50 ? '#f97316' : idx >= 30 ? '#f59e0b' : '#94a3b8';
+      elIdx.style.color = color;
+      if (elBar) { elBar.style.width = Math.min(100, idx) + '%'; elBar.style.background = color; }
+    }
+    if (elV) elV.textContent = 'V=' + V.toFixed(2);
+    if (elO) elO.textContent = 'O=' + O.toFixed(2);
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('[data-cvo-tema]').forEach(function(block) {
+      var tema = block.dataset.cvoTema;
+      block.querySelectorAll('input[type=range]').forEach(function(sl) {
+        sl.addEventListener('input', function() { recalcCvo(tema); });
+      });
+      recalcCvo(tema);
+    });
+  });
+})();
+</script>
+"""
+
+
+def _cvo_slider(prefix: str, name: str, label: str, val: int, doble: bool) -> str:
+    full_name = f"{prefix}{name}"
+    badge = ' <span style="font-size:10px;color:var(--accent)">×2</span>' if doble else ""
+    return f"""
+<div style="margin-bottom:6px">
+  <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+    <span style="font-size:11px;color:var(--muted)">{escape(label)}{badge}</span>
+    <span style="font-size:12px;font-weight:700;color:var(--text)" id="val-{full_name}">{val}</span>
+  </div>
+  <input type="range" name="{full_name}" min="1" max="5" value="{val}"
+         style="width:100%;accent-color:var(--accent)"
+         oninput="document.getElementById('val-{full_name}').textContent=this.value">
+</div>"""
+
+
+def _cvo_tema_bloque(tema: str, row: dict, peso_actor: float) -> str:
+    """Bloque CVO editable para un tema vinculado al actor."""
+    from ..storage.config_loader import _calcular_indice_cvo
+    prefix = f"cvo_{tema}_"
+    idx_actual = row.get("indice_activacion")
+    v_norm = (row.get("interes_directo", 3) * 2 + row.get("postura_declarada", 3)
+              + row.get("antecedente_accion", 3)) / 20.0
+    o_norm = (row.get("ventana_coyuntural", 3) * 2 + row.get("ausencia_contrapesos", 3)
+              + row.get("recursos_movilizables", 3)) / 20.0
+
+    if idx_actual is not None:
+        idx_color = ("#ef4444" if idx_actual >= 70 else
+                     "#f97316" if idx_actual >= 50 else
+                     "#f59e0b" if idx_actual >= 30 else "#94a3b8")
+        idx_str = f"{idx_actual:.1f}"
+    else:
+        idx_color, idx_str = "#64748b", "—"
+
+    def g(field): return int(row.get(field, 3))
+
+    sliders_v = (
+        _cvo_slider(prefix, "interes_directo",    "Interés directo",       g("interes_directo"),    True) +
+        _cvo_slider(prefix, "postura_declarada",  "Postura declarada",     g("postura_declarada"),  False) +
+        _cvo_slider(prefix, "antecedente_accion", "Antecedente de acción", g("antecedente_accion"), False)
+    )
+    sliders_o = (
+        _cvo_slider(prefix, "ventana_coyuntural",   "Ventana coyuntural",     g("ventana_coyuntural"),   True) +
+        _cvo_slider(prefix, "ausencia_contrapesos", "Ausencia contrapesos",   g("ausencia_contrapesos"), False) +
+        _cvo_slider(prefix, "recursos_movilizables","Recursos movilizables",  g("recursos_movilizables"),False)
+    )
+
+    return f"""
+<div data-cvo-tema="{escape(tema)}"
+     style="border:1px solid #1e293b;border-radius:6px;padding:12px;margin-bottom:10px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <span style="font-size:13px;font-weight:600;color:var(--text)">
+      {escape(tema.replace('_',' ').title())}
+    </span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:11px;color:var(--muted)">
+        <span id="cvo-v-{escape(tema)}">V={v_norm:.2f}</span> ·
+        <span id="cvo-o-{escape(tema)}">O={o_norm:.2f}</span>
+      </span>
+      <div style="text-align:right">
+        <div style="font-size:20px;font-weight:700;color:{idx_color}"
+             id="cvo-idx-{escape(tema)}">{idx_str}</div>
+        <div style="font-size:9px;color:var(--muted)">ACTIVACIÓN</div>
+      </div>
+    </div>
+  </div>
+  <div style="height:4px;background:#1e293b;border-radius:2px;margin-bottom:10px">
+    <div id="cvo-bar-{escape(tema)}"
+         style="height:100%;width:{min(100, idx_actual or 0):.0f}%;background:{idx_color};
+                border-radius:2px;transition:width .2s"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div>
+      <div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:6px;
+                  text-transform:uppercase;letter-spacing:.5px">Voluntad (V)</div>
+      {sliders_v}
+    </div>
+    <div>
+      <div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:6px;
+                  text-transform:uppercase;letter-spacing:.5px">Oportunidad (O)</div>
+      {sliders_o}
+    </div>
+  </div>
+  <div style="margin-top:10px;text-align:right">
+    <button type="submit" form="cvo-form-{escape(tema)}" name="guardar_cvo" value="1"
+            style="background:var(--accent);color:#000;border:none;border-radius:4px;
+                   padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer">
+      Guardar {escape(tema.replace('_',' ').title())}
+    </button>
+  </div>
+</div>"""
+
+
+@router.post("/actores/{actor_id}/cvo")
+async def admin_actores_cvo(request: Request, actor_id: int):
+    """Guarda las 6 señales CVO de un actor para un tema específico."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import (
+        guardar_cvo_actor_tema, obtener_actor, LockTimeoutError,
+    )
+    form = await request.form()
+    tema = form.get("tema", "").strip()
+    if not tema or tema not in _IMPACTO_TEMA:
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?err=Tema+inválido", status_code=303)
+    db = _get_db_path()
+    actor = obtener_actor(db, actor_id)
+    if not actor:
+        return RedirectResponse("/admin/actores?err=Actor+no+encontrado", status_code=303)
+    prefix = f"cvo_{tema}_"
+    senales = {
+        "interes_directo":       int(form.get(f"{prefix}interes_directo",    3)),
+        "postura_declarada":     int(form.get(f"{prefix}postura_declarada",  3)),
+        "antecedente_accion":    int(form.get(f"{prefix}antecedente_accion", 3)),
+        "ventana_coyuntural":    int(form.get(f"{prefix}ventana_coyuntural", 3)),
+        "ausencia_contrapesos":  int(form.get(f"{prefix}ausencia_contrapesos", 3)),
+        "recursos_movilizables": int(form.get(f"{prefix}recursos_movilizables", 3)),
+    }
+    try:
+        indice = guardar_cvo_actor_tema(
+            db, actor_id, tema, senales,
+            actor["peso_calculado"], sesion["username"],
+        )
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?msg=CVO+guardado+·+índice={indice:.1f}",
+            status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?err={escape(str(e))}", status_code=303)
+
+
+@router.get("/actores/activacion", response_class=HTMLResponse)
+async def admin_actores_activacion(request: Request):
+    """Subpágina: actores ordenados por Índice de Activación para un tema dado."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import listar_actores_por_activacion, NIVELES_ACTOR
+
+    tema_sel = request.query_params.get("tema", list(_IMPACTO_TEMA.keys())[0])
+    if tema_sel not in _IMPACTO_TEMA:
+        tema_sel = list(_IMPACTO_TEMA.keys())[0]
+
+    db = _get_db_path()
+    actores = listar_actores_por_activacion(db, tema_sel)
+
+    # Selector de tema
+    opts = "".join(
+        f'<option value="{t}"{" selected" if t == tema_sel else ""}>'
+        f'{escape(t.replace("_"," ").title())}</option>'
+        for t in _IMPACTO_TEMA
+    )
+
+    def _color_idx(idx):
+        if idx is None: return "#64748b"
+        return "#ef4444" if idx >= 70 else "#f97316" if idx >= 50 else "#f59e0b" if idx >= 30 else "#94a3b8"
+
+    def _etiq_idx(idx):
+        if idx is None: return "sin datos"
+        return "alto" if idx >= 70 else "medio-alto" if idx >= 50 else "medio" if idx >= 30 else "bajo"
+
+    filas = ""
+    for a in actores:
+        idx    = a.get("indice_activacion")
+        idx_s  = f"{idx:.1f}" if idx is not None else "—"
+        color  = _color_idx(idx)
+        etiq   = _etiq_idx(idx)
+        peso   = a.get("peso_calculado", 0)
+        c_norm = round(peso / 100, 2)
+        v_norm = a.get("v_norm", 0)
+        o_norm = a.get("o_norm", 0)
+        bar_w  = int(min(100, idx)) if idx is not None else 0
+        nivel_nombre = NIVELES_ACTOR.get(a.get("nivel","IV"), ("—",))[0]
+        filas += f"""<tr>
+  <td>
+    <a href="/admin/actores/{a['id']}" style="color:var(--accent);font-weight:600;text-decoration:none">
+      {escape(a['nombre'])}
+    </a>
+    <div style="font-size:10px;color:var(--muted)">Nivel {escape(a.get('nivel','?'))} · {escape(nivel_nombre)}</div>
+  </td>
+  <td style="text-align:center">
+    <span style="font-weight:600;color:var(--text)">{peso:.1f}</span>
+    <div style="font-size:10px;color:var(--muted)">C={c_norm:.2f}</div>
+  </td>
+  <td style="text-align:center;color:#94a3b8">{v_norm:.2f}</td>
+  <td style="text-align:center;color:#94a3b8">{o_norm:.2f}</td>
+  <td style="text-align:center">
+    <span style="font-size:18px;font-weight:700;color:{color}">{idx_s}</span>
+    <div style="height:4px;background:#1e293b;border-radius:2px;margin-top:3px;width:60px">
+      <div style="height:100%;width:{bar_w}%;background:{color};border-radius:2px"></div>
+    </div>
+  </td>
+  <td>
+    <span style="background:{color}22;color:{color};padding:2px 7px;
+                 border-radius:4px;font-size:11px;font-weight:600">{etiq}</span>
+  </td>
+  <td style="text-align:right">
+    <a href="/admin/actores/{a['id']}" style="color:var(--muted);font-size:12px">editar CVO →</a>
+  </td>
+</tr>\n"""
+
+    if not filas:
+        filas = (f'<tr><td colspan="7" style="color:var(--muted);padding:20px;text-align:center">'
+                 f'Sin actores vinculados a este tema. '
+                 f'<a href="/admin/actores" style="color:var(--accent)">Vincúlalos desde el panel de actores →</a>'
+                 f'</td></tr>')
+
+    contenido = f"""
+<div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+  <div style="font-size:15px;font-weight:600;color:var(--text)">Activación por tema:</div>
+  <form method="get" action="/admin/actores/activacion" style="display:flex;gap:8px;align-items:center">
+    <select name="tema" onchange="this.form.submit()"
+            style="background:var(--bg-3);color:var(--text);border:1px solid #334155;
+                   border-radius:4px;padding:5px 10px;font-size:13px">
+      {opts}
+    </select>
+  </form>
+  <a href="/admin/actores" style="color:var(--muted);font-size:12px;margin-left:auto">← Actores</a>
+</div>
+
+<div class="card">
+  <div class="card-title">
+    {escape(tema_sel.replace('_',' ').title())} — actores por Índice de Activación Estratégica
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      Índice = (C × V × O)^(1/3) × 100 · C = peso/100 · V = voluntad · O = oportunidad
+    </span>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+    Arriba: actores que <b>usarán su poder AHORA</b> en este tema (índice alto).
+    Abajo: poder estructural alto pero activación baja (quietos en este momento).
+    Edita las señales CVO desde la página de cada actor.
+  </p>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Actor</th>
+        <th style="text-align:center">Peso (C)</th>
+        <th style="text-align:center">V (voluntad)</th>
+        <th style="text-align:center">O (oportunidad)</th>
+        <th style="text-align:center">Índice</th>
+        <th>Nivel activación</th>
+        <th></th>
+      </tr></thead>
+      <tbody>{filas}</tbody>
+    </table>
+  </div>
+  <p style="font-size:11px;color:var(--muted);margin-top:8px">
+    V = (interés×2 + postura + antecedente) / 20 ·
+    O = (ventana×2 + contrapesos + recursos) / 20 ·
+    Señales en escala 1-5, default 3 (neutro).
+    <a href="/admin/actores/log" style="color:var(--accent)">Ver log de cambios →</a>
+  </p>
+</div>"""
+
+    return HTMLResponse(_page(
+        f"Activación · {tema_sel.replace('_',' ').title()}",
+        contenido, "actores", sesion["username"],
+    ))

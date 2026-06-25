@@ -1501,6 +1501,132 @@ def cargar_pa_por_tema(db_path: str, pais: str = "PE") -> dict:
     return resultado
 
 
+def _calcular_indice_cvo(peso: float,
+                         interes: int, postura: int, antecedente: int,
+                         ventana: int, contrapesos: int, recursos: int) -> float:
+    """Índice de Activación Estratégica CVO (0-100).
+
+    C = peso/100 (capacidad normalizada)
+    V = (interes×2 + postura + antecedente) / 20  (voluntad, interes pesa doble)
+    O = (ventana×2 + contrapesos + recursos) / 20  (oportunidad, ventana pesa doble)
+    Índice = (C × V × O)^(1/3) × 100
+    Si cualquiera es 0, el índice es 0.
+    """
+    import math as _math
+    c = max(0.0, min(1.0, peso / 100.0))
+    v = (interes * 2 + postura + antecedente) / 20.0
+    o = (ventana * 2 + contrapesos + recursos) / 20.0
+    if c <= 0 or v <= 0 or o <= 0:
+        return 0.0
+    return round(_math.pow(c * v * o, 1 / 3) * 100, 1)
+
+
+def cargar_cvo_actor(db_path: str, actor_id: int) -> list:
+    """Devuelve la lista de señales CVO por tema para un actor dado.
+
+    Retorna [{tema, interes_directo, postura_declarada, antecedente_accion,
+              ventana_coyuntural, ausencia_contrapesos, recursos_movilizables,
+              indice_activacion}]
+    """
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT tema, interes_directo, postura_declarada, antecedente_accion, "
+                "ventana_coyuntural, ausencia_contrapesos, recursos_movilizables, "
+                "indice_activacion "
+                "FROM config_actor_temas WHERE actor_id=? ORDER BY tema",
+                (actor_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] cargar_cvo_actor falló: {e}")
+        return []
+
+
+def guardar_cvo_actor_tema(db_path: str, actor_id: int, tema: str,
+                            senales: dict, peso_actor: float,
+                            usuario: str) -> float:
+    """Guarda las 6 señales CVO para un actor-tema y recalcula el índice.
+
+    senales: {interes_directo, postura_declarada, antecedente_accion,
+              ventana_coyuntural, ausencia_contrapesos, recursos_movilizables}
+    Retorna el índice recalculado (0-100).
+    """
+    indice = _calcular_indice_cvo(
+        peso_actor,
+        int(senales.get("interes_directo", 3)),
+        int(senales.get("postura_declarada", 3)),
+        int(senales.get("antecedente_accion", 3)),
+        int(senales.get("ventana_coyuntural", 3)),
+        int(senales.get("ausencia_contrapesos", 3)),
+        int(senales.get("recursos_movilizables", 3)),
+    )
+    with _conn(db_path) as c:
+        c.execute(
+            "UPDATE config_actor_temas SET "
+            "interes_directo=?, postura_declarada=?, antecedente_accion=?, "
+            "ventana_coyuntural=?, ausencia_contrapesos=?, recursos_movilizables=?, "
+            "indice_activacion=? "
+            "WHERE actor_id=? AND tema=?",
+            (
+                int(senales.get("interes_directo", 3)),
+                int(senales.get("postura_declarada", 3)),
+                int(senales.get("antecedente_accion", 3)),
+                int(senales.get("ventana_coyuntural", 3)),
+                int(senales.get("ausencia_contrapesos", 3)),
+                int(senales.get("recursos_movilizables", 3)),
+                indice,
+                actor_id, tema,
+            ),
+        )
+        # Log de trazabilidad
+        c.execute(
+            "INSERT INTO config_actores_log "
+            "(actor_id, actor_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "SELECT ?, nombre, ?, NULL, ?, ?, ? FROM config_actores WHERE id=?",
+            (actor_id, f"cvo:{tema}", f"índice={indice}", usuario,
+             f"señales CVO editadas para {tema}", actor_id),
+        )
+    return indice
+
+
+def listar_actores_por_activacion(db_path: str, tema: str,
+                                   pais: str = "PE") -> list:
+    """Actores vinculados a un tema, ordenados por índice_activacion DESC.
+
+    Retorna [{id, nombre, nivel, tipo, peso_calculado, capacidad_efectiva,
+              interes_directo, postura_declarada, antecedente_accion,
+              ventana_coyuntural, ausencia_contrapesos, recursos_movilizables,
+              indice_activacion (puede ser NULL → mostrar como pendiente),
+              v_norm, o_norm}]
+    """
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT a.id, a.nombre, a.nivel, a.tipo, a.peso_calculado, "
+                "a.capacidad_efectiva, t.interes_directo, t.postura_declarada, "
+                "t.antecedente_accion, t.ventana_coyuntural, t.ausencia_contrapesos, "
+                "t.recursos_movilizables, t.indice_activacion "
+                "FROM config_actor_temas t "
+                "JOIN config_actores a ON a.id = t.actor_id "
+                "WHERE t.tema=? AND a.pais=? AND a.activo=1 "
+                "ORDER BY t.indice_activacion DESC NULLS LAST",
+                (tema, pais),
+            ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            v = (d["interes_directo"] * 2 + d["postura_declarada"] + d["antecedente_accion"]) / 20.0
+            o = (d["ventana_coyuntural"] * 2 + d["ausencia_contrapesos"] + d["recursos_movilizables"]) / 20.0
+            d["v_norm"] = round(v, 2)
+            d["o_norm"] = round(o, 2)
+            result.append(d)
+        return result
+    except Exception as e:
+        print(f"[config_loader] listar_actores_por_activacion falló: {e}")
+        return []
+
+
 def listar_log_actores(db_path: str, actor_id: int = None,
                        limite: int = 100) -> list:
     """Devuelve el log de cambios de actores, filtrado por actor_id si se provee."""
