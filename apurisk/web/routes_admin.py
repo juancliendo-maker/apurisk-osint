@@ -1774,25 +1774,64 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         act_previa = (conteos_prev.get(tema, 0) / total_prev) * 100
         return round(act_reciente - act_previa, 1)
 
-    # Umbrales de urgencia (editables desde calibración)
-    vel_urgente = params.get("vel_urgente", 30.0)
-    vel_prioritario = params.get("vel_prioritario", 10.0)
+    # ── Urgencia combinada: gravedad + actividad + velocidad ──────────────────
+    # La velocidad sola no mide urgencia: un riesgo crónico crítico (grave y muy
+    # activo de forma sostenida) tiene velocidad baja porque ya está saturado en
+    # cobertura, pero ES urgente por su criticidad persistente. Combinamos los tres.
+    #
+    # Clasificación (umbrales editables desde calibración):
+    #   APAGADO     → Y < umbral_y (no grave, aunque sea ruidoso)
+    #   LATENTE     → Y ≥ umbral_y pero actividad < act_prioritario
+    #   PRIORITARIO → Y ≥ umbral_y y (act_prioritario ≤ actividad < act_urgente, O escalando)
+    #   URGENTE     → Y ≥ umbral_y y actividad ≥ act_urgente  (rojo graduado por índice)
+    act_urgente     = params.get("act_urgente", 10.0)
+    act_prioritario = params.get("act_prioritario", 5.0)
+    peso_g = params.get("peso_gravedad", 0.6)
+    peso_a = params.get("peso_actividad", 0.25)
+    peso_v = params.get("peso_velocidad", 0.15)
+    act_ref = max(0.1, params.get("act_ref", 15.0))
+    vel_ref = max(0.1, params.get("vel_ref", 5.0))
+    vel_prioritario = params.get("vel_prioritario", 10.0)  # usado para "escalando"
 
-    # Colores de urgencia (no de gravedad). Alineados con la Plantilla Madre.
-    _COLOR_URGENTE     = "#dc2626"  # rojo brillante — grave + escalando fuerte
-    _COLOR_PRIORITARIO = "#f59e0b"  # ámbar — grave + movimiento moderado
-    _COLOR_IMPORTANTE  = "#94a3b8"  # gris — grave pero quieto (latente)
-    _COLOR_NO_GRAVE    = "#475569"  # slate apagado — no grave (sin importar velocidad)
+    # Colores no-urgentes
+    _COLOR_LATENTE  = "#94a3b8"  # gris claro — grave pero quieto
+    _COLOR_APAGADO  = "#475569"  # slate apagado — no grave
+    _COLOR_PRIORITARIO = "#f59e0b"  # ámbar — grave, empieza a moverse
 
-    def _clasificar_urgencia(y: float, velocidad: float) -> tuple[str, str]:
-        """Devuelve (clase_urgencia, color_hex) desde gravedad + velocidad."""
+    # Rampa de intensidad del rojo para URGENTES: índice → color.
+    # El índice más alto arde más brillante (#ef4444); el más bajo, más oscuro (#7f1d1d).
+    _RAMPA_I_MIN, _RAMPA_I_MAX = 0.65, 0.90  # rango del índice mapeado a la rampa
+    _ROJO_LO = (127, 29, 29)   # #7f1d1d — urgente apagado
+    _ROJO_HI = (239, 68, 68)   # #ef4444 — urgente intenso
+
+    def _indice_urgencia(y: float, actividad: float, velocidad: float) -> float:
+        """Índice 0-1 que combina gravedad (manda), actividad y velocidad positiva."""
+        grav_norm = min(1.0, max(0.0, y / 100.0))
+        act_norm = min(1.0, max(0.0, actividad) / act_ref)
+        vel_norm = min(1.0, max(0.0, velocidad) / vel_ref)  # vel negativa no resta
+        return round(peso_g * grav_norm + peso_a * act_norm + peso_v * vel_norm, 3)
+
+    def _rojo_intensidad(indice: float) -> str:
+        """Mapea el índice de urgencia a un tono de rojo (oscuro→brillante)."""
+        t = (indice - _RAMPA_I_MIN) / max(1e-6, _RAMPA_I_MAX - _RAMPA_I_MIN)
+        t = min(1.0, max(0.0, t))
+        r = round(_ROJO_LO[0] + t * (_ROJO_HI[0] - _ROJO_LO[0]))
+        g = round(_ROJO_LO[1] + t * (_ROJO_HI[1] - _ROJO_LO[1]))
+        b = round(_ROJO_LO[2] + t * (_ROJO_HI[2] - _ROJO_LO[2]))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _clasificar_urgencia(y: float, actividad: float,
+                             velocidad: float) -> tuple[str, str, float]:
+        """Devuelve (clase, color_hex, indice). Indice solo significativo para urgentes."""
         if y < umbral_y:
-            return "no_grave", _COLOR_NO_GRAVE
-        if velocidad >= vel_urgente:
-            return "URGENTE", _COLOR_URGENTE
-        if velocidad >= vel_prioritario:
-            return "PRIORITARIO", _COLOR_PRIORITARIO
-        return "IMPORTANTE", _COLOR_IMPORTANTE
+            return "no_grave", _COLOR_APAGADO, 0.0
+        indice = _indice_urgencia(y, actividad, velocidad)
+        if actividad >= act_urgente:
+            return "URGENTE", _rojo_intensidad(indice), indice
+        escalando = velocidad >= vel_prioritario
+        if actividad >= act_prioritario or escalando:
+            return "PRIORITARIO", _COLOR_PRIORITARIO, indice
+        return "LATENTE", _COLOR_LATENTE, indice
 
     # ── MATRIZ A — por volumen ────────────────────────────────────────────────
     globos_a = []
@@ -1880,9 +1919,10 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
             and nombre_match != actor_determinante_nombre
         )
 
-        # Velocidad 7d y clasificación de URGENCIA (define el color, no la gravedad)
+        # Velocidad 7d + clasificación de URGENCIA combinada (gravedad+actividad+velocidad).
+        # El color codifica urgencia; la intensidad del rojo, el índice (criticidad).
         velocidad = _velocidad(tema)
-        urgencia, color_urgencia = _clasificar_urgencia(y, velocidad)
+        urgencia, color_urgencia, indice_urg = _clasificar_urgencia(y, x, velocidad)
 
         # nivel de gravedad se conserva para tablas/leyendas que aún lo usan
         nivel = _nivel_score(y)
@@ -1902,6 +1942,7 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
             "color": color_urgencia,
             "urgencia": urgencia,
             "velocidad": velocidad,
+            "indice_urgencia": indice_urg,
             "origen_pa": origen_pa,
             "pa_info": pa_info,
             "actor_visible": actor_visible_nombre,
@@ -1920,15 +1961,14 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     #   U_score = max(0, vel_max_grave) + coef_sim · max(0, n_escalando − 1)
     #   U_norm  = min(1, U_score / URGENCIA_REF)            ← urgencia normalizada 0–1
     #   Score_B = G_base + (100 − G_base) · U_norm          ← el headroom lo llena la urgencia
-    coef_sim = params["coef_simultaneidad"]
+    coef_sim_idx = params.get("coef_sim_idx", 0.03)
     piso_gravedad = params.get("piso_gravedad", 65.0)
-    urgencia_ref = max(1.0, params.get("urgencia_ref", 50.0))
 
     score_global_b = 0.0
     formula_score_b = (
         f"G_base + (100−G_base)·U_norm · "
         f"G_base={piso_gravedad:g}·(n_graves/n_total) · "
-        f"U_norm=min(1, [vel_max_grave + {coef_sim:g}·(n_escalando−1)] / {urgencia_ref:g})"
+        f"U_norm=indice_max + (1−indice_max)·min(1, {coef_sim_idx:g}·(n_urgentes−1))"
     )
     if globos_b:
         n_total = len(globos_b)
@@ -1937,14 +1977,16 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         frac_graves = n_graves / max(1, n_total)
         g_base = piso_gravedad * frac_graves
 
-        # Velocidad máxima entre los temas graves (frente más caliente)
-        vel_max_grave = max([max(0.0, g["velocidad"]) for g in graves], default=0.0)
-        # Temas graves escalando (velocidad ≥ umbral prioritario)
-        n_escalando = sum(1 for g in graves if g["velocidad"] >= vel_prioritario)
+        # Índice de urgencia máximo entre los graves (frente más crítico) y nº de urgentes.
+        # Combina los tres factores (gravedad+actividad+velocidad), no solo velocidad.
+        indice_max = max([g.get("indice_urgencia", 0.0) for g in graves], default=0.0)
+        n_urgentes = sum(1 for g in graves if g["urgencia"] == "URGENTE")
 
-        u_score = vel_max_grave + coef_sim * max(0, n_escalando - 1)
-        u_norm = min(1.0, u_score / urgencia_ref)
-        score_global_b = round(min(100.0, g_base + (100.0 - g_base) * u_norm), 1)
+        # La simultaneidad llena parte del HEADROOM restante (1−indice_max), no se suma
+        # cruda: así el Score nunca satura en 100 mientras el frente más crítico sea <1.
+        sim_factor = min(1.0, coef_sim_idx * max(0, n_urgentes - 1))
+        u_norm = indice_max + (1.0 - indice_max) * sim_factor
+        score_global_b = round(g_base + (100.0 - g_base) * u_norm, 1)
     nivel_b = _nivel_score(score_global_b)
 
     # ── Escala visible del eje X (no toca los datos, solo el "zoom") ──────────
@@ -1984,8 +2026,8 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
         "usando_7d": usando_7d,
         "total_menciones_7d": total_menciones if usando_7d else 0,
         "hay_velocidad": hay_velocidad,
-        "vel_urgente": vel_urgente,
-        "vel_prioritario": vel_prioritario,
+        "act_urgente": act_urgente,
+        "act_prioritario": act_prioritario,
     }
 
 
@@ -2046,11 +2088,13 @@ def _matriz_bubble_html(canvas_id: str, globos: list, titulo_x: str,
             else:
                 pa_str = f"PA={g.get('impacto_base', 0):g} (estimado)"
 
-            # Línea de urgencia/velocidad
+            # Línea de urgencia combinada (clasificación + índice + velocidad)
             _vel = g.get("velocidad", 0)
             _urg = g.get("urgencia", "—")
+            _idx = g.get("indice_urgencia", 0.0)
             _vel_signo = f"+{_vel:g}" if _vel > 0 else f"{_vel:g}"
-            linea_urg = f"URGENCIA: {_urg} · velocidad 7d {_vel_signo} pts"
+            _idx_str = f" · índice {_idx:.2f}" if _urg in ("URGENTE", "PRIORITARIO") else ""
+            linea_urg = f"URGENCIA: {_urg}{_idx_str} · velocidad 7d {_vel_signo} pts"
 
             tooltip_extra = (
                 f"{linea_urg} | "
@@ -2257,15 +2301,17 @@ async def admin_semaforo(request: Request):
     usando_7d         = md["usando_7d"]
     total_menc_7d     = md["total_menciones_7d"]
     hay_velocidad     = md["hay_velocidad"]
-    vel_urgente_p     = md["vel_urgente"]
-    vel_prioritario_p = md["vel_prioritario"]
+    act_urgente_p     = md["act_urgente"]
+    act_prioritario_p = md["act_prioritario"]
 
-    # Leyenda de URGENCIA para la Matriz B (color = velocidad, no gravedad)
+    # Leyenda de URGENCIA para la Matriz B. El color codifica clasificación; la
+    # intensidad del rojo (en los urgentes) gradúa la criticidad por índice combinado.
     _leyenda_urgencia = [
-        ("#dc2626", f"Urgente (grave, vel ≥ {vel_urgente_p:g})"),
-        ("#f59e0b", f"Prioritario (grave, vel ≥ {vel_prioritario_p:g})"),
-        ("#94a3b8", "Importante (grave, sin movimiento)"),
-        ("#475569", "No grave"),
+        ("#e64141", f"Urgente intenso (grave, act ≥ {act_urgente_p:g}, índice alto)"),
+        ("#a62b2b", "Urgente apagado (grave y activo, índice menor)"),
+        ("#f59e0b", f"Prioritario (grave, act ≥ {act_prioritario_p:g} o escalando)"),
+        ("#94a3b8", "Latente (grave pero quieto)"),
+        ("#475569", "Apagado (no grave)"),
     ]
     leyenda_urgencia_html = " ".join(
         f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px">'
@@ -2457,21 +2503,23 @@ async def admin_semaforo(request: Request):
                   else '<span style="color:var(--muted)">—</span>')
         )
 
-        # Velocidad 7d + urgencia (color del globo)
+        # Urgencia combinada: color del globo (intensidad = índice) + velocidad + índice
         velocidad = g_b.get("velocidad", 0) if g_b else 0
         urgencia = g_b.get("urgencia", "—") if g_b else "—"
-        _urg_color = {
-            "URGENTE": "#dc2626", "PRIORITARIO": "#f59e0b",
-            "IMPORTANTE": "#94a3b8", "no_grave": "#475569",
-        }.get(urgencia, "#64748b")
-        _urg_label = "No grave" if urgencia == "no_grave" else urgencia
+        indice_urg = g_b.get("indice_urgencia", 0.0) if g_b else 0.0
+        # Usa el color real del globo (ya graduado por índice en los urgentes)
+        _urg_color = g_b.get("color", "#64748b") if g_b else "#64748b"
+        _urg_label = "Apagado" if urgencia == "no_grave" else urgencia
         _vel_signo = f"+{velocidad:g}" if velocidad > 0 else f"{velocidad:g}"
+        _idx_html = (
+            f' · índice {indice_urg:.2f}' if urgencia in ("URGENTE", "PRIORITARIO") else ""
+        )
         urgencia_html = (
             f'<span style="display:inline-flex;align-items:center;gap:5px">'
             f'<span style="width:9px;height:9px;border-radius:50%;background:{_urg_color};'
             f'display:inline-block"></span>'
             f'<span style="color:{_urg_color};font-weight:600">{escape(_urg_label)}</span></span>'
-            f'<br><span style="font-size:10px;color:var(--muted)">vel {_vel_signo} pts/7d</span>'
+            f'<br><span style="font-size:10px;color:var(--muted)">vel {_vel_signo} pts/7d{_idx_html}</span>'
         )
 
         filas_pa += (
@@ -2691,9 +2739,13 @@ def _tabla_velocidades_html(
     hay_prev: bool,
     snapshot_ts: str,
 ) -> str:
-    """Bloque HTML: tabla de velocidades 7d de los 8 temas para calibración de umbrales."""
-    vel_urgente     = params.get("vel_urgente", 30.0)
-    vel_prioritario = params.get("vel_prioritario", 10.0)
+    """Bloque HTML: tabla de velocidades 7d de los 8 temas para calibrar VEL_REF.
+
+    La velocidad ya NO clasifica la urgencia por sí sola (eso lo hace el índice
+    combinado en la Matriz B). Esta tabla sirve para calibrar URGENCIA_VEL_REF:
+    elige un vel_ref que normalice a ~1.0 las aceleraciones genuinas.
+    """
+    vel_ref = max(0.1, params.get("vel_ref", 5.0))
 
     if not vel_temas:
         return """
@@ -2723,23 +2775,21 @@ def _tabla_velocidades_html(
     for tema in _IMPACTO_TEMA:
         vel = vel_temas.get(tema, 0.0)
         vel_str = f"+{vel:g}" if vel > 0 else f"{vel:g}"
-        if vel >= vel_urgente:
-            color = "#dc2626"
-            etiq  = "URGENTE"
-        elif vel >= vel_prioritario:
-            color = "#f59e0b"
-            etiq  = "PRIORITARIO"
+        vel_norm = min(1.0, max(0.0, vel) / vel_ref)  # cómo contribuye al índice
+        if vel >= vel_ref:
+            color = "#22c55e"
+            etiq  = "acelera (norm 1.0)"
         elif vel > 0:
             color = "#94a3b8"
-            etiq  = "activo"
+            etiq  = f"acelera (norm {vel_norm:.2f})"
         elif vel < 0:
             color = "#64748b"
-            etiq  = "enfriando"
+            etiq  = "desacelera (no resta)"
         else:
             color = "#64748b"
-            etiq  = "latente"
+            etiq  = "estable"
         barra_w = min(100, max(0, int(abs(vel) * 6))) if hay_prev else 0
-        barra_color = "#dc2626" if vel >= vel_urgente else ("#f59e0b" if vel >= vel_prioritario else ("#22c55e" if vel > 0 else "#94a3b8"))
+        barra_color = "#22c55e" if vel > 0 else "#94a3b8"
         barra_html = (
             f'<div style="width:{barra_w}px;height:8px;background:{barra_color};'
             f'border-radius:3px;display:inline-block;vertical-align:middle"></div>'
@@ -2766,8 +2816,9 @@ def _tabla_velocidades_html(
   </div>
   {sin_prev_aviso}
   <p style="color:var(--muted);font-size:12px;margin:0 0 10px 0">
-    Umbrales actuales: Urgente ≥ <b>{vel_urgente:g}</b> · Prioritario ≥ <b>{vel_prioritario:g}</b>.
-    Ajusta los umbrales en la tabla de parámetros de arriba y recarga para ver el efecto.
+    Referencia actual <b>URGENCIA_VEL_REF = {vel_ref:g}</b>: una velocidad ≥ {vel_ref:g}
+    contribuye al máximo (norm 1.0) al índice de urgencia. La velocidad negativa no resta.
+    La urgencia final (clasificación + intensidad) se ve en la Matriz B del semáforo.
   </p>
   <div style="overflow-x:auto">
     <table class="tbl">
@@ -2775,7 +2826,7 @@ def _tabla_velocidades_html(
         <th>Tema</th>
         <th style="text-align:center">Velocidad 7d</th>
         <th>Magnitud</th>
-        <th>Clasificación actual</th>
+        <th>Contribución al índice</th>
       </tr></thead>
       <tbody>{filas}</tbody>
     </table>
@@ -2928,14 +2979,25 @@ async def admin_calibrar(request: Request):
          "Score B: tope total del agravante sobre Y_max (puntos)"),
         ("SEMAFORO_X_MAX_VIZ",          params["x_max_viz"],
          "Escala visual eje X. 0 = dinámica (máximo real + margen). >0 = escala fija"),
-        ("SEMAFORO_VELOCIDAD_URGENTE",   params["vel_urgente"],
-         "Velocidad 7d mínima para color URGENTE (rojo) en Matriz B"),
-        ("SEMAFORO_VELOCIDAD_PRIORITARIO", params["vel_prioritario"],
-         "Velocidad 7d mínima para color PRIORITARIO (ámbar) en Matriz B"),
+        # ── Urgencia combinada (clasificación + intensidad del rojo) ──
+        ("SEMAFORO_ACTIVIDAD_URGENTE",  params["act_urgente"],
+         "Actividad (% vol.) mínima para clasificar un tema grave como URGENTE (rojo)"),
+        ("SEMAFORO_ACTIVIDAD_PRIORITARIO", params["act_prioritario"],
+         "Actividad (% vol.) mínima para clasificar un tema grave como PRIORITARIO (ámbar)"),
+        ("URGENCIA_PESO_GRAVEDAD",      params["peso_gravedad"],
+         "Índice de urgencia: peso de la gravedad (Y/100). La gravedad manda"),
+        ("URGENCIA_PESO_ACTIVIDAD",     params["peso_actividad"],
+         "Índice de urgencia: peso de la actividad normalizada"),
+        ("URGENCIA_PESO_VELOCIDAD",     params["peso_velocidad"],
+         "Índice de urgencia: peso de la velocidad positiva normalizada"),
+        ("URGENCIA_ACT_REF",            params["act_ref"],
+         "Índice de urgencia: actividad de referencia (act_norm = min(1, act/ref))"),
+        ("URGENCIA_VEL_REF",            params["vel_ref"],
+         "Índice de urgencia: velocidad de referencia (vel_norm = min(1, vel/ref))"),
         ("SCORE_B_PISO_GRAVEDAD",        params["piso_gravedad"],
          "Score B: peso del componente estructural G_base = piso × frac_graves"),
-        ("SCORE_B_URGENCIA_REF",         params["urgencia_ref"],
-         "Score B: velocidad de referencia para normalizar el componente de urgencia (U_norm=1 cuando u_score≥ref)"),
+        ("SCORE_B_COEF_SIM_IDX",         params["coef_sim_idx"],
+         "Score B: aporte al índice por cada tema URGENTE adicional (simultaneidad)"),
     ]
     filas_params = ""
     for clave, valor, desc in PARAMS_META:
@@ -3065,6 +3127,11 @@ async def admin_calibrar_param(request: Request):
         "SEMAFORO_UMBRAL_ACTIVIDAD_X", "SEMAFORO_UMBRAL_GRAVEDAD_Y",
         "SCORE_B_COEF_ACTIVIDAD", "SCORE_B_COEF_SIMULTANEIDAD",
         "SCORE_B_BONUS_MAX", "SEMAFORO_X_MAX_VIZ",
+        # Urgencia combinada (gravedad + actividad + velocidad)
+        "SEMAFORO_ACTIVIDAD_URGENTE", "SEMAFORO_ACTIVIDAD_PRIORITARIO",
+        "URGENCIA_PESO_GRAVEDAD", "URGENCIA_PESO_ACTIVIDAD", "URGENCIA_PESO_VELOCIDAD",
+        "URGENCIA_ACT_REF", "URGENCIA_VEL_REF",
+        "SCORE_B_PISO_GRAVEDAD", "SCORE_B_COEF_SIM_IDX",
     }
     form = await request.form()
     try:

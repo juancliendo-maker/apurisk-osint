@@ -507,6 +507,50 @@ _DATOS_INICIALES = [
         "'Score B: agregado de urgencia (vel_max + simultaneidad) que mapea a urgencia plena (1.0)', 'GLOBAL')", []
     ),
 
+    # ── Urgencia combinada (gravedad + actividad + velocidad) con intensidad graduada ──
+    # Clasificación: APAGADO (Y<65) · LATENTE (Y≥65, act<act_prio) · PRIORITARIO (ámbar)
+    # · URGENTE (Y≥65, act≥act_urgente, rojo graduado por índice).
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SEMAFORO_ACTIVIDAD_URGENTE', '10', 'float', "
+        "'Matriz B: actividad mínima (% vol.) para marcar un tema grave como URGENTE (rojo)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SEMAFORO_ACTIVIDAD_PRIORITARIO', '5', 'float', "
+        "'Matriz B: actividad mínima (% vol.) para marcar un tema grave como PRIORITARIO (ámbar)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('URGENCIA_PESO_GRAVEDAD', '0.6', 'float', "
+        "'Índice de urgencia: peso de la gravedad (Y/100). La gravedad manda', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('URGENCIA_PESO_ACTIVIDAD', '0.25', 'float', "
+        "'Índice de urgencia: peso de la actividad normalizada (act/act_ref)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('URGENCIA_PESO_VELOCIDAD', '0.15', 'float', "
+        "'Índice de urgencia: peso de la velocidad positiva normalizada (vel/vel_ref)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('URGENCIA_ACT_REF', '15', 'float', "
+        "'Índice de urgencia: actividad de referencia que normaliza a 1.0 (act_norm = min(1, act/ref))', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('URGENCIA_VEL_REF', '5', 'float', "
+        "'Índice de urgencia: velocidad de referencia que normaliza a 1.0 (vel_norm = min(1, vel/ref))', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('SCORE_B_COEF_SIM_IDX', '0.03', 'float', "
+        "'Score B: aporte de urgencia por cada tema URGENTE adicional (sobre el índice máximo)', 'GLOBAL')", []
+    ),
+
     # ── Valores base por nivel estratégico (I-VIII) — editables desde panel ──
     # Propagación automática: cambiar un valor aquí actualiza todos los actores
     # de ese nivel que NO tengan nivel_base_manual=1.
