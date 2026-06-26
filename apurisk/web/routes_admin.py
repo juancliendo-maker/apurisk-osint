@@ -3649,7 +3649,7 @@ async def admin_actores_crear(request: Request):
         return RedirectResponse(f"/admin/actores/nuevo?err={escape(str(e))}", status_code=303)
 
 
-@router.get("/actores/{actor_id}", response_class=HTMLResponse)
+@router.get("/actores/{actor_id:int}", response_class=HTMLResponse)
 async def admin_actores_detalle(request: Request, actor_id: int):
     sesion, err = _admin_guard(request)
     if err:
@@ -3803,7 +3803,7 @@ async def admin_actores_detalle(request: Request, actor_id: int):
                               sesion["username"]))
 
 
-@router.post("/actores/{actor_id}/editar")
+@router.post("/actores/{actor_id:int}/editar")
 async def admin_actores_editar(request: Request, actor_id: int):
     sesion, err = _admin_guard(request)
     if err:
@@ -3845,7 +3845,7 @@ async def admin_actores_editar(request: Request, actor_id: int):
                                 status_code=303)
 
 
-@router.post("/actores/{actor_id}/toggle")
+@router.post("/actores/{actor_id:int}/toggle")
 async def admin_actores_toggle(request: Request, actor_id: int):
     sesion, err = _admin_guard(request)
     if err:
@@ -4068,7 +4068,7 @@ def _cvo_tema_bloque(tema: str, row: dict, peso_actor: float) -> str:
 </div>"""
 
 
-@router.post("/actores/{actor_id}/cvo")
+@router.post("/actores/{actor_id:int}/cvo")
 async def admin_actores_cvo(request: Request, actor_id: int):
     """Guarda las 6 señales CVO de un actor para un tema específico."""
     sesion, err = _admin_guard(request)
