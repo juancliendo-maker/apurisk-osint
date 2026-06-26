@@ -3973,16 +3973,18 @@ _CVO_CALC_JS = """
 """
 
 
-def _cvo_slider(prefix: str, name: str, label: str, val: int, doble: bool) -> str:
+def _cvo_slider(prefix: str, name: str, label: str, val: int,
+                doble: bool, form_id: str = "") -> str:
     full_name = f"{prefix}{name}"
     badge = ' <span style="font-size:10px;color:var(--accent)">×2</span>' if doble else ""
+    form_attr = f' form="{escape(form_id)}"' if form_id else ""
     return f"""
 <div style="margin-bottom:6px">
   <div style="display:flex;justify-content:space-between;margin-bottom:2px">
     <span style="font-size:11px;color:var(--muted)">{escape(label)}{badge}</span>
     <span style="font-size:12px;font-weight:700;color:var(--text)" id="val-{full_name}">{val}</span>
   </div>
-  <input type="range" name="{full_name}" min="1" max="5" value="{val}"
+  <input type="range" name="{full_name}" min="1" max="5" value="{val}"{form_attr}
          style="width:100%;accent-color:var(--accent)"
          oninput="document.getElementById('val-{full_name}').textContent=this.value">
 </div>"""
@@ -4008,15 +4010,16 @@ def _cvo_tema_bloque(tema: str, row: dict, peso_actor: float) -> str:
 
     def g(field): return int(row.get(field, 3))
 
+    fid = f"cvo-form-{tema}"
     sliders_v = (
-        _cvo_slider(prefix, "interes_directo",    "Interés directo",       g("interes_directo"),    True) +
-        _cvo_slider(prefix, "postura_declarada",  "Postura declarada",     g("postura_declarada"),  False) +
-        _cvo_slider(prefix, "antecedente_accion", "Antecedente de acción", g("antecedente_accion"), False)
+        _cvo_slider(prefix, "interes_directo",    "Interés directo",       g("interes_directo"),    True,  fid) +
+        _cvo_slider(prefix, "postura_declarada",  "Postura declarada",     g("postura_declarada"),  False, fid) +
+        _cvo_slider(prefix, "antecedente_accion", "Antecedente de acción", g("antecedente_accion"), False, fid)
     )
     sliders_o = (
-        _cvo_slider(prefix, "ventana_coyuntural",   "Ventana coyuntural",     g("ventana_coyuntural"),   True) +
-        _cvo_slider(prefix, "ausencia_contrapesos", "Ausencia contrapesos",   g("ausencia_contrapesos"), False) +
-        _cvo_slider(prefix, "recursos_movilizables","Recursos movilizables",  g("recursos_movilizables"),False)
+        _cvo_slider(prefix, "ventana_coyuntural",   "Ventana coyuntural",     g("ventana_coyuntural"),   True,  fid) +
+        _cvo_slider(prefix, "ausencia_contrapesos", "Ausencia contrapesos",   g("ausencia_contrapesos"), False, fid) +
+        _cvo_slider(prefix, "recursos_movilizables","Recursos movilizables",  g("recursos_movilizables"),False, fid)
     )
 
     return f"""
