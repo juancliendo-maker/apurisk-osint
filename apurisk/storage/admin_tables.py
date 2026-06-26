@@ -551,6 +551,26 @@ _DATOS_INICIALES = [
         "'Score B: aporte de urgencia por cada tema URGENTE adicional (sobre el índice máximo)', 'GLOBAL')", []
     ),
 
+    # ── Capa 4 Dinámica — umbrales y factor de divergencia (editables) ────────
+    # trayectoria_base = suma de 7 señales (-14..+14). Etiqueta por umbral:
+    #   ASCENSO (≥ umbral_ascenso) · ESTABLE (entre) · DECLIVE (≤ umbral_declive).
+    # trayectoria_en_tema = base + divergencia(-1/0/+1) × factor_div.
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('TRAYECTORIA_UMBRAL_ASCENSO', '6', 'float', "
+        "'Dinámica: trayectoria mínima para etiquetar al actor como ASCENSO (rango -14..+14)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('TRAYECTORIA_UMBRAL_DECLIVE', '-6', 'float', "
+        "'Dinámica: trayectoria máxima para etiquetar al actor como DECLIVE (rango -14..+14)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('TRAYECTORIA_FACTOR_DIV', '3', 'float', "
+        "'Dinámica: puntos que suma/resta una divergencia por tema (±1) a la trayectoria base', 'GLOBAL')", []
+    ),
+
     # ── Valores base por nivel estratégico (I-VIII) — editables desde panel ──
     # Propagación automática: cambiar un valor aquí actualiza todos los actores
     # de ese nivel que NO tengan nivel_base_manual=1.
@@ -585,6 +605,18 @@ _MIGRACIONES = [
     "ALTER TABLE config_actor_temas ADD COLUMN ausencia_contrapesos  INTEGER NOT NULL DEFAULT 3",
     "ALTER TABLE config_actor_temas ADD COLUMN recursos_movilizables INTEGER NOT NULL DEFAULT 3",
     "ALTER TABLE config_actor_temas ADD COLUMN indice_activacion     REAL",
+    # Capa 4 Dinámica — trayectoria de poder del actor (7 señales, escala -2 a +2)
+    # trayectoria_base = suma de las 7 (rango -14 a +14). Se calcula en vivo, no se almacena.
+    "ALTER TABLE config_actores ADD COLUMN din_alianzas        INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE config_actores ADD COLUMN din_financiamiento  INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE config_actores ADD COLUMN din_territorio      INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE config_actores ADD COLUMN din_instituciones   INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE config_actores ADD COLUMN din_internacional   INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE config_actores ADD COLUMN din_relevo_lideres  INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE config_actores ADD COLUMN din_adaptacion      INTEGER NOT NULL DEFAULT 0",
+    # Capa 4 — divergencia dinámica por tema (-1 retrocede / 0 neutro / +1 avanza)
+    # trayectoria_en_tema = trayectoria_base + divergencia_dinamica × FACTOR_DIV
+    "ALTER TABLE config_actor_temas ADD COLUMN divergencia_dinamica INTEGER NOT NULL DEFAULT 0",
 ]
 
 

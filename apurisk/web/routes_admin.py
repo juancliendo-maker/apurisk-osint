@@ -3656,7 +3656,7 @@ async def admin_actores_detalle(request: Request, actor_id: int):
         return err
     from ..storage.config_loader import (
         obtener_actor, cargar_niveles_base, listar_log_actores, NIVELES_ACTOR,
-        cargar_cvo_actor,
+        cargar_cvo_actor, cargar_dinamica_actor, cargar_parametros_trayectoria,
     )
     db = _get_db_path()
     actor = obtener_actor(db, actor_id)
@@ -3667,6 +3667,8 @@ async def admin_actores_detalle(request: Request, actor_id: int):
     temas = list(_IMPACTO_TEMA.keys())
     logs = listar_log_actores(db, actor_id, limite=30)
     cvo_rows = {r["tema"]: r for r in cargar_cvo_actor(db, actor_id)}
+    din = cargar_dinamica_actor(db, actor_id)
+    par_tray = cargar_parametros_trayectoria(db)
 
     msg = request.query_params.get("msg", "")
     err_msg = request.query_params.get("err", "")
@@ -3739,9 +3741,13 @@ async def admin_actores_detalle(request: Request, actor_id: int):
     else:
         cvo_section = ""
 
+    dinamica_section = _dinamica_section_html(
+        actor_id, din, cvo_rows, temas_actor, par_tray)
+
     contenido = f"""
 {_ACTOR_CALC_JS}
 {_CVO_CALC_JS}
+{_din_calc_js(par_tray)}
 {msg_html}{err_html}
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
   <div>
@@ -3786,6 +3792,8 @@ async def admin_actores_detalle(request: Request, actor_id: int):
 </div>
 
 {cvo_section}
+
+{dinamica_section}
 
 <div class="card" style="margin-top:0">
   <div class="card-title">Historial de cambios (últimos 30)</div>
@@ -4111,6 +4119,246 @@ async def admin_actores_cvo(request: Request, actor_id: int):
             f"/admin/actores/{actor_id}?err={escape(str(e))}", status_code=303)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Capa 4 Dinámica — trayectoria de poder
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DIN_SENALES = [
+    ("din_alianzas",       "Alianzas",        "¿gana o pierde aliados clave?"),
+    ("din_financiamiento", "Financiamiento",  "¿recursos crecen o se erosionan?"),
+    ("din_territorio",     "Territorio",      "¿amplía o pierde base territorial/social?"),
+    ("din_instituciones",  "Instituciones",   "¿gana posiciones institucionales?"),
+    ("din_internacional",  "Internacional",   "¿respaldo o presión externa?"),
+    ("din_relevo_lideres", "Relevo de líderes","¿liderazgo sólido o en disputa?"),
+    ("din_adaptacion",     "Adaptación",      "¿adapta su estrategia al contexto?"),
+]
+
+
+def _din_etiqueta_html(valor, par):
+    """Devuelve (texto, color) de la etiqueta de trayectoria según umbrales."""
+    if valor >= par["umbral_ascenso"]:
+        return "ASCENSO", "#22c55e"
+    if valor <= par["umbral_declive"]:
+        return "DECLIVE", "#ef4444"
+    return "ESTABLE", "#94a3b8"
+
+
+def _din_calc_js(par):
+    """JS de recálculo en vivo de la trayectoria base y por tema."""
+    return f"""
+<script>
+(function() {{
+  var UMBRAL_ASCENSO = {par['umbral_ascenso']};
+  var UMBRAL_DECLIVE = {par['umbral_declive']};
+  var FACTOR_DIV = {par['factor_div']};
+  function etiq(v) {{
+    if (v >= UMBRAL_ASCENSO) return ['ASCENSO', '#22c55e', '↑'];
+    if (v <= UMBRAL_DECLIVE) return ['DECLIVE', '#ef4444', '↓'];
+    return ['ESTABLE', '#94a3b8', '→'];
+  }}
+  function recalcDin() {{
+    var base = 0;
+    document.querySelectorAll('input[data-din-senal]').forEach(function(sl) {{
+      base += parseInt(sl.value) || 0;
+    }});
+    var e = etiq(base);
+    var elBase = document.getElementById('din-base-val');
+    var elLbl  = document.getElementById('din-base-lbl');
+    if (elBase) elBase.textContent = (base > 0 ? '+' : '') + base;
+    if (elLbl) {{ elLbl.textContent = e[2] + ' ' + e[0]; elLbl.style.color = e[1]; }}
+    // Por tema: base + divergencia × factor
+    document.querySelectorAll('[data-div-tema]').forEach(function(sel) {{
+      var tema = sel.dataset.divTema;
+      var div = parseInt(sel.value) || 0;
+      var enTema = base + div * FACTOR_DIV;
+      var et = etiq(enTema);
+      var out = document.getElementById('div-out-' + tema);
+      if (out) {{
+        var extra = div !== 0 ? ' (base ' + (base>0?'+':'') + base + ', ' +
+                    (div>0?'+':'') + (div*FACTOR_DIV) + ' divergencia)' : '';
+        out.innerHTML = '<b style="color:' + et[1] + '">' + et[2] + ' ' + et[0] +
+                        ' ' + (enTema>0?'+':'') + enTema + '</b>' +
+                        '<span style="color:var(--muted);font-size:10px">' + extra + '</span>';
+      }}
+    }});
+  }}
+  document.addEventListener('DOMContentLoaded', function() {{
+    document.querySelectorAll('input[data-din-senal]').forEach(function(sl) {{
+      sl.addEventListener('input', function() {{
+        var o = document.getElementById('val-' + sl.name);
+        if (o) o.textContent = (parseInt(sl.value)>0?'+':'') + sl.value;
+        recalcDin();
+      }});
+    }});
+    document.querySelectorAll('[data-div-tema]').forEach(function(sel) {{
+      sel.addEventListener('change', recalcDin);
+    }});
+    recalcDin();
+  }});
+}})();
+</script>
+"""
+
+
+def _din_slider(name, label, hint, val):
+    sign = "+" if val > 0 else ""
+    return f"""
+<div style="margin-bottom:8px">
+  <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+    <span style="font-size:11px;color:var(--text)">{escape(label)}
+      <span style="color:var(--muted);font-size:10px">— {escape(hint)}</span></span>
+    <span style="font-size:12px;font-weight:700;color:var(--accent)" id="val-{name}">{sign}{val}</span>
+  </div>
+  <input type="range" name="{name}" data-din-senal min="-2" max="2" step="1" value="{val}"
+         form="din-form" style="width:100%;accent-color:var(--accent)">
+  <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted)">
+    <span>−2 retrocede</span><span>0</span><span>+2 avanza</span>
+  </div>
+</div>"""
+
+
+def _dinamica_section_html(actor_id, din, cvo_rows, temas_actor, par):
+    """Sección Capa 4 — Dinámica: 7 sliders + divergencia por tema."""
+    sliders = "".join(_din_slider(n, lbl, hint, int(din.get(n, 0)))
+                      for n, lbl, hint in _DIN_SENALES)
+    base = din.get("trayectoria_base", 0)
+    base_lbl, base_color = _din_etiqueta_html(base, par)
+    flecha = "↑" if base_lbl == "ASCENSO" else "↓" if base_lbl == "DECLIVE" else "→"
+
+    # Divergencia por tema
+    div_filas = ""
+    for t in sorted(temas_actor):
+        row = cvo_rows.get(t, {})
+        div_actual = int(row.get("divergencia_dinamica") or 0)
+        en_tema = base + div_actual * par["factor_div"]
+        et_lbl, et_color = _din_etiqueta_html(en_tema, par)
+        et_flecha = "↑" if et_lbl == "ASCENSO" else "↓" if et_lbl == "DECLIVE" else "→"
+        opts = "".join(
+            f'<option value="{v}"{" selected" if v == div_actual else ""}>{lbl}</option>'
+            for v, lbl in [(-1, "−1 Retrocede"), (0, "0 Neutro"), (+1, "+1 Avanza")]
+        )
+        extra = (f' <span style="color:var(--muted);font-size:10px">(base {"+" if base>0 else ""}{base}, '
+                 f'{"+" if div_actual>0 else ""}{div_actual*par["factor_div"]:g} divergencia)</span>'
+                 ) if div_actual != 0 else ""
+        div_filas += f"""<tr>
+  <td style="font-size:12px;color:var(--text)">{escape(t.replace('_',' ').title())}</td>
+  <td>
+    <select name="div_{escape(t)}" data-div-tema="{escape(t)}" form="din-form"
+            style="background:var(--bg-3);color:var(--text);border:1px solid #334155;
+                   border-radius:4px;padding:3px 8px;font-size:12px">{opts}</select>
+  </td>
+  <td id="div-out-{escape(t)}" style="font-size:12px">
+    <b style="color:{et_color}">{et_flecha} {et_lbl} {"+" if en_tema>0 else ""}{en_tema:g}</b>{extra}
+  </td>
+</tr>\n"""
+
+    div_tabla = (f"""
+  <div style="font-size:11px;font-weight:600;color:var(--accent);margin:14px 0 6px;
+              text-transform:uppercase;letter-spacing:.5px">Divergencia por tema</div>
+  <p style="font-size:11px;color:var(--muted);margin:0 0 8px">
+    Si en un tema concreto el actor avanza o retrocede distinto a su tendencia general,
+    ajústalo aquí (±1 = ±{par['factor_div']:g} pts sobre la base).
+  </p>
+  <table class="tbl"><thead><tr>
+    <th>Tema</th><th>Divergencia</th><th>Trayectoria en el tema</th>
+  </tr></thead><tbody>{div_filas}</tbody></table>"""
+                 if temas_actor else
+                 '<p style="font-size:12px;color:var(--muted)">Sin temas vinculados — '
+                 'vincula temas al actor para fijar divergencias por tema.</p>')
+
+    return f"""
+<div class="card" style="margin-top:0">
+  <div class="card-title">Capa 4 — Dinámica (trayectoria de poder)
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      trayectoria = suma de 7 señales (−14..+14) · ASCENSO ≥{par['umbral_ascenso']:g} ·
+      DECLIVE ≤{par['umbral_declive']:g}
+    </span>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 12px">
+    ¿El poder del actor está subiendo, estable o erosionándose? Cada señal va de
+    −2 (retrocede fuerte) a +2 (avanza fuerte). Es contexto para el analista — no altera
+    el motor, el peso ni el semáforo.
+  </p>
+  <form id="din-form" method="post" action="/admin/actores/{actor_id}/dinamica"></form>
+  <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;
+              padding:10px 14px;background:var(--bg-3);border-radius:8px">
+    <div>
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase">Trayectoria base</div>
+      <div><span id="din-base-val" style="font-size:24px;font-weight:700;color:var(--text)">{"+" if base>0 else ""}{base}</span></div>
+    </div>
+    <div id="din-base-lbl" style="font-size:18px;font-weight:700;color:{base_color}">{flecha} {base_lbl}</div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div>{sliders}</div>
+    <div>
+      {div_tabla}
+    </div>
+  </div>
+  <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+    <button type="submit" form="din-form"
+            style="background:var(--accent);color:#000;border:none;border-radius:6px;
+                   padding:8px 22px;font-size:13px;font-weight:700;cursor:pointer">
+      Guardar dinámica
+    </button>
+    <input type="text" name="motivo" form="din-form" placeholder="motivo (opcional)"
+           style="width:200px;background:var(--bg-3);color:var(--text);
+                  border:1px solid #334155;border-radius:4px;padding:6px 10px;font-size:12px">
+  </div>
+</div>"""
+
+
+@router.post("/actores/{actor_id:int}/dinamica")
+async def admin_actores_dinamica(request: Request, actor_id: int):
+    """Guarda las 7 señales dinámicas del actor y las divergencias por tema."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import (
+        guardar_dinamica_actor, guardar_divergencia_tema, obtener_actor,
+        LockTimeoutError,
+    )
+    db = _get_db_path()
+    actor = obtener_actor(db, actor_id)
+    if not actor:
+        return RedirectResponse("/admin/actores?err=Actor+no+encontrado", status_code=303)
+    form = await request.form()
+    senales = {n: int(form.get(n, 0)) for n, _, _ in _DIN_SENALES}
+    try:
+        base = guardar_dinamica_actor(db, actor_id, senales, sesion["username"])
+        for t in actor.get("temas", []):
+            campo = f"div_{t}"
+            if campo in form:
+                guardar_divergencia_tema(db, actor_id, t, int(form.get(campo, 0)))
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?msg=Dinámica+guardada+·+trayectoria={base:+d}",
+            status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(
+            f"/admin/actores/{actor_id}?err={escape(str(e))}", status_code=303)
+
+
+def _celda_trayectoria(a: dict) -> str:
+    """Celda de trayectoria de poder (Capa 4) para la tabla de activación."""
+    et = a.get("trayectoria_etiqueta", "ESTABLE")
+    en_tema = a.get("trayectoria_en_tema", 0)
+    base = a.get("trayectoria_base", 0)
+    div = a.get("divergencia_dinamica", 0)
+    color = "#22c55e" if et == "ASCENSO" else "#ef4444" if et == "DECLIVE" else "#94a3b8"
+    flecha = "↑" if et == "ASCENSO" else "↓" if et == "DECLIVE" else "→"
+    val_s = f"{en_tema:+g}"
+    if div != 0:
+        det = (f'<div style="font-size:9px;color:var(--muted)">'
+               f'base {base:+d}, {en_tema - base:+g} div.</div>')
+    else:
+        det = ""
+    return (f'<td><span style="background:{color}22;color:{color};padding:2px 7px;'
+            f'border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap">'
+            f'{flecha} {et} {val_s}</span>{det}</td>')
+
+
 @router.get("/actores/activacion", response_class=HTMLResponse)
 async def admin_actores_activacion(request: Request):
     """Subpágina: actores ordenados por Índice de Activación para un tema dado."""
@@ -4176,13 +4424,14 @@ async def admin_actores_activacion(request: Request):
     <span style="background:{color}22;color:{color};padding:2px 7px;
                  border-radius:4px;font-size:11px;font-weight:600">{etiq}</span>
   </td>
+  {_celda_trayectoria(a)}
   <td style="text-align:right">
     <a href="/admin/actores/{a['id']}" style="color:var(--muted);font-size:12px">editar CVO →</a>
   </td>
 </tr>\n"""
 
     if not filas:
-        filas = (f'<tr><td colspan="7" style="color:var(--muted);padding:20px;text-align:center">'
+        filas = (f'<tr><td colspan="8" style="color:var(--muted);padding:20px;text-align:center">'
                  f'Sin actores vinculados a este tema. '
                  f'<a href="/admin/actores" style="color:var(--accent)">Vincúlalos desde el panel de actores →</a>'
                  f'</td></tr>')
@@ -4221,6 +4470,7 @@ async def admin_actores_activacion(request: Request):
         <th style="text-align:center">O (oportunidad)</th>
         <th style="text-align:center">Índice</th>
         <th>Nivel activación</th>
+        <th>Trayectoria</th>
         <th></th>
       </tr></thead>
       <tbody>{filas}</tbody>

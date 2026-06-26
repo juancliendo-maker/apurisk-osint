@@ -1533,7 +1533,7 @@ def cargar_cvo_actor(db_path: str, actor_id: int) -> list:
             rows = c.execute(
                 "SELECT tema, interes_directo, postura_declarada, antecedente_accion, "
                 "ventana_coyuntural, ausencia_contrapesos, recursos_movilizables, "
-                "indice_activacion "
+                "indice_activacion, divergencia_dinamica "
                 "FROM config_actor_temas WHERE actor_id=? ORDER BY tema",
                 (actor_id,),
             ).fetchall()
@@ -1606,13 +1606,17 @@ def listar_actores_por_activacion(db_path: str, tema: str,
                 "SELECT a.id, a.nombre, a.nivel, a.tipo, a.peso_calculado, "
                 "a.capacidad_efectiva, t.interes_directo, t.postura_declarada, "
                 "t.antecedente_accion, t.ventana_coyuntural, t.ausencia_contrapesos, "
-                "t.recursos_movilizables, t.indice_activacion "
+                "t.recursos_movilizables, t.indice_activacion, t.divergencia_dinamica, "
+                "a.din_alianzas, a.din_financiamiento, a.din_territorio, "
+                "a.din_instituciones, a.din_internacional, a.din_relevo_lideres, "
+                "a.din_adaptacion "
                 "FROM config_actor_temas t "
                 "JOIN config_actores a ON a.id = t.actor_id "
                 "WHERE t.tema=? AND a.pais=? AND a.activo=1 "
                 "ORDER BY t.indice_activacion DESC NULLS LAST",
                 (tema, pais),
             ).fetchall()
+        par = cargar_parametros_trayectoria(db_path)
         result = []
         for r in rows:
             d = dict(r)
@@ -1620,11 +1624,124 @@ def listar_actores_por_activacion(db_path: str, tema: str,
             o = (d["ventana_coyuntural"] * 2 + d["ausencia_contrapesos"] + d["recursos_movilizables"]) / 20.0
             d["v_norm"] = round(v, 2)
             d["o_norm"] = round(o, 2)
+            # Trayectoria de poder (Capa 4): base + divergencia × factor
+            base = sum(int(d[k]) for k in _DIN_CAMPOS)
+            div = int(d.get("divergencia_dinamica") or 0)
+            en_tema = base + div * par["factor_div"]
+            d["trayectoria_base"] = base
+            d["divergencia_dinamica"] = div
+            d["trayectoria_en_tema"] = en_tema
+            d["trayectoria_etiqueta"] = etiqueta_trayectoria(
+                en_tema, par["umbral_ascenso"], par["umbral_declive"])
             result.append(d)
         return result
     except Exception as e:
         print(f"[config_loader] listar_actores_por_activacion falló: {e}")
         return []
+
+
+# ── Capa 4 Dinámica — trayectoria de poder ───────────────────────────────────
+
+_DIN_CAMPOS = [
+    "din_alianzas", "din_financiamiento", "din_territorio", "din_instituciones",
+    "din_internacional", "din_relevo_lideres", "din_adaptacion",
+]
+
+
+def cargar_parametros_trayectoria(db_path: str) -> dict:
+    """Umbrales y factor de divergencia de la Capa 4 con defaults seguros."""
+    defaults = {"umbral_ascenso": 6.0, "umbral_declive": -6.0, "factor_div": 3.0}
+    mapa = {
+        "TRAYECTORIA_UMBRAL_ASCENSO": "umbral_ascenso",
+        "TRAYECTORIA_UMBRAL_DECLIVE": "umbral_declive",
+        "TRAYECTORIA_FACTOR_DIV": "factor_div",
+    }
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT clave, valor FROM config_parametros WHERE clave IN "
+                "('TRAYECTORIA_UMBRAL_ASCENSO','TRAYECTORIA_UMBRAL_DECLIVE',"
+                "'TRAYECTORIA_FACTOR_DIV')",
+            ).fetchall()
+        for r in rows:
+            k = mapa.get(r["clave"])
+            if k:
+                try:
+                    defaults[k] = float(r["valor"])
+                except (TypeError, ValueError):
+                    pass
+    except Exception as e:
+        print(f"[config_loader] cargar_parametros_trayectoria falló: {e}")
+    return defaults
+
+
+def etiqueta_trayectoria(valor: float, umbral_ascenso: float,
+                         umbral_declive: float) -> str:
+    """ASCENSO / ESTABLE / DECLIVE según umbrales editables."""
+    if valor >= umbral_ascenso:
+        return "ASCENSO"
+    if valor <= umbral_declive:
+        return "DECLIVE"
+    return "ESTABLE"
+
+
+def cargar_dinamica_actor(db_path: str, actor_id: int) -> dict:
+    """Las 7 señales dinámicas del actor + trayectoria_base y etiqueta.
+
+    Retorna {din_alianzas, ..., trayectoria_base, etiqueta}.
+    """
+    cols = ", ".join(_DIN_CAMPOS)
+    base = {k: 0 for k in _DIN_CAMPOS}
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                f"SELECT {cols} FROM config_actores WHERE id=?",
+                (actor_id,),
+            ).fetchone()
+        if row:
+            base = {k: int(row[k]) for k in _DIN_CAMPOS}
+    except Exception as e:
+        print(f"[config_loader] cargar_dinamica_actor falló: {e}")
+    trayectoria = sum(base.values())
+    par = cargar_parametros_trayectoria(db_path)
+    base["trayectoria_base"] = trayectoria
+    base["etiqueta"] = etiqueta_trayectoria(
+        trayectoria, par["umbral_ascenso"], par["umbral_declive"])
+    return base
+
+
+def guardar_dinamica_actor(db_path: str, actor_id: int,
+                           senales: dict, usuario: str) -> int:
+    """Guarda las 7 señales dinámicas del actor y devuelve trayectoria_base."""
+    vals = {k: max(-2, min(2, int(senales.get(k, 0)))) for k in _DIN_CAMPOS}
+    trayectoria = sum(vals.values())
+    set_clause = ", ".join(f"{k}=?" for k in _DIN_CAMPOS)
+    with _conn(db_path) as c:
+        c.execute(
+            f"UPDATE config_actores SET {set_clause}, "
+            "actualizado_en=datetime('now') WHERE id=?",
+            (*[vals[k] for k in _DIN_CAMPOS], actor_id),
+        )
+        c.execute(
+            "INSERT INTO config_actores_log "
+            "(actor_id, actor_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "SELECT ?, nombre, ?, NULL, ?, ?, ? FROM config_actores WHERE id=?",
+            (actor_id, "dinamica", f"trayectoria_base={trayectoria}", usuario,
+             "señales dinámicas (Capa 4) editadas", actor_id),
+        )
+    return trayectoria
+
+
+def guardar_divergencia_tema(db_path: str, actor_id: int, tema: str,
+                             divergencia: int) -> None:
+    """Guarda la divergencia dinámica (-1/0/+1) de un actor-tema."""
+    div = max(-1, min(1, int(divergencia)))
+    with _conn(db_path) as c:
+        c.execute(
+            "UPDATE config_actor_temas SET divergencia_dinamica=? "
+            "WHERE actor_id=? AND tema=?",
+            (div, actor_id, tema),
+        )
 
 
 def listar_log_actores(db_path: str, actor_id: int = None,
