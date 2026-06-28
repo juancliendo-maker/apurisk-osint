@@ -1764,3 +1764,388 @@ def listar_log_actores(db_path: str, actor_id: int = None,
     except Exception as e:
         print(f"[config_loader] listar_log_actores falló: {e}")
         return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROYECCIÓN — Capa de futuro (30/60/90 días)
+#   Proyección A: actividad mediática extrapolada por tendencia (sin quiebres).
+#   Proyección B: gravedad actual + efectos de puntos de quiebre (sin tendencia).
+# Solo LEE: globos_b del semáforo + las tablas de quiebres. No toca el motor.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_PROY_HORIZONTES = [30, 60, 90]
+_QUIEBRE_DIRECCIONES = {"sube", "baja", "no_toca"}
+_QUIEBRE_INTENSIDADES = {"leve", "moderado", "fuerte"}
+_QUIEBRE_DURACIONES = {"permanente", "temporal"}
+
+
+def cargar_parametros_proyeccion(db_path: str) -> dict:
+    """Parámetros editables de la proyección con defaults seguros."""
+    defaults = {
+        "alcance": 2.0, "decay_60d": 0.5, "decay_90d": 0.25,
+        "pts_leve": 8.0, "pts_moderado": 18.0, "pts_fuerte": 30.0,
+        "dilucion_dias": 30.0,
+    }
+    mapa = {
+        "PROY_VEL_ALCANCE": "alcance",
+        "PROY_DECAY_60D": "decay_60d",
+        "PROY_DECAY_90D": "decay_90d",
+        "QUIEBRE_PTS_LEVE": "pts_leve",
+        "QUIEBRE_PTS_MODERADO": "pts_moderado",
+        "QUIEBRE_PTS_FUERTE": "pts_fuerte",
+        "QUIEBRE_DILUCION_DIAS": "dilucion_dias",
+    }
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT clave, valor FROM config_parametros WHERE clave IN "
+                "('PROY_VEL_ALCANCE','PROY_DECAY_60D','PROY_DECAY_90D',"
+                "'QUIEBRE_PTS_LEVE','QUIEBRE_PTS_MODERADO','QUIEBRE_PTS_FUERTE',"
+                "'QUIEBRE_DILUCION_DIAS')",
+            ).fetchall()
+        for r in rows:
+            k = mapa.get(r["clave"])
+            if k:
+                try:
+                    defaults[k] = float(r["valor"])
+                except (TypeError, ValueError):
+                    pass
+    except Exception as e:
+        print(f"[config_loader] cargar_parametros_proyeccion falló: {e}")
+    return defaults
+
+
+def factor_tendencia(horizonte: int, par: dict) -> float:
+    """FACTOR(H) acumulado de la amortiguación de tendencia (Proyección A).
+
+    FACTOR(30) = ALCANCE · 1.0
+    FACTOR(60) = ALCANCE · (1.0 + decay_60d)
+    FACTOR(90) = ALCANCE · (1.0 + decay_60d + decay_90d)
+    """
+    alcance = par["alcance"]
+    if horizonte <= 30:
+        pesos = 1.0
+    elif horizonte <= 60:
+        pesos = 1.0 + par["decay_60d"]
+    else:
+        pesos = 1.0 + par["decay_60d"] + par["decay_90d"]
+    return round(alcance * pesos, 4)
+
+
+def _clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
+    return max(lo, min(hi, v))
+
+
+def _pts_intensidad(intensidad: str, par: dict) -> float:
+    return {
+        "leve": par["pts_leve"],
+        "moderado": par["pts_moderado"],
+        "fuerte": par["pts_fuerte"],
+    }.get(intensidad, par["pts_moderado"])
+
+
+def efecto_quiebre_en_horizonte(efecto: dict, dias_hasta: int,
+                                horizonte: int, par: dict) -> float:
+    """Puntos (con signo) que un efecto de quiebre aporta a un horizonte H.
+
+    efecto: {direccion, intensidad, duracion}
+    dias_hasta: días entre hoy y la fecha del quiebre (puede ser negativo si ya pasó).
+    Aplica solo si 0 <= dias_hasta <= horizonte (el quiebre cae DENTRO del horizonte).
+    TEMPORAL: se diluye linealmente a 0 en dilucion_dias tras la fecha.
+    PERMANENTE: se mantiene completo.
+    """
+    direccion = efecto.get("direccion", "no_toca")
+    if direccion == "no_toca":
+        return 0.0
+    # El quiebre debe haber ocurrido en o antes del horizonte, y no en el pasado.
+    if dias_hasta < 0 or dias_hasta > horizonte:
+        return 0.0
+    signo = 1.0 if direccion == "sube" else -1.0
+    magnitud = _pts_intensidad(efecto.get("intensidad", "moderado"), par)
+    if efecto.get("duracion", "permanente") == "temporal":
+        dilucion = max(1.0, par["dilucion_dias"])
+        dias_transcurridos = horizonte - dias_hasta   # días desde el quiebre al horizonte
+        atenuacion = max(0.0, 1.0 - dias_transcurridos / dilucion)
+    else:
+        atenuacion = 1.0
+    return round(signo * magnitud * atenuacion, 2)
+
+
+def _dias_hasta(fecha_iso: str, hoy) -> int | None:
+    """Días entre hoy (date) y una fecha ISO 'YYYY-MM-DD'. None si no parsea."""
+    from datetime import date
+    try:
+        y, m, d = (int(x) for x in fecha_iso[:10].split("-"))
+        return (date(y, m, d) - hoy).days
+    except Exception:
+        return None
+
+
+def calcular_proyecciones(db_path: str, temas_datos: list, hoy=None) -> dict:
+    """Calcula las proyecciones A y B para una lista de temas.
+
+    temas_datos: [{tema, actividad, velocidad, gravedad}] tomado de globos_b.
+    hoy: datetime.date (default = fecha de hoy). Inyectable para tests.
+
+    Devuelve {
+      par, horizontes,
+      proyeccion_a: [{tema, hoy, h30, h60, h90}],          ← solo tendencia
+      proyeccion_b: [{tema, base, h30, h60, h90,
+                      efectos: {30:{base,quiebre,total}, 60:..., 90:...}}],
+      quiebres: [resumen de quiebres activos que afectan B],
+    }
+    """
+    from datetime import date
+    if hoy is None:
+        hoy = date.today()
+    par = cargar_parametros_proyeccion(db_path)
+
+    # Quiebres activos con sus efectos por tema
+    quiebres = listar_puntos_quiebre(db_path, solo_activos=True, con_efectos=True)
+    # Precalcular días-hasta por quiebre
+    for q in quiebres:
+        q["dias_hasta"] = _dias_hasta(q.get("fecha", ""), hoy)
+
+    proy_a, proy_b = [], []
+    for d in temas_datos:
+        tema = d["tema"]
+        act = float(d.get("actividad", 0.0))
+        vel = float(d.get("velocidad", 0.0))
+        grav = float(d.get("gravedad", 0.0))
+
+        # ── Proyección A: tendencia pura, sin quiebres ──
+        fila_a = {"tema": tema, "hoy": round(act, 1)}
+        for h in _PROY_HORIZONTES:
+            fila_a[f"h{h}"] = round(_clamp(act + vel * factor_tendencia(h, par)), 1)
+        proy_a.append(fila_a)
+
+        # ── Proyección B: gravedad actual + efectos de quiebre ──
+        fila_b = {"tema": tema, "base": round(grav, 1), "efectos": {}}
+        for h in _PROY_HORIZONTES:
+            ajuste = 0.0
+            detalle = []
+            for q in quiebres:
+                dh = q.get("dias_hasta")
+                if dh is None:
+                    continue
+                ef = q["efectos"].get(tema)
+                if not ef:
+                    continue
+                pts = efecto_quiebre_en_horizonte(ef, dh, h, par)
+                if pts != 0.0:
+                    ajuste += pts
+                    detalle.append({"quiebre": q["nombre"], "pts": pts})
+            total = round(_clamp(grav + ajuste), 1)
+            fila_b["efectos"][h] = {
+                "base": round(grav, 1),
+                "quiebre": round(ajuste, 1),
+                "total": total,
+                "detalle": detalle,
+            }
+            fila_b[f"h{h}"] = total
+        proy_b.append(fila_b)
+
+    return {
+        "par": par,
+        "horizontes": _PROY_HORIZONTES,
+        "proyeccion_a": proy_a,
+        "proyeccion_b": proy_b,
+        "quiebres": quiebres,
+        "hoy": hoy.isoformat(),
+    }
+
+
+# ── CRUD de puntos de quiebre ────────────────────────────────────────────────
+
+def listar_puntos_quiebre(db_path: str, pais: str = "PE",
+                          solo_activos: bool = False,
+                          con_efectos: bool = False) -> list:
+    """Lista los puntos de quiebre. Con con_efectos=True añade {efectos: {tema: {...}}}."""
+    try:
+        with _conn(db_path) as c:
+            q = "SELECT * FROM config_puntos_quiebre WHERE pais=?"
+            args = [pais]
+            if solo_activos:
+                q += " AND activo=1"
+            q += " ORDER BY fecha ASC"
+            rows = [dict(r) for r in c.execute(q, args).fetchall()]
+            if con_efectos:
+                for r in rows:
+                    efs = c.execute(
+                        "SELECT tema, direccion, intensidad, duracion "
+                        "FROM config_quiebre_efectos WHERE quiebre_id=?",
+                        (r["id"],),
+                    ).fetchall()
+                    r["efectos"] = {e["tema"]: dict(e) for e in efs}
+        return rows
+    except Exception as e:
+        print(f"[config_loader] listar_puntos_quiebre falló: {e}")
+        return []
+
+
+def obtener_punto_quiebre(db_path: str, quiebre_id: int) -> dict | None:
+    """Devuelve un punto de quiebre con sus efectos por tema. None si no existe."""
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                "SELECT * FROM config_puntos_quiebre WHERE id=?", (quiebre_id,)
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            efs = c.execute(
+                "SELECT tema, direccion, intensidad, duracion "
+                "FROM config_quiebre_efectos WHERE quiebre_id=?",
+                (quiebre_id,),
+            ).fetchall()
+            d["efectos"] = {e["tema"]: dict(e) for e in efs}
+        return d
+    except Exception as e:
+        print(f"[config_loader] obtener_punto_quiebre falló: {e}")
+        return None
+
+
+def crear_punto_quiebre(db_path: str, datos: dict, usuario: str) -> dict:
+    """Crea un punto de quiebre. Devuelve {ok, id}."""
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "INSERT INTO config_puntos_quiebre (nombre, fecha, pais, activo, notas) "
+            "VALUES (?,?,?,?,?)",
+            (datos["nombre"].strip(), datos["fecha"].strip(),
+             datos.get("pais", "PE"), int(bool(datos.get("activo", 1))),
+             datos.get("notas") or None),
+        )
+        qid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        c.execute(
+            "INSERT INTO config_quiebre_log "
+            "(quiebre_id, quiebre_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "VALUES (?,?,'creado',NULL,?,?,?)",
+            (qid, datos["nombre"].strip(), f"fecha={datos['fecha'].strip()}",
+             usuario, "creación"),
+        )
+        return {"ok": True, "id": qid}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def actualizar_punto_quiebre(db_path: str, quiebre_id: int, datos: dict,
+                             usuario: str, motivo: str = None) -> dict:
+    """Actualiza nombre/fecha/notas de un quiebre. Devuelve {ok}."""
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "UPDATE config_puntos_quiebre SET nombre=?, fecha=?, notas=?, "
+            "actualizado_en=datetime('now') WHERE id=?",
+            (datos["nombre"].strip(), datos["fecha"].strip(),
+             datos.get("notas") or None, quiebre_id),
+        )
+        c.execute(
+            "INSERT INTO config_quiebre_log "
+            "(quiebre_id, quiebre_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "VALUES (?,?,'editado',NULL,?,?,?)",
+            (quiebre_id, datos["nombre"].strip(),
+             f"fecha={datos['fecha'].strip()}", usuario, motivo or "edición"),
+        )
+        return {"ok": True}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def toggle_punto_quiebre(db_path: str, quiebre_id: int, usuario: str) -> dict:
+    """Activa/desactiva un quiebre. Devuelve {ok, activo_nuevo}."""
+    def _op(c: sqlite3.Connection) -> dict:
+        row = c.execute(
+            "SELECT nombre, activo FROM config_puntos_quiebre WHERE id=?",
+            (quiebre_id,),
+        ).fetchone()
+        if not row:
+            return {"ok": False}
+        nuevo = 0 if row["activo"] else 1
+        c.execute(
+            "UPDATE config_puntos_quiebre SET activo=?, actualizado_en=datetime('now') "
+            "WHERE id=?", (nuevo, quiebre_id),
+        )
+        c.execute(
+            "INSERT INTO config_quiebre_log "
+            "(quiebre_id, quiebre_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "VALUES (?,?,'activo',?,?,?,?)",
+            (quiebre_id, row["nombre"], str(row["activo"]), str(nuevo),
+             usuario, "toggle activo"),
+        )
+        return {"ok": True, "activo_nuevo": nuevo}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def eliminar_punto_quiebre(db_path: str, quiebre_id: int, usuario: str) -> dict:
+    """Elimina un quiebre y sus efectos (CASCADE). Devuelve {ok}."""
+    def _op(c: sqlite3.Connection) -> dict:
+        row = c.execute(
+            "SELECT nombre FROM config_puntos_quiebre WHERE id=?", (quiebre_id,)
+        ).fetchone()
+        nombre = row["nombre"] if row else f"#{quiebre_id}"
+        c.execute("DELETE FROM config_puntos_quiebre WHERE id=?", (quiebre_id,))
+        c.execute(
+            "INSERT INTO config_quiebre_log "
+            "(quiebre_id, quiebre_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "VALUES (?,?,'eliminado',?,NULL,?,?)",
+            (quiebre_id, nombre, nombre, usuario, "eliminación"),
+        )
+        return {"ok": True}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def guardar_efectos_quiebre(db_path: str, quiebre_id: int,
+                            efectos: dict, usuario: str) -> dict:
+    """Reemplaza los efectos por tema de un quiebre.
+
+    efectos: {tema: {direccion, intensidad, duracion}}. Temas con direccion
+    'no_toca' se guardan igual (registro explícito de que no afecta).
+    Devuelve {ok, n}.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        n = 0
+        for tema, ef in efectos.items():
+            direccion = ef.get("direccion", "no_toca")
+            intensidad = ef.get("intensidad", "moderado")
+            duracion = ef.get("duracion", "permanente")
+            if direccion not in _QUIEBRE_DIRECCIONES:
+                direccion = "no_toca"
+            if intensidad not in _QUIEBRE_INTENSIDADES:
+                intensidad = "moderado"
+            if duracion not in _QUIEBRE_DURACIONES:
+                duracion = "permanente"
+            c.execute(
+                "INSERT INTO config_quiebre_efectos "
+                "(quiebre_id, tema, direccion, intensidad, duracion) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(quiebre_id, tema) DO UPDATE SET "
+                "direccion=excluded.direccion, intensidad=excluded.intensidad, "
+                "duracion=excluded.duracion",
+                (quiebre_id, tema, direccion, intensidad, duracion),
+            )
+            n += 1
+        c.execute(
+            "INSERT INTO config_quiebre_log "
+            "(quiebre_id, quiebre_nombre, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "SELECT ?, nombre, 'efectos', NULL, ?, ?, ? FROM config_puntos_quiebre WHERE id=?",
+            (quiebre_id, f"{n} temas", usuario, "efectos por tema editados", quiebre_id),
+        )
+        return {"ok": True, "n": n}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def listar_log_quiebres(db_path: str, quiebre_id: int = None,
+                        limite: int = 100) -> list:
+    """Log de cambios de puntos de quiebre."""
+    try:
+        with _conn(db_path) as c:
+            if quiebre_id:
+                rows = c.execute(
+                    "SELECT * FROM config_quiebre_log WHERE quiebre_id=? "
+                    "ORDER BY id DESC LIMIT ?", (quiebre_id, limite),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT * FROM config_quiebre_log ORDER BY id DESC LIMIT ?",
+                    (limite,),
+                ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_log_quiebres falló: {e}")
+        return []

@@ -319,6 +319,7 @@ def _nav_html(activo: str, username: str) -> str:
         ("semaforo",  "🚦", "Semáforo OSINT", "/admin/semaforo"),
         ("calibrar",  "🎛️",  "Calibración",    "/admin/semaforo/calibrar"),
         ("actores",   "🎭", "Actores",        "/admin/actores"),
+        ("proyeccion","🔮", "Proyección",     "/admin/proyeccion"),
         ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
         ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
@@ -4488,3 +4489,580 @@ async def admin_actores_activacion(request: Request):
         f"Activación · {tema_sel.replace('_',' ').title()}",
         contenido, "actores", sesion["username"],
     ))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROYECCIÓN — Capa de futuro (30/60/90 días)
+#   A: actividad mediática extrapolada (tendencia pura, sin quiebres)
+#   B: gravedad actual + puntos de quiebre (mi criterio, sin tendencia)
+# Solo LEE globos_b del semáforo + las tablas de quiebre. No toca el motor.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _cargar_osint_snapshot() -> dict | None:
+    """Lee el motor OSINT del snapshot más reciente (mismo origen que el semáforo)."""
+    out_dir = Path(OUTPUT_DIR)
+    snaps = sorted(out_dir.glob("apurisk_snapshot_*.json"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    for s in snaps[:1]:
+        try:
+            data = json.loads(s.read_text(encoding="utf-8"))
+            return data.get("osint_motor")
+        except Exception:
+            pass
+    return None
+
+
+def _temas_datos_desde_globos(db_path: str) -> list:
+    """Construye [{tema, actividad, velocidad, gravedad}] desde globos_b del semáforo."""
+    osint = _cargar_osint_snapshot()
+    if not osint:
+        return []
+    md = _construir_datos_semaforo(osint, db_path)
+    datos = []
+    for g in md.get("globos_b", []):
+        datos.append({
+            "tema": g["tema"],
+            "actividad": g.get("x", 0.0),     # % cobertura 7D
+            "velocidad": g.get("velocidad", 0.0),
+            "gravedad": g.get("y", 0.0),      # eje Y matriz B = max(piso, PA_tema)
+        })
+    return datos
+
+
+_NIVEL_PROY_COLOR = [
+    (80, "#dc2626"), (65, "#ef4444"), (50, "#f97316"),
+    (35, "#f59e0b"), (0, "#94a3b8"),
+]
+
+
+def _color_nivel_proy(v: float) -> str:
+    for umbral, color in _NIVEL_PROY_COLOR:
+        if v >= umbral:
+            return color
+    return "#94a3b8"
+
+
+@router.get("/proyeccion", response_class=HTMLResponse)
+async def admin_proyeccion(request: Request):
+    """Vista de proyección: dos secciones apiladas (A actividad, B gravedad)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import calcular_proyecciones
+
+    db = _get_db_path()
+    temas_datos = _temas_datos_desde_globos(db)
+
+    if not temas_datos:
+        contenido = """
+<div class="card card-accent">
+  <div class="card-title">🔮 Proyección 30/60/90</div>
+  <p style="color:var(--muted)">Sin snapshot OSINT disponible aún. La proyección
+  lee los mismos datos del semáforo; espera el próximo ciclo del motor.</p>
+  <a href="/admin/quiebres" style="color:var(--accent)">Gestionar puntos de quiebre →</a>
+</div>"""
+        return HTMLResponse(_page("Proyección", contenido, "proyeccion", sesion["username"]))
+
+    proy = calcular_proyecciones(db, temas_datos)
+    par = proy["par"]
+    f30 = par["alcance"] * 1.0
+    f60 = par["alcance"] * (1.0 + par["decay_60d"])
+    f90 = par["alcance"] * (1.0 + par["decay_60d"] + par["decay_90d"])
+
+    def _tn(t): return escape(t.replace("_", " ").title())
+
+    # ── Sección A — Actividad (tendencia pura) ──
+    filas_a = ""
+    for fa in sorted(proy["proyeccion_a"], key=lambda r: r["h90"], reverse=True):
+        cells = ""
+        for h in (30, 60, 90):
+            v = fa[f"h{h}"]
+            cells += (f'<td style="text-align:center;font-weight:700;'
+                      f'color:{_color_nivel_proy(v)}">{v:.1f}</td>')
+        delta = fa["h90"] - fa["hoy"]
+        flecha = "↑" if delta > 0.5 else "↓" if delta < -0.5 else "→"
+        fcol = "#22c55e" if delta > 0.5 else "#ef4444" if delta < -0.5 else "#94a3b8"
+        filas_a += f"""<tr>
+  <td><span style="color:{fcol};font-weight:700">{flecha}</span> {_tn(fa['tema'])}</td>
+  <td style="text-align:center;color:var(--muted)">{fa['hoy']:.1f}</td>
+  {cells}
+</tr>\n"""
+
+    # ── Sección B — Gravedad (base + quiebres) ──
+    filas_b = ""
+    for fb in sorted(proy["proyeccion_b"], key=lambda r: r["h90"], reverse=True):
+        cells = ""
+        for h in (30, 60, 90):
+            ef = fb["efectos"][h]
+            total = ef["total"]
+            qpts = ef["quiebre"]
+            color = _color_nivel_proy(total)
+            if abs(qpts) >= 0.05:
+                qcol = "#22c55e" if qpts > 0 else "#ef4444"
+                desglose = (f'<div style="font-size:9px;color:var(--muted)">'
+                            f'base {ef["base"]:.0f} '
+                            f'<span style="color:{qcol};font-weight:700">'
+                            f'{qpts:+.0f} quiebre</span></div>')
+            else:
+                desglose = ('<div style="font-size:9px;color:var(--muted)">'
+                            'base (sin quiebre)</div>')
+            cells += (f'<td style="text-align:center">'
+                      f'<span style="font-weight:700;color:{color}">{total:.1f}</span>'
+                      f'{desglose}</td>')
+        filas_b += f"""<tr>
+  <td>{_tn(fb['tema'])}</td>
+  <td style="text-align:center;color:var(--muted)">{fb['base']:.1f}</td>
+  {cells}
+</tr>\n"""
+
+    # Resumen de quiebres activos que afectan B
+    q_activos = proy["quiebres"]
+    chips = ""
+    for q in q_activos:
+        dh = q.get("dias_hasta")
+        cuando = (f"en {dh}d" if dh is not None and dh >= 0
+                  else f"hace {abs(dh)}d" if dh is not None else "—")
+        n_ef = sum(1 for e in q["efectos"].values() if e["direccion"] != "no_toca")
+        chips += (f'<a href="/admin/quiebres/{q["id"]}" '
+                  f'style="display:inline-block;background:var(--bg-3);border:1px solid #334155;'
+                  f'border-radius:6px;padding:4px 10px;font-size:12px;margin:2px;color:var(--text)">'
+                  f'🔻 {escape(q["nombre"])} <span style="color:var(--muted)">'
+                  f'({escape(q.get("fecha",""))} · {cuando} · {n_ef} temas)</span></a>')
+    if not chips:
+        chips = ('<span style="color:var(--muted);font-size:12px">Sin quiebres activos. '
+                 '<a href="/admin/quiebres/nuevo" style="color:var(--accent)">Crea el primero →</a>'
+                 ' La Proyección B mostrará solo la gravedad estructural actual.</span>')
+
+    contenido = f"""
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+  <div style="font-size:13px;color:var(--muted)">
+    Hoy {escape(proy['hoy'])} · factores de tendencia 30/60/90 =
+    {f30:.1f} / {f60:.1f} / {f90:.1f}
+  </div>
+  <a href="/admin/quiebres"
+     style="background:var(--accent);color:#000;border-radius:6px;padding:7px 18px;
+            font-size:13px;font-weight:600">Gestionar quiebres →</a>
+</div>
+
+<div class="card">
+  <div style="margin-bottom:8px">
+    <span style="font-size:11px;font-weight:700;color:#22c55e;background:#22c55e22;
+                 padding:3px 8px;border-radius:4px">TENDENCIA AUTOMÁTICA</span>
+  </div>
+  <div class="card-title">Proyección A — Actividad mediática futura
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      extrapolación de la cobertura por velocidad 7d · amortiguada · acotada 0-100
+    </span>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 12px">
+    <b>Todo aquí es tendencia automática.</b> Los puntos de quiebre NO afectan esta
+    matriz. nivel(H) = actividad_hoy + velocidad × factor(H), donde la velocidad pesa
+    menos a mayor horizonte (factor {f30:.1f}/{f60:.1f}/{f90:.1f} a 30/60/90).
+  </p>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Tema</th><th style="text-align:center">Hoy</th>
+        <th style="text-align:center">30d</th><th style="text-align:center">60d</th>
+        <th style="text-align:center">90d</th>
+      </tr></thead>
+      <tbody>{filas_a}</tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div style="margin-bottom:8px">
+    <span style="font-size:11px;font-weight:700;color:#f59e0b;background:#f59e0b22;
+                 padding:3px 8px;border-radius:4px">GRAVEDAD ESTRUCTURAL + TUS QUIEBRES</span>
+  </div>
+  <div class="card-title">Proyección B — Gravedad / riesgo futuro
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      gravedad actual (eje Y de la Matriz B) ajustada por puntos de quiebre
+    </span>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 10px">
+    La gravedad <b>no se extrapola por cobertura</b>: parte de la gravedad estructural de
+    hoy y solo se mueve por los eventos que tú defines. Cada celda separa
+    <b>base</b> (estructural) de <b>quiebre</b> (tu ajuste).
+  </p>
+  <div style="margin-bottom:12px">{chips}</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Tema</th><th style="text-align:center">Gravedad hoy</th>
+        <th style="text-align:center">30d</th><th style="text-align:center">60d</th>
+        <th style="text-align:center">90d</th>
+      </tr></thead>
+      <tbody>{filas_b}</tbody>
+    </table>
+  </div>
+  <p style="font-size:11px;color:var(--muted);margin-top:8px">
+    Intensidad → puntos: leve {par['pts_leve']:.0f} · moderado {par['pts_moderado']:.0f} ·
+    fuerte {par['pts_fuerte']:.0f}. Efecto temporal se diluye en
+    {par['dilucion_dias']:.0f} días. Todo editable en calibración.
+  </p>
+</div>"""
+
+    return HTMLResponse(_page("Proyección", contenido, "proyeccion", sesion["username"]))
+
+
+# ── Gestión de puntos de quiebre ──────────────────────────────────────────────
+
+def _quiebre_efectos_form(efectos: dict) -> str:
+    """Tabla editable de efectos por tema (una fila por tema del sistema)."""
+    filas = ""
+    for tema in _IMPACTO_TEMA:
+        ef = efectos.get(tema, {})
+        dir_act = ef.get("direccion", "no_toca")
+        int_act = ef.get("intensidad", "moderado")
+        dur_act = ef.get("duracion", "permanente")
+        def _sel(name, val, opciones):
+            o = "".join(
+                f'<option value="{v}"{" selected" if v == val else ""}>{lbl}</option>'
+                for v, lbl in opciones)
+            return (f'<select name="{name}_{escape(tema)}" form="efectos-form" '
+                    f'style="background:var(--bg-3);color:var(--text);border:1px solid #334155;'
+                    f'border-radius:4px;padding:3px 6px;font-size:12px">{o}</select>')
+        filas += f"""<tr>
+  <td style="font-size:12px;color:var(--text)">{escape(tema.replace('_',' ').title())}</td>
+  <td>{_sel('dir', dir_act, [('no_toca','no toca'),('sube','sube'),('baja','baja')])}</td>
+  <td>{_sel('int', int_act, [('leve','leve'),('moderado','moderado'),('fuerte','fuerte')])}</td>
+  <td>{_sel('dur', dur_act, [('permanente','permanente'),('temporal','temporal')])}</td>
+</tr>\n"""
+    return f"""
+<table class="tbl">
+  <thead><tr>
+    <th>Tema</th><th>Dirección</th><th>Intensidad</th><th>Duración</th>
+  </tr></thead>
+  <tbody>{filas}</tbody>
+</table>"""
+
+
+@router.get("/quiebres", response_class=HTMLResponse)
+async def admin_quiebres(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import listar_puntos_quiebre
+    db = _get_db_path()
+    quiebres = listar_puntos_quiebre(db, solo_activos=False, con_efectos=True)
+
+    msg = request.query_params.get("msg", "")
+    err_msg = request.query_params.get("err", "")
+    msg_html = (f'<div class="alert-box alert-info" style="margin-bottom:12px">✓ {escape(msg)}</div>'
+                ) if msg else ""
+    err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(err_msg)}</div>'
+                ) if err_msg else ""
+
+    filas = ""
+    for q in quiebres:
+        n_ef = sum(1 for e in q["efectos"].values() if e["direccion"] != "no_toca")
+        estado = ('<span class="badge badge-ok">activo</span>' if q["activo"]
+                  else '<span class="badge badge-off">inactivo</span>')
+        filas += f"""<tr>
+  <td><a href="/admin/quiebres/{q['id']}" style="color:var(--accent);font-weight:600;text-decoration:none">{escape(q['nombre'])}</a></td>
+  <td style="color:var(--muted);font-size:12px">{escape(q.get('fecha',''))}</td>
+  <td style="text-align:center">{n_ef}</td>
+  <td>{estado}</td>
+  <td style="text-align:right"><a href="/admin/quiebres/{q['id']}" style="color:var(--muted);font-size:12px">editar →</a></td>
+</tr>\n"""
+    if not filas:
+        filas = ('<tr><td colspan="5" style="color:var(--muted);padding:20px;text-align:center">'
+                 'Sin puntos de quiebre. <a href="/admin/quiebres/nuevo" style="color:var(--accent)">'
+                 'Crea el primero →</a></td></tr>')
+
+    contenido = f"""
+{msg_html}{err_html}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+  <div style="font-size:13px;color:var(--muted)">
+    {len(quiebres)} punto{'s' if len(quiebres)!=1 else ''} de quiebre · afectan solo la Proyección B (gravedad)
+  </div>
+  <div style="display:flex;gap:8px">
+    <a href="/admin/proyeccion" style="background:var(--bg-3);color:var(--muted);border:1px solid #334155;border-radius:6px;padding:6px 14px;font-size:12px">← Proyección</a>
+    <a href="/admin/quiebres/log" style="background:var(--bg-3);color:var(--muted);border:1px solid #334155;border-radius:6px;padding:6px 14px;font-size:12px">Historial →</a>
+    <a href="/admin/quiebres/nuevo" style="background:var(--accent);color:#000;border-radius:6px;padding:7px 18px;font-size:13px;font-weight:600">+ Nuevo quiebre</a>
+  </div>
+</div>
+<div class="card">
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Nombre</th><th>Fecha</th><th style="text-align:center">Temas afectados</th>
+        <th>Estado</th><th></th>
+      </tr></thead>
+      <tbody>{filas}</tbody>
+    </table>
+  </div>
+</div>"""
+    return HTMLResponse(_page("Puntos de quiebre", contenido, "proyeccion", sesion["username"]))
+
+
+@router.get("/quiebres/nuevo", response_class=HTMLResponse)
+async def admin_quiebres_nuevo(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    err_msg = request.query_params.get("err", "")
+    err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(err_msg)}</div>'
+                ) if err_msg else ""
+    contenido = f"""
+{err_html}
+<div class="card">
+  <div class="card-title">Nuevo punto de quiebre</div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 14px">
+    Un evento futuro que la tendencia mediática no puede prever. Primero defines
+    nombre y fecha; luego, al editarlo, fijas sus efectos por tema.
+  </p>
+  <form method="post" action="/admin/quiebres/nuevo">
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Nombre</label>
+      <input type="text" name="nombre" required placeholder="ej. Cambio de gobierno"
+             style="width:100%;max-width:420px;background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:14px">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Fecha (cuándo ocurre)</label>
+      <input type="date" name="fecha" required
+             style="background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:14px">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Notas (opcional)</label>
+      <textarea name="notas" rows="2" style="width:100%;max-width:420px;background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:13px"></textarea>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:9px 22px;font-size:14px;font-weight:700;cursor:pointer">Crear y definir efectos</button>
+      <a href="/admin/quiebres" style="color:var(--muted);font-size:13px">Cancelar</a>
+    </div>
+  </form>
+</div>"""
+    return HTMLResponse(_page("Nuevo quiebre", contenido, "proyeccion", sesion["username"]))
+
+
+@router.post("/quiebres/nuevo")
+async def admin_quiebres_nuevo_post(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import crear_punto_quiebre, LockTimeoutError
+    form = await request.form()
+    nombre = (form.get("nombre") or "").strip()
+    fecha = (form.get("fecha") or "").strip()
+    if not nombre or not fecha:
+        return RedirectResponse("/admin/quiebres/nuevo?err=Nombre+y+fecha+son+obligatorios", status_code=303)
+    try:
+        r = crear_punto_quiebre(_get_db_path(), {
+            "nombre": nombre, "fecha": fecha, "notas": form.get("notas", "").strip() or None,
+        }, usuario=sesion["username"])
+        return RedirectResponse(f"/admin/quiebres/{r['id']}?msg=Quiebre+creado+·+ahora+define+sus+efectos", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse("/admin/quiebres/nuevo?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/quiebres/nuevo?err={escape(str(e))}", status_code=303)
+
+
+@router.get("/quiebres/log", response_class=HTMLResponse)
+async def admin_quiebres_log(request: Request):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import listar_log_quiebres
+    logs = listar_log_quiebres(_get_db_path(), limite=200)
+    filas = ""
+    for l in logs:
+        ts = (l.get("cambiado_en") or "")[:19].replace("T", " ")
+        filas += f"""<tr>
+  <td style="color:var(--muted);font-size:11px;white-space:nowrap">{ts}</td>
+  <td style="color:var(--accent);font-size:12px">{escape(l.get('quiebre_nombre') or '—')}</td>
+  <td><span class="badge badge-off">{escape(l.get('campo') or '—')}</span></td>
+  <td style="color:var(--muted);font-size:12px">{escape(str(l.get('valor_anterior') or '—'))} → <b style="color:var(--text)">{escape(str(l.get('valor_nuevo') or '—'))}</b></td>
+  <td style="color:var(--accent);font-size:11px">{escape(l.get('usuario') or '—')}</td>
+  <td style="color:var(--muted);font-size:11px">{escape(l.get('motivo') or '—')}</td>
+</tr>\n"""
+    cuerpo = filas if logs else '<tr><td colspan="6" style="color:var(--muted);padding:16px">Sin cambios registrados.</td></tr>'
+    contenido = f"""
+<div class="alert-box alert-info">Registro de cambios en puntos de quiebre.
+  <a href="/admin/quiebres" style="color:var(--accent)">← Volver</a></div>
+<div class="card">
+  <div class="card-title">Historial — config_quiebre_log ({len(logs)})</div>
+  <div style="overflow-x:auto"><table class="tbl">
+    <thead><tr><th>Fecha</th><th>Quiebre</th><th>Campo</th><th>Cambio</th><th>Usuario</th><th>Motivo</th></tr></thead>
+    <tbody>{cuerpo}</tbody>
+  </table></div>
+</div>"""
+    return HTMLResponse(_page("Log quiebres", contenido, "proyeccion", sesion["username"]))
+
+
+@router.get("/quiebres/{quiebre_id:int}", response_class=HTMLResponse)
+async def admin_quiebres_detalle(request: Request, quiebre_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import obtener_punto_quiebre, listar_log_quiebres
+    db = _get_db_path()
+    q = obtener_punto_quiebre(db, quiebre_id)
+    if not q:
+        return RedirectResponse("/admin/quiebres?err=Quiebre+no+encontrado", status_code=303)
+    logs = listar_log_quiebres(db, quiebre_id, limite=20)
+
+    msg = request.query_params.get("msg", "")
+    err_msg = request.query_params.get("err", "")
+    msg_html = (f'<div class="alert-box alert-info" style="margin-bottom:12px">✓ {escape(msg)}</div>') if msg else ""
+    err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(err_msg)}</div>') if err_msg else ""
+
+    estado_badge = ('<span class="badge badge-ok">activo</span>' if q["activo"]
+                    else '<span class="badge badge-off">inactivo</span>')
+    efectos_form = _quiebre_efectos_form(q["efectos"])
+
+    filas_log = ""
+    for l in logs:
+        ts = (l.get("cambiado_en") or "")[:19].replace("T", " ")
+        filas_log += f"""<tr>
+  <td style="color:var(--muted);font-size:11px;white-space:nowrap">{ts}</td>
+  <td><span class="badge badge-off">{escape(l.get('campo') or '—')}</span></td>
+  <td style="color:var(--muted);font-size:12px">{escape(str(l.get('valor_nuevo') or '—'))}</td>
+  <td style="color:var(--accent);font-size:11px">{escape(l.get('usuario') or '—')}</td>
+</tr>\n"""
+    if not filas_log:
+        filas_log = '<tr><td colspan="4" style="color:var(--muted);padding:12px">Sin cambios.</td></tr>'
+
+    contenido = f"""
+{msg_html}{err_html}
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+  <div>
+    <h2 style="margin:0;font-size:20px">{escape(q['nombre'])}</h2>
+    <div style="color:var(--muted);font-size:12px;margin-top:2px">{escape(q.get('fecha',''))} · {estado_badge}</div>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:8px">
+    <form method="post" action="/admin/quiebres/{quiebre_id}/toggle" style="display:inline">
+      <button type="submit" style="background:var(--bg-3);color:var(--muted);border:1px solid #334155;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">{'Desactivar' if q['activo'] else 'Activar'}</button>
+    </form>
+    <form method="post" action="/admin/quiebres/{quiebre_id}/eliminar" style="display:inline"
+          onsubmit="return confirm('¿Eliminar este punto de quiebre y todos sus efectos?')">
+      <button type="submit" style="background:var(--bg-3);color:#ef4444;border:1px solid #7f1d1d;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">Eliminar</button>
+    </form>
+    <a href="/admin/quiebres" style="color:var(--muted);font-size:12px;padding:6px 14px">← Lista</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Datos del quiebre</div>
+  <form method="post" action="/admin/quiebres/{quiebre_id}/editar">
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Nombre</label>
+        <input type="text" name="nombre" value="{escape(q['nombre'])}" required style="background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:14px;width:260px">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Fecha</label>
+        <input type="date" name="fecha" value="{escape(q.get('fecha','')[:10])}" required style="background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:14px">
+      </div>
+      <div style="flex:1;min-width:200px">
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Notas</label>
+        <input type="text" name="notas" value="{escape(q.get('notas') or '')}" style="width:100%;background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:13px">
+      </div>
+      <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:9px 20px;font-size:13px;font-weight:700;cursor:pointer">Guardar datos</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">Efectos por tema (Proyección B)
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      cómo este evento mueve la gravedad de cada tema
+    </span>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 12px">
+    <b>no toca</b> = el tema sigue su gravedad estructural actual.
+    <b>sube/baja</b> + intensidad (leve/moderado/fuerte) = puntos.
+    <b>permanente</b> se mantiene; <b>temporal</b> se diluye tras la fecha.
+  </p>
+  <form id="efectos-form" method="post" action="/admin/quiebres/{quiebre_id}/efectos"></form>
+  {efectos_form}
+  <div style="margin-top:14px">
+    <button type="submit" form="efectos-form" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:9px 22px;font-size:14px;font-weight:700;cursor:pointer">Guardar efectos</button>
+  </div>
+</div>
+
+<div class="card" style="margin-top:0">
+  <div class="card-title">Historial (últimos 20)</div>
+  <div style="overflow-x:auto"><table class="tbl">
+    <thead><tr><th>Fecha</th><th>Campo</th><th>Valor</th><th>Usuario</th></tr></thead>
+    <tbody>{filas_log}</tbody>
+  </table></div>
+</div>"""
+    return HTMLResponse(_page(f"Quiebre · {q['nombre']}", contenido, "proyeccion", sesion["username"]))
+
+
+@router.post("/quiebres/{quiebre_id:int}/editar")
+async def admin_quiebres_editar(request: Request, quiebre_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import actualizar_punto_quiebre, LockTimeoutError
+    form = await request.form()
+    nombre = (form.get("nombre") or "").strip()
+    fecha = (form.get("fecha") or "").strip()
+    if not nombre or not fecha:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err=Nombre+y+fecha+obligatorios", status_code=303)
+    try:
+        actualizar_punto_quiebre(_get_db_path(), quiebre_id, {
+            "nombre": nombre, "fecha": fecha, "notas": form.get("notas", "").strip() or None,
+        }, usuario=sesion["username"])
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?msg=Datos+guardados", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err={escape(str(e))}", status_code=303)
+
+
+@router.post("/quiebres/{quiebre_id:int}/efectos")
+async def admin_quiebres_efectos(request: Request, quiebre_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import guardar_efectos_quiebre, LockTimeoutError
+    form = await request.form()
+    efectos = {}
+    for tema in _IMPACTO_TEMA:
+        efectos[tema] = {
+            "direccion": form.get(f"dir_{tema}", "no_toca"),
+            "intensidad": form.get(f"int_{tema}", "moderado"),
+            "duracion": form.get(f"dur_{tema}", "permanente"),
+        }
+    try:
+        r = guardar_efectos_quiebre(_get_db_path(), quiebre_id, efectos, usuario=sesion["username"])
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?msg=Efectos+guardados+·+{r['n']}+temas", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err={escape(str(e))}", status_code=303)
+
+
+@router.post("/quiebres/{quiebre_id:int}/toggle")
+async def admin_quiebres_toggle(request: Request, quiebre_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import toggle_punto_quiebre, LockTimeoutError
+    try:
+        toggle_punto_quiebre(_get_db_path(), quiebre_id, usuario=sesion["username"])
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?msg=Estado+actualizado", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err={escape(str(e))}", status_code=303)
+
+
+@router.post("/quiebres/{quiebre_id:int}/eliminar")
+async def admin_quiebres_eliminar(request: Request, quiebre_id: int):
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import eliminar_punto_quiebre, LockTimeoutError
+    try:
+        eliminar_punto_quiebre(_get_db_path(), quiebre_id, usuario=sesion["username"])
+        return RedirectResponse("/admin/quiebres?msg=Quiebre+eliminado", status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/quiebres?err={escape(str(e))}", status_code=303)
