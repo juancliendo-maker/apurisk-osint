@@ -305,6 +305,58 @@ CREATE TABLE IF NOT EXISTS config_actores_log (
 
 CREATE INDEX IF NOT EXISTS idx_actores_log_actor ON config_actores_log(actor_id);
 CREATE INDEX IF NOT EXISTS idx_actores_log_usuario ON config_actores_log(usuario);
+
+-- ============================================================
+-- PROYECCIÓN — Puntos de quiebre (Capa de futuro)
+-- ============================================================
+-- Eventos futuros conocidos que la tendencia mediática no puede prever
+-- (ej. cambio de gobierno). Afectan SOLO la Proyección B (gravedad/riesgo).
+-- La Proyección A (actividad) es tendencia pura y no los lee.
+
+CREATE TABLE IF NOT EXISTS config_puntos_quiebre (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre          TEXT NOT NULL,
+    fecha           TEXT NOT NULL,           -- ISO 'YYYY-MM-DD': cuándo ocurre
+    pais            TEXT NOT NULL DEFAULT 'PE',
+    activo          INTEGER NOT NULL DEFAULT 1,
+    notas           TEXT,
+    creado_en       TEXT NOT NULL DEFAULT (datetime('now')),
+    actualizado_en  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiebre_pais ON config_puntos_quiebre(pais, activo);
+CREATE INDEX IF NOT EXISTS idx_quiebre_fecha ON config_puntos_quiebre(fecha);
+
+-- Efectos de un quiebre por tema (una fila por tema afectado)
+CREATE TABLE IF NOT EXISTS config_quiebre_efectos (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    quiebre_id  INTEGER NOT NULL,
+    tema        TEXT NOT NULL,
+    direccion   TEXT NOT NULL DEFAULT 'no_toca',   -- 'sube' | 'baja' | 'no_toca'
+    intensidad  TEXT NOT NULL DEFAULT 'moderado',  -- 'leve' | 'moderado' | 'fuerte'
+    duracion    TEXT NOT NULL DEFAULT 'permanente',-- 'permanente' | 'temporal'
+    UNIQUE(quiebre_id, tema),
+    FOREIGN KEY(quiebre_id) REFERENCES config_puntos_quiebre(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiebre_efectos_q ON config_quiebre_efectos(quiebre_id);
+CREATE INDEX IF NOT EXISTS idx_quiebre_efectos_tema ON config_quiebre_efectos(tema);
+
+-- Auditoría de cambios en puntos de quiebre
+CREATE TABLE IF NOT EXISTS config_quiebre_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    quiebre_id      INTEGER,
+    quiebre_nombre  TEXT,
+    campo           TEXT NOT NULL,
+    valor_anterior  TEXT,
+    valor_nuevo     TEXT,
+    usuario         TEXT NOT NULL,
+    motivo          TEXT,
+    cambiado_en     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiebre_log_q ON config_quiebre_log(quiebre_id);
+CREATE INDEX IF NOT EXISTS idx_quiebre_log_usuario ON config_quiebre_log(usuario);
 """
 
 _DATOS_INICIALES = [
@@ -569,6 +621,46 @@ _DATOS_INICIALES = [
         "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
         "VALUES ('TRAYECTORIA_FACTOR_DIV', '3', 'float', "
         "'Dinámica: puntos que suma/resta una divergencia por tema (±1) a la trayectoria base', 'GLOBAL')", []
+    ),
+
+    # ── Proyección — amortiguación de tendencia (A) y mecánica de quiebres (B) ──
+    # A: nivel_base(H) = actividad_now + velocidad × FACTOR(H);
+    #    FACTOR = ALCANCE × Σ pesos (1.0 a 30d, +DECAY_60D a 60d, +DECAY_90D a 90d).
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('PROY_VEL_ALCANCE', '2.0', 'float', "
+        "'Proyección A: puntos por unidad de velocidad 7d a 30 días (factor base de la tendencia)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('PROY_DECAY_60D', '0.5', 'float', "
+        "'Proyección A: peso marginal de la velocidad en el bloque 30-60d (decae a la mitad)', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('PROY_DECAY_90D', '0.25', 'float', "
+        "'Proyección A: peso marginal de la velocidad en el bloque 60-90d (decae otra mitad)', 'GLOBAL')", []
+    ),
+    # B: gravedad_actual + Σ efectos de quiebre. Intensidad → puntos.
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('QUIEBRE_PTS_LEVE', '8', 'float', "
+        "'Proyección B: puntos que sube/baja un tema por un quiebre de intensidad leve', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('QUIEBRE_PTS_MODERADO', '18', 'float', "
+        "'Proyección B: puntos que sube/baja un tema por un quiebre de intensidad moderada', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('QUIEBRE_PTS_FUERTE', '30', 'float', "
+        "'Proyección B: puntos que sube/baja un tema por un quiebre de intensidad fuerte', 'GLOBAL')", []
+    ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('QUIEBRE_DILUCION_DIAS', '30', 'float', "
+        "'Proyección B: días en que un efecto TEMPORAL se diluye linealmente hasta 0 tras la fecha del quiebre', 'GLOBAL')", []
     ),
 
     # ── Valores base por nivel estratégico (I-VIII) — editables desde panel ──
