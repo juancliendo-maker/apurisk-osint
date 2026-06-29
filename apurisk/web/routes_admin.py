@@ -4543,13 +4543,213 @@ def _color_nivel_proy(v: float) -> str:
     return "#94a3b8"
 
 
+def _matriz_proyectada_html(proy: dict, h_obj: int,
+                            umbral_x: float, umbral_y: float) -> str:
+    """Matriz B Proyectada — visual de reporte (solo lectura).
+
+    Lee SOLO datos ya calculados en `proy`:
+      · HOY:  X = proyeccion_a[tema].hoy   · Y = proyeccion_b[tema].base
+      · {h}d: X = proyeccion_a[tema].h{h}  · Y = proyeccion_b[tema].h{h}
+    Dibuja ○ hueco (hoy) → flecha → ● sólido (proyección). Color del ● = gravedad
+    proyectada (misma rampa que la Matriz B del presente). No recalcula nada.
+    """
+    a_por_tema = {r["tema"]: r for r in proy["proyeccion_a"]}
+    puntos = []
+    max_x = 1.0
+    for fb in proy["proyeccion_b"]:
+        tema = fb["tema"]
+        fa = a_por_tema.get(tema, {})
+        x0 = float(fa.get("hoy", 0.0))
+        y0 = float(fb.get("base", 0.0))
+        x1 = float(fa.get(f"h{h_obj}", x0))
+        y1 = float(fb.get(f"h{h_obj}", y0))
+        max_x = max(max_x, x0, x1)
+        mueve = max(abs(x1 - x0), abs(y1 - y0)) >= 2.0
+        puntos.append({
+            "tema": tema,
+            "label": tema.replace("_", " ").title(),
+            "x0": round(x0, 1), "y0": round(y0, 1),
+            "x1": round(x1, 1), "y1": round(y1, 1),
+            "color": _color_nivel_proy(y1),
+            "mueve": mueve,
+        })
+    # Eje X dinámico: máximo real + margen, con tope mínimo legible
+    x_max = max(20.0, round(max_x * 1.25 + 2))
+    puntos_json = json.dumps(puntos, ensure_ascii=False)
+    cid = "matrizProyectada"
+
+    return f"""
+<div class="card">
+  <div style="margin-bottom:8px">
+    <span style="font-size:11px;font-weight:700;color:#f59e0b;background:#f59e0b22;
+                 padding:3px 8px;border-radius:4px">PIEZA DE REPORTE · SOLO LECTURA</span>
+  </div>
+  <div class="card-title">Matriz B Proyectada — movimiento hoy → {h_obj}d
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">
+      misma matriz del presente (Y = gravedad · X = actividad), proyectada a {h_obj} días
+    </span>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 6px">
+    <span style="color:#94a3b8">○ hoy</span> →
+    <span style="color:#ef4444;font-weight:700">● proyección {h_obj}d</span> ·
+    color = gravedad · la flecha aparece solo donde hay movimiento real.
+  </p>
+  <div style="position:relative;height:440px">
+    <canvas id="{cid}"></canvas>
+  </div>
+</div>
+<script>
+(function() {{
+  var P = {puntos_json};
+  var X_MAX = {x_max}, UMBRAL_X = {umbral_x}, UMBRAL_Y = {umbral_y};
+  if (!window.Chart) return;
+  var el = document.getElementById('{cid}');
+  if (!el) return;
+
+  // Dataset real = burbujas proyectadas (sólidas) → habilita tooltips nativos.
+  var solid = P.map(function(p) {{
+    return {{ x: p.x1, y: p.y1, _p: p }};
+  }});
+
+  // Plugin INLINE (solo este canvas): líneas guía, ○ hoy, flechas, etiquetas dispersas.
+  var draw = {{
+    id: 'proy_{cid}',
+    afterDraw: function(chart) {{
+      var ctx = chart.ctx, ca = chart.chartArea;
+      var xs = chart.scales.x, ys = chart.scales.y;
+      ctx.save();
+      // ── Líneas guía de umbral (sutiles, punteadas) ──
+      ctx.strokeStyle = '#334155'; ctx.setLineDash([4,4]); ctx.lineWidth = 1;
+      var xm = xs.getPixelForValue(UMBRAL_X), ym = ys.getPixelForValue(UMBRAL_Y);
+      ctx.beginPath(); ctx.moveTo(xm, ca.top); ctx.lineTo(xm, ca.bottom); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(ca.left, ym); ctx.lineTo(ca.right, ym); ctx.stroke();
+      ctx.setLineDash([]);
+
+      var R = 8, R0 = 6;
+      // ── ○ hoy + flecha hoy→proyección ──
+      P.forEach(function(p) {{
+        var x0 = xs.getPixelForValue(p.x0), y0 = ys.getPixelForValue(p.y0);
+        var x1 = xs.getPixelForValue(p.x1), y1 = ys.getPixelForValue(p.y1);
+        if (p.mueve) {{
+          var ang = Math.atan2(y1 - y0, x1 - x0);
+          // flecha desde el borde del ○ hasta el borde del ●
+          var sx = x0 + Math.cos(ang) * R0, sy = y0 + Math.sin(ang) * R0;
+          var ex = x1 - Math.cos(ang) * R,  ey = y1 - Math.sin(ang) * R;
+          ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+          // punta
+          var ah = 5;
+          ctx.fillStyle = '#64748b';
+          ctx.beginPath();
+          ctx.moveTo(ex, ey);
+          ctx.lineTo(ex - ah*Math.cos(ang - 0.4), ey - ah*Math.sin(ang - 0.4));
+          ctx.lineTo(ex - ah*Math.cos(ang + 0.4), ey - ah*Math.sin(ang + 0.4));
+          ctx.closePath(); ctx.fill();
+        }}
+        // ○ hueco (hoy): gris neutro, sin relleno fuerte
+        ctx.beginPath(); ctx.arc(x0, y0, R0, 0, 2*Math.PI);
+        ctx.fillStyle = 'rgba(8,14,26,0.6)'; ctx.fill();
+        ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.5; ctx.stroke();
+      }});
+
+      // ── Etiquetas con dispersión vertical + línea-guía ──
+      var items = P.map(function(p) {{
+        return {{
+          p: p,
+          bx: xs.getPixelForValue(p.x1),
+          by: ys.getPixelForValue(p.y1),
+          ly: ys.getPixelForValue(p.y1),
+        }};
+      }});
+      items.sort(function(a, b) {{ return a.ly - b.ly; }});
+      var GAP = 15;
+      // empuje hacia abajo para separar
+      for (var i = 1; i < items.length; i++) {{
+        if (items[i].ly - items[i-1].ly < GAP) items[i].ly = items[i-1].ly + GAP;
+      }}
+      // si se desbordó por abajo, reparte hacia arriba
+      var bottom = ca.bottom - 4;
+      for (var j = items.length - 1; j > 0; j--) {{
+        if (items[j].ly > bottom) items[j].ly = bottom;
+        if (items[j].ly - items[j-1].ly < GAP) items[j-1].ly = items[j].ly - GAP;
+      }}
+      ctx.font = '600 11px sans-serif';
+      ctx.textBaseline = 'middle';
+      items.forEach(function(it) {{
+        var lx = it.bx + R + 7;
+        var tw = ctx.measureText(it.p.label).width;
+        if (lx + tw + 6 > ca.right) lx = it.bx - R - 7 - tw;  // si no cabe, a la izquierda
+        var ha = (lx < it.bx) ? 'left' : 'left';
+        // línea-guía si la etiqueta se desplazó de su burbuja
+        if (Math.abs(it.ly - it.by) > 2) {{
+          ctx.strokeStyle = 'rgba(100,116,139,0.5)'; ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          ctx.moveTo(it.bx + (lx < it.bx ? -R : R), it.by);
+          ctx.lineTo(lx - (lx < it.bx ? -3 : 3), it.ly);
+          ctx.stroke();
+        }}
+        // píldora de fondo
+        var px = lx - 3, py = it.ly - 8;
+        ctx.fillStyle = 'rgba(8,14,26,0.85)';
+        ctx.fillRect(px, py, tw + 6, 16);
+        ctx.fillStyle = '#e2e8f0';
+        ctx.textAlign = 'left';
+        ctx.fillText(it.p.label, lx, it.ly);
+      }});
+      ctx.textBaseline = 'alphabetic';
+      ctx.restore();
+    }}
+  }};
+
+  new window.Chart(el.getContext('2d'), {{
+    type: 'bubble',
+    data: {{ datasets: [{{
+      data: solid.map(function(s) {{ return {{ x: s.x, y: s.y, r: 8 }}; }}),
+      backgroundColor: P.map(function(p) {{ return p.color; }}),
+      borderColor: P.map(function(p) {{ return p.color; }}),
+      borderWidth: 1,
+      _pts: P,
+    }}] }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      layout: {{ padding: {{ right: 90 }} }},
+      plugins: {{
+        legend: {{ display: false }},
+        tooltip: {{ callbacks: {{
+          title: function(items) {{ return items[0].chart.data.datasets[0]._pts[items[0].dataIndex].label; }},
+          label: function(item) {{
+            var p = item.chart.data.datasets[0]._pts[item.dataIndex];
+            return ['hoy: act ' + p.x0 + ' · grav ' + p.y0,
+                    '{h_obj}d: act ' + p.x1 + ' · grav ' + p.y1];
+          }}
+        }} }}
+      }},
+      scales: {{
+        x: {{ min: 0, max: X_MAX,
+             title: {{ display: true, text: 'Actividad mediática', color: '#94a3b8',
+                       font: {{ size: 10, weight: '600' }} }},
+             grid: {{ color: '#1e293b' }}, ticks: {{ color: '#94a3b8' }} }},
+        y: {{ min: 0, max: 100,
+             title: {{ display: true, text: 'Gravedad', color: '#94a3b8',
+                       font: {{ size: 10, weight: '600' }} }},
+             grid: {{ color: '#1e293b' }}, ticks: {{ color: '#94a3b8' }} }}
+      }}
+    }},
+    plugins: [draw]
+  }});
+}})();
+</script>"""
+
+
 @router.get("/proyeccion", response_class=HTMLResponse)
 async def admin_proyeccion(request: Request):
     """Vista de proyección: dos secciones apiladas (A actividad, B gravedad)."""
     sesion, err = _admin_guard(request)
     if err:
         return err
-    from ..storage.config_loader import calcular_proyecciones, factor_tendencia
+    from ..storage.config_loader import (
+        calcular_proyecciones, factor_tendencia, cargar_parametros_semaforo,
+    )
 
     db = _get_db_path()
     temas_datos = _temas_datos_desde_globos(db)
@@ -4572,6 +4772,12 @@ async def admin_proyeccion(request: Request):
     horizontes_str = "/".join(str(h) for h in horizontes)
     th_horizontes = "".join(
         f'<th style="text-align:center">{h}d</th>' for h in horizontes)
+
+    # Matriz B Proyectada (visual): horizonte objetivo = 30d si existe, si no el último.
+    h_obj = 30 if 30 in horizontes else h_ult
+    sem = cargar_parametros_semaforo(db)
+    matriz_html = _matriz_proyectada_html(
+        proy, h_obj, sem.get("umbral_x", 25.0), sem.get("umbral_y", 65.0))
 
     def _tn(t): return escape(t.replace("_", " ").title())
 
@@ -4650,6 +4856,8 @@ async def admin_proyeccion(request: Request):
      style="background:var(--accent);color:#000;border-radius:6px;padding:7px 18px;
             font-size:13px;font-weight:600">Gestionar quiebres →</a>
 </div>
+
+{matriz_html}
 
 <div class="card">
   <div style="margin-bottom:8px">
