@@ -1773,7 +1773,7 @@ def listar_log_actores(db_path: str, actor_id: int = None,
 # Solo LEE: globos_b del semáforo + las tablas de quiebres. No toca el motor.
 # ═══════════════════════════════════════════════════════════════════════════
 
-_PROY_HORIZONTES_DEFAULT = [15, 30, 60, 90]
+_PROY_HORIZONTES_DEFAULT = [15, 30]
 _QUIEBRE_DIRECCIONES = {"sube", "baja", "no_toca"}
 _QUIEBRE_INTENSIDADES = {"leve", "moderado", "fuerte"}
 _QUIEBRE_DURACIONES = {"permanente", "temporal"}
