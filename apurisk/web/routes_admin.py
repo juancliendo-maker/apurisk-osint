@@ -320,6 +320,7 @@ def _nav_html(activo: str, username: str) -> str:
         ("calibrar",  "🎛️",  "Calibración",    "/admin/semaforo/calibrar"),
         ("actores",   "🎭", "Actores",        "/admin/actores"),
         ("proyeccion","🔮", "Proyección",     "/admin/proyeccion"),
+        ("quiebres",  "🔻", "Puntos de Quiebre", "/admin/quiebres"),
         ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
         ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
@@ -4800,7 +4801,7 @@ async def admin_quiebres(request: Request):
     </table>
   </div>
 </div>"""
-    return HTMLResponse(_page("Puntos de quiebre", contenido, "proyeccion", sesion["username"]))
+    return HTMLResponse(_page("Puntos de quiebre", contenido, "quiebres", sesion["username"]))
 
 
 @router.get("/quiebres/nuevo", response_class=HTMLResponse)
@@ -4840,7 +4841,7 @@ async def admin_quiebres_nuevo(request: Request):
     </div>
   </form>
 </div>"""
-    return HTMLResponse(_page("Nuevo quiebre", contenido, "proyeccion", sesion["username"]))
+    return HTMLResponse(_page("Nuevo quiebre", contenido, "quiebres", sesion["username"]))
 
 
 @router.post("/quiebres/nuevo")
@@ -4894,7 +4895,7 @@ async def admin_quiebres_log(request: Request):
     <tbody>{cuerpo}</tbody>
   </table></div>
 </div>"""
-    return HTMLResponse(_page("Log quiebres", contenido, "proyeccion", sesion["username"]))
+    return HTMLResponse(_page("Log quiebres", contenido, "quiebres", sesion["username"]))
 
 
 @router.get("/quiebres/{quiebre_id:int}", response_class=HTMLResponse)
@@ -4995,7 +4996,7 @@ async def admin_quiebres_detalle(request: Request, quiebre_id: int):
     <tbody>{filas_log}</tbody>
   </table></div>
 </div>"""
-    return HTMLResponse(_page(f"Quiebre · {q['nombre']}", contenido, "proyeccion", sesion["username"]))
+    return HTMLResponse(_page(f"Quiebre · {q['nombre']}", contenido, "quiebres", sesion["username"]))
 
 
 @router.post("/quiebres/{quiebre_id:int}/editar")
