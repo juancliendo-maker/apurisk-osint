@@ -643,7 +643,7 @@ _DATOS_INICIALES = [
     ),
     (
         "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
-        "VALUES ('PROY_HORIZONTES', '15,30,60,90', 'string', "
+        "VALUES ('PROY_HORIZONTES', '15,30', 'string', "
         "'Proyección: horizontes en días (lista separada por comas) para las tablas A y B', 'GLOBAL')", []
     ),
     # B: gravedad_actual + Σ efectos de quiebre. Intensidad → puntos.
@@ -714,6 +714,11 @@ _MIGRACIONES = [
     # Capa 4 — divergencia dinámica por tema (-1 retrocede / 0 neutro / +1 avanza)
     # trayectoria_en_tema = trayectoria_base + divergencia_dinamica × FACTOR_DIV
     "ALTER TABLE config_actor_temas ADD COLUMN divergencia_dinamica INTEGER NOT NULL DEFAULT 0",
+    # Recorte del horizonte de proyección a 30 días. Una proyección lineal a 60-90d
+    # no es defendible. Recorta SOLO si el valor sigue en el default original — respeta
+    # cualquier ajuste manual posterior del analista en calibración.
+    "UPDATE config_parametros SET valor='15,30' "
+    "WHERE clave='PROY_HORIZONTES' AND valor='15,30,60,90'",
 ]
 
 
