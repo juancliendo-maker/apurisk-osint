@@ -1773,7 +1773,7 @@ def listar_log_actores(db_path: str, actor_id: int = None,
 # Solo LEE: globos_b del semáforo + las tablas de quiebres. No toca el motor.
 # ═══════════════════════════════════════════════════════════════════════════
 
-_PROY_HORIZONTES = [30, 60, 90]
+_PROY_HORIZONTES_DEFAULT = [15, 30, 60, 90]
 _QUIEBRE_DIRECCIONES = {"sube", "baja", "no_toca"}
 _QUIEBRE_INTENSIDADES = {"leve", "moderado", "fuerte"}
 _QUIEBRE_DURACIONES = {"permanente", "temporal"}
@@ -1815,20 +1815,57 @@ def cargar_parametros_proyeccion(db_path: str) -> dict:
     return defaults
 
 
+def cargar_horizontes_proyeccion(db_path: str) -> list:
+    """Horizontes (días) de la proyección, editables vía PROY_HORIZONTES.
+
+    Valor en config_parametros: lista separada por comas, ej. '15,30,60,90'.
+    Defaults a [15, 30, 60, 90]. Siempre ordenados, positivos y sin duplicados.
+    """
+    horizontes = list(_PROY_HORIZONTES_DEFAULT)
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                "SELECT valor FROM config_parametros WHERE clave='PROY_HORIZONTES'"
+            ).fetchone()
+        if row and row["valor"]:
+            parsed = []
+            for tok in str(row["valor"]).split(","):
+                tok = tok.strip()
+                if tok:
+                    parsed.append(int(float(tok)))
+            parsed = sorted({h for h in parsed if h > 0})
+            if parsed:
+                horizontes = parsed
+    except Exception as e:
+        print(f"[config_loader] cargar_horizontes_proyeccion falló: {e}")
+    return horizontes
+
+
+_PROY_BLOQUE_DIAS = 30  # ancho de cada bloque de amortiguación
+
+
 def factor_tendencia(horizonte: int, par: dict) -> float:
     """FACTOR(H) acumulado de la amortiguación de tendencia (Proyección A).
 
+    El peso marginal de la velocidad decae por bloque de 30 días
+    (1.0 · decay_60d · decay_90d) y se INTERPOLA dentro de cada bloque,
+    de modo que cualquier horizonte (incluido 15d) recibe su fracción:
+
+    FACTOR(15) = ALCANCE · 0.5            (medio primer bloque)
     FACTOR(30) = ALCANCE · 1.0
     FACTOR(60) = ALCANCE · (1.0 + decay_60d)
     FACTOR(90) = ALCANCE · (1.0 + decay_60d + decay_90d)
     """
     alcance = par["alcance"]
-    if horizonte <= 30:
-        pesos = 1.0
-    elif horizonte <= 60:
-        pesos = 1.0 + par["decay_60d"]
-    else:
-        pesos = 1.0 + par["decay_60d"] + par["decay_90d"]
+    tramos = [1.0, par["decay_60d"], par["decay_90d"]]  # pesos marginales por bloque
+    restante = max(0, horizonte)
+    pesos = 0.0
+    for w in tramos:
+        if restante <= 0:
+            break
+        frac = min(restante, _PROY_BLOQUE_DIAS) / _PROY_BLOQUE_DIAS
+        pesos += frac * w
+        restante -= _PROY_BLOQUE_DIAS
     return round(alcance * pesos, 4)
 
 
@@ -1899,6 +1936,7 @@ def calcular_proyecciones(db_path: str, temas_datos: list, hoy=None) -> dict:
     if hoy is None:
         hoy = date.today()
     par = cargar_parametros_proyeccion(db_path)
+    horizontes = cargar_horizontes_proyeccion(db_path)
 
     # Quiebres activos con sus efectos por tema
     quiebres = listar_puntos_quiebre(db_path, solo_activos=True, con_efectos=True)
@@ -1915,31 +1953,57 @@ def calcular_proyecciones(db_path: str, temas_datos: list, hoy=None) -> dict:
 
         # ── Proyección A: tendencia pura, sin quiebres ──
         fila_a = {"tema": tema, "hoy": round(act, 1)}
-        for h in _PROY_HORIZONTES:
+        for h in horizontes:
             fila_a[f"h{h}"] = round(_clamp(act + vel * factor_tendencia(h, par)), 1)
         proy_a.append(fila_a)
 
+        # ¿Algún quiebre activo define un efecto (≠ no_toca) para este tema?
+        tiene_definido = any(
+            (q["efectos"].get(tema) or {}).get("direccion", "no_toca") != "no_toca"
+            for q in quiebres
+        )
+
         # ── Proyección B: gravedad actual + efectos de quiebre ──
-        fila_b = {"tema": tema, "base": round(grav, 1), "efectos": {}}
-        for h in _PROY_HORIZONTES:
+        fila_b = {"tema": tema, "base": round(grav, 1),
+                  "tiene_efecto": tiene_definido, "efectos": {}}
+        for h in horizontes:
             ajuste = 0.0
             detalle = []
+            definido_en_h = False   # hay efecto ≠ no_toca cuyo quiebre cae dentro de H
             for q in quiebres:
                 dh = q.get("dias_hasta")
                 if dh is None:
                     continue
                 ef = q["efectos"].get(tema)
-                if not ef:
+                if not ef or ef.get("direccion", "no_toca") == "no_toca":
                     continue
+                dentro = (0 <= dh <= h)
+                if dentro:
+                    definido_en_h = True
                 pts = efecto_quiebre_en_horizonte(ef, dh, h, par)
-                if pts != 0.0:
+                if abs(pts) >= 0.05:
                     ajuste += pts
-                    detalle.append({"quiebre": q["nombre"], "pts": pts})
+                    detalle.append({"quiebre": q["nombre"], "pts": round(pts, 1)})
+            ajuste = round(ajuste, 1)
+            if ajuste == 0.0:
+                ajuste = 0.0  # normaliza -0.0
             total = round(_clamp(grav + ajuste), 1)
+
+            # Estado honesto de la celda
+            if not tiene_definido:
+                estado = "sin_efecto"          # no definiste efecto para este tema
+            elif abs(ajuste) >= 0.05:
+                estado = "aplicado"            # efecto activo y no nulo
+            elif definido_en_h:
+                estado = "diluido"             # definido y dentro de H, pero atenuado a ≈0
+            else:
+                estado = "fuera_horizonte"     # definido, pero el quiebre cae fuera de H
+
             fila_b["efectos"][h] = {
                 "base": round(grav, 1),
-                "quiebre": round(ajuste, 1),
+                "quiebre": ajuste,
                 "total": total,
+                "estado": estado,
                 "detalle": detalle,
             }
             fila_b[f"h{h}"] = total
@@ -1947,7 +2011,7 @@ def calcular_proyecciones(db_path: str, temas_datos: list, hoy=None) -> dict:
 
     return {
         "par": par,
-        "horizontes": _PROY_HORIZONTES,
+        "horizontes": horizontes,
         "proyeccion_a": proy_a,
         "proyeccion_b": proy_b,
         "quiebres": quiebres,

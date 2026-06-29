@@ -641,6 +641,11 @@ _DATOS_INICIALES = [
         "VALUES ('PROY_DECAY_90D', '0.25', 'float', "
         "'Proyección A: peso marginal de la velocidad en el bloque 60-90d (decae otra mitad)', 'GLOBAL')", []
     ),
+    (
+        "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+        "VALUES ('PROY_HORIZONTES', '15,30,60,90', 'string', "
+        "'Proyección: horizontes en días (lista separada por comas) para las tablas A y B', 'GLOBAL')", []
+    ),
     # B: gravedad_actual + Σ efectos de quiebre. Intensidad → puntos.
     (
         "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "

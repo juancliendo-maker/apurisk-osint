@@ -4548,7 +4548,7 @@ async def admin_proyeccion(request: Request):
     sesion, err = _admin_guard(request)
     if err:
         return err
-    from ..storage.config_loader import calcular_proyecciones
+    from ..storage.config_loader import calcular_proyecciones, factor_tendencia
 
     db = _get_db_path()
     temas_datos = _temas_datos_desde_globos(db)
@@ -4565,21 +4565,24 @@ async def admin_proyeccion(request: Request):
 
     proy = calcular_proyecciones(db, temas_datos)
     par = proy["par"]
-    f30 = par["alcance"] * 1.0
-    f60 = par["alcance"] * (1.0 + par["decay_60d"])
-    f90 = par["alcance"] * (1.0 + par["decay_60d"] + par["decay_90d"])
+    horizontes = proy["horizontes"]
+    h_ult = horizontes[-1]   # horizonte más lejano (para ordenar y la flecha de tendencia)
+    factores_str = " / ".join(f"{factor_tendencia(h, par):.1f}" for h in horizontes)
+    horizontes_str = "/".join(str(h) for h in horizontes)
+    th_horizontes = "".join(
+        f'<th style="text-align:center">{h}d</th>' for h in horizontes)
 
     def _tn(t): return escape(t.replace("_", " ").title())
 
     # ── Sección A — Actividad (tendencia pura) ──
     filas_a = ""
-    for fa in sorted(proy["proyeccion_a"], key=lambda r: r["h90"], reverse=True):
+    for fa in sorted(proy["proyeccion_a"], key=lambda r: r[f"h{h_ult}"], reverse=True):
         cells = ""
-        for h in (30, 60, 90):
+        for h in horizontes:
             v = fa[f"h{h}"]
             cells += (f'<td style="text-align:center;font-weight:700;'
                       f'color:{_color_nivel_proy(v)}">{v:.1f}</td>')
-        delta = fa["h90"] - fa["hoy"]
+        delta = fa[f"h{h_ult}"] - fa["hoy"]
         flecha = "↑" if delta > 0.5 else "↓" if delta < -0.5 else "→"
         fcol = "#22c55e" if delta > 0.5 else "#ef4444" if delta < -0.5 else "#94a3b8"
         filas_a += f"""<tr>
@@ -4588,24 +4591,27 @@ async def admin_proyeccion(request: Request):
   {cells}
 </tr>\n"""
 
-    # ── Sección B — Gravedad (base + quiebres) ──
+    # ── Sección B — Gravedad (base + quiebres), con estado honesto por celda ──
     filas_b = ""
-    for fb in sorted(proy["proyeccion_b"], key=lambda r: r["h90"], reverse=True):
+    for fb in sorted(proy["proyeccion_b"], key=lambda r: r[f"h{h_ult}"], reverse=True):
         cells = ""
-        for h in (30, 60, 90):
+        for h in horizontes:
             ef = fb["efectos"][h]
             total = ef["total"]
             qpts = ef["quiebre"]
+            estado = ef["estado"]
             color = _color_nivel_proy(total)
-            if abs(qpts) >= 0.05:
+            if estado == "aplicado":
                 qcol = "#22c55e" if qpts > 0 else "#ef4444"
-                desglose = (f'<div style="font-size:9px;color:var(--muted)">'
-                            f'base {ef["base"]:.0f} '
-                            f'<span style="color:{qcol};font-weight:700">'
-                            f'{qpts:+.0f} quiebre</span></div>')
-            else:
-                desglose = ('<div style="font-size:9px;color:var(--muted)">'
-                            'base (sin quiebre)</div>')
+                nota = (f'base {ef["base"]:.0f} '
+                        f'<span style="color:{qcol};font-weight:700">{qpts:+.0f} quiebre</span>')
+            elif estado == "diluido":
+                nota = ('<span style="color:#f59e0b">efecto temporal diluido (≈0 aquí)</span>')
+            elif estado == "fuera_horizonte":
+                nota = ('<span style="color:#64748b">efecto definido · el quiebre cae fuera de este horizonte</span>')
+            else:  # sin_efecto
+                nota = "sin efecto definido"
+            desglose = f'<div style="font-size:9px;color:var(--muted)">{nota}</div>'
             cells += (f'<td style="text-align:center">'
                       f'<span style="font-weight:700;color:{color}">{total:.1f}</span>'
                       f'{desglose}</td>')
@@ -4636,8 +4642,8 @@ async def admin_proyeccion(request: Request):
     contenido = f"""
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
   <div style="font-size:13px;color:var(--muted)">
-    Hoy {escape(proy['hoy'])} · factores de tendencia 30/60/90 =
-    {f30:.1f} / {f60:.1f} / {f90:.1f}
+    Hoy {escape(proy['hoy'])} · horizontes {escape(horizontes_str)}d ·
+    factores de tendencia = {escape(factores_str)}
   </div>
   <a href="/admin/quiebres"
      style="background:var(--accent);color:#000;border-radius:6px;padding:7px 18px;
@@ -4657,14 +4663,13 @@ async def admin_proyeccion(request: Request):
   <p style="font-size:12px;color:var(--muted);margin:0 0 12px">
     <b>Todo aquí es tendencia automática.</b> Los puntos de quiebre NO afectan esta
     matriz. nivel(H) = actividad_hoy + velocidad × factor(H), donde la velocidad pesa
-    menos a mayor horizonte (factor {f30:.1f}/{f60:.1f}/{f90:.1f} a 30/60/90).
+    menos a mayor horizonte (factor {escape(factores_str)} a {escape(horizontes_str)}d).
   </p>
   <div style="overflow-x:auto">
     <table class="tbl">
       <thead><tr>
         <th>Tema</th><th style="text-align:center">Hoy</th>
-        <th style="text-align:center">30d</th><th style="text-align:center">60d</th>
-        <th style="text-align:center">90d</th>
+        {th_horizontes}
       </tr></thead>
       <tbody>{filas_a}</tbody>
     </table>
@@ -4684,15 +4689,15 @@ async def admin_proyeccion(request: Request):
   <p style="font-size:12px;color:var(--muted);margin:0 0 10px">
     La gravedad <b>no se extrapola por cobertura</b>: parte de la gravedad estructural de
     hoy y solo se mueve por los eventos que tú defines. Cada celda separa
-    <b>base</b> (estructural) de <b>quiebre</b> (tu ajuste).
+    <b>base</b> (estructural) de <b>quiebre</b> (tu ajuste). Un efecto temporal que ya
+    se diluyó se marca como tal — nunca como "sin efecto".
   </p>
   <div style="margin-bottom:12px">{chips}</div>
   <div style="overflow-x:auto">
     <table class="tbl">
       <thead><tr>
         <th>Tema</th><th style="text-align:center">Gravedad hoy</th>
-        <th style="text-align:center">30d</th><th style="text-align:center">60d</th>
-        <th style="text-align:center">90d</th>
+        {th_horizontes}
       </tr></thead>
       <tbody>{filas_b}</tbody>
     </table>
@@ -4700,7 +4705,7 @@ async def admin_proyeccion(request: Request):
   <p style="font-size:11px;color:var(--muted);margin-top:8px">
     Intensidad → puntos: leve {par['pts_leve']:.0f} · moderado {par['pts_moderado']:.0f} ·
     fuerte {par['pts_fuerte']:.0f}. Efecto temporal se diluye en
-    {par['dilucion_dias']:.0f} días. Todo editable en calibración.
+    {par['dilucion_dias']:.0f} días. Horizontes y pesos editables en calibración.
   </p>
 </div>"""
 
