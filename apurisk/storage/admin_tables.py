@@ -357,6 +357,51 @@ CREATE TABLE IF NOT EXISTS config_quiebre_log (
 
 CREATE INDEX IF NOT EXISTS idx_quiebre_log_q ON config_quiebre_log(quiebre_id);
 CREATE INDEX IF NOT EXISTS idx_quiebre_log_usuario ON config_quiebre_log(usuario);
+
+-- ============================================================
+-- MOTOR DE INTELIGENCIA — análisis de 7 pasos por tema (Reportes A/B)
+-- ============================================================
+-- Reporte A = pasos automáticos (2,3,7), foto situacional sin criterio.
+-- Reporte B = A + pasos de criterio del analista (1,4,5,6).
+-- Cada guardado = una versión fechada (trazabilidad de la lectura del tema).
+-- cliente_id es un HOOK para el enfoque por cliente futuro (NULL por ahora).
+
+CREATE TABLE IF NOT EXISTS config_analisis (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    tema            TEXT NOT NULL,
+    pais            TEXT NOT NULL DEFAULT 'PE',
+    cliente_id      INTEGER,                 -- hook futuro (enfoque por cliente); NULL = por tema
+    version         INTEGER NOT NULL,        -- incremental por (tema, pais, cliente_id)
+    fecha           TEXT NOT NULL DEFAULT (datetime('now')),
+    usuario         TEXT NOT NULL,
+    -- Pasos de CRITERIO (Etapa 2; columnas creadas ya para estabilidad del esquema)
+    paso1_escenario     TEXT,    -- (1) Escenario estructural · criterio · solo B
+    paso4_organizacion  TEXT,    -- (4) Organización de actores · criterio · solo B
+    paso5_sustancia     TEXT,    -- (5) Filtro: sustancia confirmada/editada · solo B
+    paso5_ruido         TEXT,    -- (5) Filtro: ruido SEPARADO y conservado · solo B
+    paso6_impacto       TEXT,    -- (6) Impacto · criterio · solo B
+    snapshot_auto       TEXT,    -- JSON con los pasos automáticos 2,3,7 al momento de guardar
+    creado_en       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_analisis_tema ON config_analisis(tema, pais, version);
+CREATE INDEX IF NOT EXISTS idx_analisis_cliente ON config_analisis(cliente_id);
+
+-- Auditoría de cambios del motor de inteligencia
+CREATE TABLE IF NOT EXISTS config_analisis_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    analisis_id     INTEGER,
+    tema            TEXT,
+    campo           TEXT NOT NULL,
+    valor_anterior  TEXT,
+    valor_nuevo     TEXT,
+    usuario         TEXT NOT NULL,
+    motivo          TEXT,
+    cambiado_en     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_analisis_log_tema ON config_analisis_log(tema);
+CREATE INDEX IF NOT EXISTS idx_analisis_log_usuario ON config_analisis_log(usuario);
 """
 
 _DATOS_INICIALES = [

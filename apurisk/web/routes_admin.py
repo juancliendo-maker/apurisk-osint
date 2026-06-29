@@ -321,6 +321,7 @@ def _nav_html(activo: str, username: str) -> str:
         ("actores",   "🎭", "Actores",        "/admin/actores"),
         ("proyeccion","🔮", "Proyección",     "/admin/proyeccion"),
         ("quiebres",  "🔻", "Puntos de Quiebre", "/admin/quiebres"),
+        ("inteligencia","🧠","Inteligencia",  "/admin/inteligencia"),
         ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
         ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
@@ -5281,3 +5282,241 @@ async def admin_quiebres_eliminar(request: Request, quiebre_id: int):
         return RedirectResponse(f"/admin/quiebres/{quiebre_id}?err=BD+ocupada.+Reintenta.", status_code=303)
     except Exception as e:
         return RedirectResponse(f"/admin/quiebres?err={escape(str(e))}", status_code=303)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MOTOR DE INTELIGENCIA — análisis de 7 pasos por tema (Reportes A/B)
+# Etapa 1: pasos AUTOMÁTICOS (2,3,7) = Reporte A. Solo LEE datos existentes.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _reporte_automatico(db: str, tema: str) -> dict | None:
+    """Arma los pasos automáticos (2,3,7) del análisis de un tema.
+
+    Lee de funciones existentes — sin recálculo nuevo:
+      · Paso 2 (coyuntura): globos_b del semáforo (gravedad, actividad, velocidad, urgencia)
+      · Paso 3 (actores):   listar_actores_por_activacion (CVO + trayectoria)
+      · Paso 7 (proyección): calcular_proyecciones (A/B a 30d + quiebres del tema)
+    Devuelve None si no hay snapshot OSINT.
+    """
+    from ..storage.config_loader import (
+        listar_actores_por_activacion, calcular_proyecciones,
+    )
+    osint = _cargar_osint_snapshot()
+    if not osint:
+        return None
+    md = _construir_datos_semaforo(osint, db)
+
+    # ── Paso 2 — Evento / coyuntura ──
+    globo = next((g for g in md.get("globos_b", []) if g["tema"] == tema), None)
+    paso2 = None
+    if globo:
+        paso2 = {
+            "gravedad": globo.get("y", 0.0),
+            "actividad": globo.get("x", 0.0),
+            "velocidad": globo.get("velocidad", 0.0),
+            "urgencia": globo.get("urgencia", "—"),
+            "color": globo.get("color", "#94a3b8"),
+            "cuadrante": globo.get("cuadrante", "—"),
+            "indice_urgencia": globo.get("indice_urgencia", 0.0),
+            "actor_determinante": globo.get("actor_determinante"),
+        }
+
+    # ── Paso 3 — Actores e intereses ──
+    paso3 = listar_actores_por_activacion(db, tema)
+
+    # ── Paso 7 — Proyecciones (hoy → 30d) ──
+    temas_datos = _temas_datos_desde_globos(db)
+    proy = calcular_proyecciones(db, temas_datos)
+    h_obj = 30 if 30 in proy["horizontes"] else proy["horizontes"][-1]
+    pa = next((r for r in proy["proyeccion_a"] if r["tema"] == tema), None)
+    pb = next((r for r in proy["proyeccion_b"] if r["tema"] == tema), None)
+    quiebres_tema = []
+    for q in proy.get("quiebres", []):
+        ef = q.get("efectos", {}).get(tema)
+        if ef and ef.get("direccion", "no_toca") != "no_toca":
+            quiebres_tema.append({
+                "nombre": q["nombre"], "fecha": q.get("fecha", ""),
+                "direccion": ef["direccion"], "intensidad": ef["intensidad"],
+                "duracion": ef["duracion"], "dias_hasta": q.get("dias_hasta"),
+            })
+    paso7 = {
+        "h_obj": h_obj,
+        "actividad_hoy": pa["hoy"] if pa else 0.0,
+        "actividad_30d": pa.get(f"h{h_obj}") if pa else 0.0,
+        "gravedad_hoy": pb["base"] if pb else 0.0,
+        "gravedad_30d": pb.get(f"h{h_obj}") if pb else 0.0,
+        "efecto_quiebre": (pb["efectos"][h_obj]["quiebre"] if pb else 0.0),
+        "quiebres": quiebres_tema,
+    }
+
+    return {"tema": tema, "paso2": paso2, "paso3": paso3, "paso7": paso7,
+            "hoy": proy.get("hoy", "")}
+
+
+def _reporte_a_html(rep: dict) -> str:
+    """Render sobrio del Reporte A (pasos automáticos 2,3,7) para un tema."""
+    tema = rep["tema"]
+    p2, p3, p7 = rep["paso2"], rep["paso3"], rep["paso7"]
+
+    def _auto_badge():
+        return ('<span style="font-size:10px;font-weight:700;color:#22c55e;'
+                'background:#22c55e22;padding:2px 7px;border-radius:4px">AUTOMÁTICO</span>')
+
+    # ── Paso 2 ──
+    if p2:
+        col = p2["color"]
+        det = (f' · actor determinante: <b>{escape(str(p2["actor_determinante"]))}</b>'
+               if p2.get("actor_determinante") else "")
+        paso2_html = f"""
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin:6px 0 4px">
+    <div><div style="font-size:9px;color:var(--muted);text-transform:uppercase">Gravedad</div>
+      <div style="font-size:22px;font-weight:700;color:{_color_nivel_proy(p2['gravedad'])}">{p2['gravedad']:.0f}</div></div>
+    <div><div style="font-size:9px;color:var(--muted);text-transform:uppercase">Actividad</div>
+      <div style="font-size:22px;font-weight:700;color:var(--text)">{p2['actividad']:.1f}</div></div>
+    <div><div style="font-size:9px;color:var(--muted);text-transform:uppercase">Velocidad 7d</div>
+      <div style="font-size:22px;font-weight:700;color:var(--text)">{p2['velocidad']:+.1f}</div></div>
+    <div><div style="font-size:9px;color:var(--muted);text-transform:uppercase">Urgencia</div>
+      <div><span style="background:{col}22;color:{col};padding:3px 9px;border-radius:5px;
+                       font-weight:700;font-size:13px">{escape(p2['urgencia'])}</span></div></div>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin:4px 0 0">
+    Cuadrante: <b style="color:var(--text)">{escape(p2['cuadrante'])}</b> ·
+    índice de urgencia {p2['indice_urgencia']:.2f}{det}
+  </p>"""
+    else:
+        paso2_html = '<p style="color:var(--muted);font-size:12px">Sin datos del semáforo para este tema.</p>'
+
+    # ── Paso 3 ──
+    if p3:
+        filas = ""
+        for a in p3:
+            idx = a.get("indice_activacion")
+            idx_s = f"{idx:.1f}" if idx is not None else "—"
+            et = a.get("trayectoria_etiqueta", "ESTABLE")
+            etc = "#22c55e" if et == "ASCENSO" else "#ef4444" if et == "DECLIVE" else "#94a3b8"
+            fl = "↑" if et == "ASCENSO" else "↓" if et == "DECLIVE" else "→"
+            filas += f"""<tr>
+  <td style="font-size:12px;color:var(--text)">{escape(a['nombre'])}
+    <span style="font-size:10px;color:var(--muted)">· Nivel {escape(a.get('nivel','?'))}</span></td>
+  <td style="text-align:center;color:var(--muted)">{a.get('peso_calculado',0):.0f}</td>
+  <td style="text-align:center;font-weight:700;color:var(--text)">{idx_s}</td>
+  <td style="text-align:center"><span style="color:{etc};font-weight:700">{fl} {et}</span>
+    <span style="font-size:10px;color:var(--muted)">{a.get('trayectoria_en_tema',0):+g}</span></td>
+</tr>\n"""
+        paso3_html = f"""
+  <table class="tbl" style="margin-top:6px">
+    <thead><tr><th>Actor</th><th style="text-align:center">Peso</th>
+      <th style="text-align:center">Índice CVO</th><th style="text-align:center">Trayectoria</th></tr></thead>
+    <tbody>{filas}</tbody>
+  </table>"""
+    else:
+        paso3_html = ('<p style="color:var(--muted);font-size:12px;margin-top:6px">'
+                      'Sin actores vinculados a este tema. '
+                      '<a href="/admin/actores" style="color:var(--accent)">Vincúlalos →</a></p>')
+
+    # ── Paso 7 ──
+    h = p7["h_obj"]
+    da = p7["actividad_30d"] - p7["actividad_hoy"]
+    dg = p7["gravedad_30d"] - p7["gravedad_hoy"]
+    qpts = p7["efecto_quiebre"]
+    q_nota = ""
+    if p7["quiebres"]:
+        chips = " · ".join(
+            f'{escape(q["nombre"])} ({escape(q["direccion"])}/{escape(q["intensidad"])}/{escape(q["duracion"])})'
+            for q in p7["quiebres"])
+        q_nota = f'<p style="font-size:11px;color:var(--muted);margin:6px 0 0">Quiebres aplicables: {chips}</p>'
+    paso7_html = f"""
+  <table class="tbl" style="margin-top:6px">
+    <thead><tr><th></th><th style="text-align:center">Hoy</th>
+      <th style="text-align:center">{h}d</th><th style="text-align:center">Δ</th></tr></thead>
+    <tbody>
+      <tr><td style="font-size:12px">Actividad mediática (Proy. A · tendencia)</td>
+        <td style="text-align:center;color:var(--muted)">{p7['actividad_hoy']:.1f}</td>
+        <td style="text-align:center;font-weight:700;color:var(--text)">{p7['actividad_30d']:.1f}</td>
+        <td style="text-align:center;color:{'#22c55e' if da>0 else '#ef4444' if da<0 else '#94a3b8'}">{da:+.1f}</td></tr>
+      <tr><td style="font-size:12px">Gravedad / riesgo (Proy. B · base + quiebres)</td>
+        <td style="text-align:center;color:var(--muted)">{p7['gravedad_hoy']:.0f}</td>
+        <td style="text-align:center;font-weight:700;color:{_color_nivel_proy(p7['gravedad_30d'])}">{p7['gravedad_30d']:.0f}</td>
+        <td style="text-align:center;color:{'#22c55e' if dg>0 else '#ef4444' if dg<0 else '#94a3b8'}">{dg:+.0f}
+          {f'<span style="font-size:10px;color:var(--muted)">(quiebre {qpts:+.0f})</span>' if abs(qpts)>=0.05 else ''}</td></tr>
+    </tbody>
+  </table>{q_nota}"""
+
+    return f"""
+<div class="card">
+  <div class="card-title">Paso 2 — Evento / coyuntura {_auto_badge()}
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">del semáforo y la Matriz B</span></div>
+  {paso2_html}
+</div>
+<div class="card">
+  <div class="card-title">Paso 3 — Actores e intereses {_auto_badge()}
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">del modelo de actores · orden por índice de activación (CVO)</span></div>
+  {paso3_html}
+</div>
+<div class="card">
+  <div class="card-title">Paso 7 — Proyecciones {_auto_badge()}
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">de Proyección A/B a {h} días</span></div>
+  {paso7_html}
+</div>"""
+
+
+@router.get("/inteligencia", response_class=HTMLResponse)
+async def admin_inteligencia(request: Request):
+    """Motor de Inteligencia — Etapa 1: Reporte A (pasos automáticos 2,3,7)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+
+    tema_sel = request.query_params.get("tema", list(_IMPACTO_TEMA.keys())[0])
+    if tema_sel not in _IMPACTO_TEMA:
+        tema_sel = list(_IMPACTO_TEMA.keys())[0]
+
+    db = _get_db_path()
+    rep = _reporte_automatico(db, tema_sel)
+
+    opts = "".join(
+        f'<option value="{t}"{" selected" if t == tema_sel else ""}>'
+        f'{escape(t.replace("_"," ").title())}</option>'
+        for t in _IMPACTO_TEMA
+    )
+    selector = f"""
+<div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+  <div style="font-size:15px;font-weight:600;color:var(--text)">Análisis del tema:</div>
+  <form method="get" action="/admin/inteligencia" style="display:flex;gap:8px;align-items:center">
+    <select name="tema" onchange="this.form.submit()"
+            style="background:var(--bg-3);color:var(--text);border:1px solid #334155;
+                   border-radius:4px;padding:5px 10px;font-size:13px">{opts}</select>
+  </form>
+</div>"""
+
+    if rep is None:
+        cuerpo = """
+<div class="card card-accent">
+  <div class="card-title">🧠 Motor de Inteligencia</div>
+  <p style="color:var(--muted)">Sin snapshot OSINT disponible aún. El Reporte A lee
+  los datos del semáforo, actores y proyección; espera el próximo ciclo del motor.</p>
+</div>"""
+    else:
+        cuerpo = f"""
+<div class="card" style="border-left:3px solid #22c55e">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span style="font-size:11px;font-weight:700;color:#22c55e;background:#22c55e22;
+                 padding:3px 8px;border-radius:4px">REPORTE A · FOTO AUTOMÁTICA</span>
+    <span style="font-size:12px;color:var(--muted)">
+      {escape(tema_sel.replace('_',' ').title())} · generado {escape(rep['hoy'])} ·
+      solo pasos automáticos (2 · 3 · 7), sin criterio
+    </span>
+  </div>
+</div>
+{_reporte_a_html(rep)}
+<div class="card" style="background:transparent;border:1px dashed #334155">
+  <p style="font-size:12px;color:var(--muted);margin:0">
+    <b>Reporte B</b> (escenario, organización de actores, filtro ruido/sustancia, impacto —
+    tu criterio) se construye en la próxima etapa. Esta vista es el Reporte A: foto
+    situacional derivada solo de los datos.
+  </p>
+</div>"""
+
+    return HTMLResponse(_page(
+        f"Inteligencia · {tema_sel.replace('_',' ').title()}",
+        selector + cuerpo, "inteligencia", sesion["username"]))
