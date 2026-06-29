@@ -4579,6 +4579,7 @@ def _matriz_proyectada_html(proy: dict, h_obj: int,
     cid = "matrizProyectada"
 
     return f"""
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <div class="card">
   <div style="margin-bottom:8px">
     <span style="font-size:11px;font-weight:700;color:#f59e0b;background:#f59e0b22;
