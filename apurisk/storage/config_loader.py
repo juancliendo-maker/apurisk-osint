@@ -2213,3 +2213,98 @@ def listar_log_quiebres(db_path: str, quiebre_id: int = None,
     except Exception as e:
         print(f"[config_loader] listar_log_quiebres falló: {e}")
         return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MOTOR DE INTELIGENCIA — versionado de análisis (Etapa 2)
+#   Cada guardado = una versión fechada. El criterio (pasos 1,4,5,6) persiste;
+#   snapshot_auto congela los pasos automáticos (2,3,7) de ese momento.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_ANALISIS_CRITERIO = [
+    "paso1_escenario", "paso4_organizacion",
+    "paso5_sustancia", "paso5_ruido", "paso6_impacto",
+]
+
+
+def obtener_ultima_version(db_path: str, tema: str, pais: str = "PE") -> dict | None:
+    """Última versión guardada del análisis de un tema (para editar el criterio).
+
+    None si el tema aún no tiene ninguna versión.
+    """
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                "SELECT * FROM config_analisis WHERE tema=? AND pais=? "
+                "ORDER BY version DESC LIMIT 1",
+                (tema, pais),
+            ).fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"[config_loader] obtener_ultima_version falló: {e}")
+        return None
+
+
+def listar_versiones(db_path: str, tema: str, pais: str = "PE") -> list:
+    """Historial de versiones de un tema (id, version, fecha, usuario), recientes primero."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, version, fecha, usuario FROM config_analisis "
+                "WHERE tema=? AND pais=? ORDER BY version DESC",
+                (tema, pais),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_versiones falló: {e}")
+        return []
+
+
+def obtener_version(db_path: str, version_id: int) -> dict | None:
+    """Una versión concreta (solo lectura), incluido su snapshot_auto congelado."""
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                "SELECT * FROM config_analisis WHERE id=?", (version_id,)
+            ).fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"[config_loader] obtener_version falló: {e}")
+        return None
+
+
+def guardar_analisis(db_path: str, tema: str, criterio: dict,
+                     snapshot_auto: str, usuario: str, pais: str = "PE") -> dict:
+    """Inserta una versión nueva del análisis de un tema. Devuelve {ok, id, version}.
+
+    criterio: {paso1_escenario, paso4_organizacion, paso5_sustancia,
+               paso5_ruido, paso6_impacto}
+    snapshot_auto: JSON (str) con los pasos automáticos 2,3,7 al momento de guardar.
+    version = max(version del tema)+1.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        prev = c.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM config_analisis WHERE tema=? AND pais=?",
+            (tema, pais),
+        ).fetchone()[0]
+        nueva = int(prev) + 1
+        c.execute(
+            "INSERT INTO config_analisis "
+            "(tema, pais, cliente_id, version, usuario, "
+            "paso1_escenario, paso4_organizacion, paso5_sustancia, paso5_ruido, "
+            "paso6_impacto, snapshot_auto) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (tema, pais, None, nueva, usuario,
+             criterio.get("paso1_escenario"), criterio.get("paso4_organizacion"),
+             criterio.get("paso5_sustancia"), criterio.get("paso5_ruido"),
+             criterio.get("paso6_impacto"), snapshot_auto),
+        )
+        aid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        c.execute(
+            "INSERT INTO config_analisis_log "
+            "(analisis_id, tema, campo, valor_anterior, valor_nuevo, usuario, motivo) "
+            "VALUES (?,?,'version',?,?,?,?)",
+            (aid, tema, str(prev), str(nueva), usuario, f"guardado v{nueva}"),
+        )
+        return {"ok": True, "id": aid, "version": nueva}
+    return _ejecutar_con_reintentos(db_path, _op)

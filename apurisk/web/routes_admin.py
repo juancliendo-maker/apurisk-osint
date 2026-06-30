@@ -5321,6 +5321,23 @@ def _reporte_automatico(db: str, tema: str) -> dict | None:
             "actor_determinante": globo.get("actor_determinante"),
         }
 
+    # ── Paso 5 (propuesta automática del híbrido) — sustancia vs ruido ──
+    # Reutiliza los cuadrantes de la Matriz B: sustancia = temas graves
+    # estructurales (Y ≥ umbral_y); ruido = activos en cobertura pero no graves.
+    umbral_y = md.get("umbral_y", 65.0)
+    umbral_x = md.get("umbral_x", 25.0)
+    sustancia_items, ruido_items = [], []
+    for g in md.get("globos_b", []):
+        nom = g["tema"].replace("_", " ").title()
+        if g.get("y", 0) >= umbral_y:
+            sustancia_items.append(f"{nom} (gravedad {g.get('y',0):.0f})")
+        elif g.get("x", 0) >= umbral_x:
+            ruido_items.append(f"{nom} (actividad {g.get('x',0):.1f}, gravedad {g.get('y',0):.0f})")
+    propuesta_paso5 = {
+        "sustancia": "; ".join(sustancia_items) if sustancia_items else "(sin temas graves estructurales)",
+        "ruido": "; ".join(ruido_items) if ruido_items else "(sin temas activos no-graves)",
+    }
+
     # ── Paso 3 — Actores e intereses ──
     paso3 = listar_actores_por_activacion(db, tema)
 
@@ -5350,24 +5367,26 @@ def _reporte_automatico(db: str, tema: str) -> dict | None:
     }
 
     return {"tema": tema, "paso2": paso2, "paso3": paso3, "paso7": paso7,
-            "hoy": proy.get("hoy", "")}
+            "propuesta_paso5": propuesta_paso5, "hoy": proy.get("hoy", "")}
 
 
-def _reporte_a_html(rep: dict) -> str:
-    """Render sobrio del Reporte A (pasos automáticos 2,3,7) para un tema."""
-    tema = rep["tema"]
-    p2, p3, p7 = rep["paso2"], rep["paso3"], rep["paso7"]
+def _auto_badge():
+    return ('<span style="font-size:10px;font-weight:700;color:#22c55e;'
+            'background:#22c55e22;padding:2px 7px;border-radius:4px">AUTOMÁTICO</span>')
 
-    def _auto_badge():
-        return ('<span style="font-size:10px;font-weight:700;color:#22c55e;'
-                'background:#22c55e22;padding:2px 7px;border-radius:4px">AUTOMÁTICO</span>')
 
-    # ── Paso 2 ──
-    if p2:
-        col = p2["color"]
-        det = (f' · actor determinante: <b>{escape(str(p2["actor_determinante"]))}</b>'
-               if p2.get("actor_determinante") else "")
-        paso2_html = f"""
+def _crit_badge():
+    return ('<span style="font-size:10px;font-weight:700;color:#a78bfa;'
+            'background:#a78bfa22;padding:2px 7px;border-radius:4px">CRITERIO</span>')
+
+
+def _paso2_html(p2: dict) -> str:
+    if not p2:
+        return '<p style="color:var(--muted);font-size:12px">Sin datos del semáforo para este tema.</p>'
+    col = p2["color"]
+    det = (f' · actor determinante: <b>{escape(str(p2["actor_determinante"]))}</b>'
+           if p2.get("actor_determinante") else "")
+    return f"""
   <div style="display:flex;gap:24px;flex-wrap:wrap;margin:6px 0 4px">
     <div><div style="font-size:9px;color:var(--muted);text-transform:uppercase">Gravedad</div>
       <div style="font-size:22px;font-weight:700;color:{_color_nivel_proy(p2['gravedad'])}">{p2['gravedad']:.0f}</div></div>
@@ -5383,19 +5402,21 @@ def _reporte_a_html(rep: dict) -> str:
     Cuadrante: <b style="color:var(--text)">{escape(p2['cuadrante'])}</b> ·
     índice de urgencia {p2['indice_urgencia']:.2f}{det}
   </p>"""
-    else:
-        paso2_html = '<p style="color:var(--muted);font-size:12px">Sin datos del semáforo para este tema.</p>'
 
-    # ── Paso 3 ──
-    if p3:
-        filas = ""
-        for a in p3:
-            idx = a.get("indice_activacion")
-            idx_s = f"{idx:.1f}" if idx is not None else "—"
-            et = a.get("trayectoria_etiqueta", "ESTABLE")
-            etc = "#22c55e" if et == "ASCENSO" else "#ef4444" if et == "DECLIVE" else "#94a3b8"
-            fl = "↑" if et == "ASCENSO" else "↓" if et == "DECLIVE" else "→"
-            filas += f"""<tr>
+
+def _paso3_html(p3: list) -> str:
+    if not p3:
+        return ('<p style="color:var(--muted);font-size:12px;margin-top:6px">'
+                'Sin actores vinculados a este tema. '
+                '<a href="/admin/actores" style="color:var(--accent)">Vincúlalos →</a></p>')
+    filas = ""
+    for a in p3:
+        idx = a.get("indice_activacion")
+        idx_s = f"{idx:.1f}" if idx is not None else "—"
+        et = a.get("trayectoria_etiqueta", "ESTABLE")
+        etc = "#22c55e" if et == "ASCENSO" else "#ef4444" if et == "DECLIVE" else "#94a3b8"
+        fl = "↑" if et == "ASCENSO" else "↓" if et == "DECLIVE" else "→"
+        filas += f"""<tr>
   <td style="font-size:12px;color:var(--text)">{escape(a['nombre'])}
     <span style="font-size:10px;color:var(--muted)">· Nivel {escape(a.get('nivel','?'))}</span></td>
   <td style="text-align:center;color:var(--muted)">{a.get('peso_calculado',0):.0f}</td>
@@ -5403,18 +5424,15 @@ def _reporte_a_html(rep: dict) -> str:
   <td style="text-align:center"><span style="color:{etc};font-weight:700">{fl} {et}</span>
     <span style="font-size:10px;color:var(--muted)">{a.get('trayectoria_en_tema',0):+g}</span></td>
 </tr>\n"""
-        paso3_html = f"""
+    return f"""
   <table class="tbl" style="margin-top:6px">
     <thead><tr><th>Actor</th><th style="text-align:center">Peso</th>
       <th style="text-align:center">Índice CVO</th><th style="text-align:center">Trayectoria</th></tr></thead>
     <tbody>{filas}</tbody>
   </table>"""
-    else:
-        paso3_html = ('<p style="color:var(--muted);font-size:12px;margin-top:6px">'
-                      'Sin actores vinculados a este tema. '
-                      '<a href="/admin/actores" style="color:var(--accent)">Vincúlalos →</a></p>')
 
-    # ── Paso 7 ──
+
+def _paso7_html(p7: dict) -> str:
     h = p7["h_obj"]
     da = p7["actividad_30d"] - p7["actividad_hoy"]
     dg = p7["gravedad_30d"] - p7["gravedad_hoy"]
@@ -5425,7 +5443,7 @@ def _reporte_a_html(rep: dict) -> str:
             f'{escape(q["nombre"])} ({escape(q["direccion"])}/{escape(q["intensidad"])}/{escape(q["duracion"])})'
             for q in p7["quiebres"])
         q_nota = f'<p style="font-size:11px;color:var(--muted);margin:6px 0 0">Quiebres aplicables: {chips}</p>'
-    paso7_html = f"""
+    return f"""
   <table class="tbl" style="margin-top:6px">
     <thead><tr><th></th><th style="text-align:center">Hoy</th>
       <th style="text-align:center">{h}d</th><th style="text-align:center">Δ</th></tr></thead>
@@ -5442,81 +5460,298 @@ def _reporte_a_html(rep: dict) -> str:
     </tbody>
   </table>{q_nota}"""
 
+
+def _card(titulo: str, badge: str, sub: str, inner: str) -> str:
     return f"""
 <div class="card">
-  <div class="card-title">Paso 2 — Evento / coyuntura {_auto_badge()}
-    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">del semáforo y la Matriz B</span></div>
-  {paso2_html}
-</div>
-<div class="card">
-  <div class="card-title">Paso 3 — Actores e intereses {_auto_badge()}
-    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">del modelo de actores · orden por índice de activación (CVO)</span></div>
-  {paso3_html}
-</div>
-<div class="card">
-  <div class="card-title">Paso 7 — Proyecciones {_auto_badge()}
-    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">de Proyección A/B a {h} días</span></div>
-  {paso7_html}
+  <div class="card-title">{titulo} {badge}
+    <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">{sub}</span></div>
+  {inner}
 </div>"""
 
 
-@router.get("/inteligencia", response_class=HTMLResponse)
-async def admin_inteligencia(request: Request):
-    """Motor de Inteligencia — Etapa 1: Reporte A (pasos automáticos 2,3,7)."""
-    sesion, err = _admin_guard(request)
-    if err:
-        return err
+def _crit_textarea(name: str, valor: str, placeholder: str) -> str:
+    return (f'<textarea name="{name}" form="intel-form" rows="3" placeholder="{escape(placeholder)}" '
+            f'style="width:100%;background:var(--bg-3);color:var(--text);border:1px solid #334155;'
+            f'border-radius:6px;padding:8px 10px;font-size:13px;line-height:1.5;resize:vertical">'
+            f'{escape(valor or "")}</textarea>')
 
-    tema_sel = request.query_params.get("tema", list(_IMPACTO_TEMA.keys())[0])
-    if tema_sel not in _IMPACTO_TEMA:
-        tema_sel = list(_IMPACTO_TEMA.keys())[0]
 
-    db = _get_db_path()
-    rep = _reporte_automatico(db, tema_sel)
+def _reporte_a_html(rep: dict) -> str:
+    """Reporte A (solo pasos automáticos 2,3,7), en cards."""
+    return (
+        _card("Paso 2 — Evento / coyuntura", _auto_badge(), "del semáforo y la Matriz B", _paso2_html(rep["paso2"])) +
+        _card("Paso 3 — Actores e intereses", _auto_badge(), "del modelo de actores · orden por índice de activación (CVO)", _paso3_html(rep["paso3"])) +
+        _card("Paso 7 — Proyecciones", _auto_badge(), f"de Proyección A/B a {rep['paso7']['h_obj']} días", _paso7_html(rep["paso7"]))
+    )
 
+
+def _intel_selector(tema_sel: str, vista: str) -> str:
     opts = "".join(
         f'<option value="{t}"{" selected" if t == tema_sel else ""}>'
         f'{escape(t.replace("_"," ").title())}</option>'
         for t in _IMPACTO_TEMA
     )
-    selector = f"""
-<div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+    def _tab(v, label):
+        activo = (v == vista)
+        bg = "var(--accent)" if activo else "var(--bg-3)"
+        fg = "#000" if activo else "var(--muted)"
+        return (f'<a href="/admin/inteligencia?tema={escape(tema_sel)}&vista={v}" '
+                f'style="background:{bg};color:{fg};border:1px solid #334155;border-radius:6px;'
+                f'padding:6px 16px;font-size:12px;font-weight:600;text-decoration:none">{label}</a>')
+    return f"""
+<div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap">
   <div style="font-size:15px;font-weight:600;color:var(--text)">Análisis del tema:</div>
   <form method="get" action="/admin/inteligencia" style="display:flex;gap:8px;align-items:center">
     <select name="tema" onchange="this.form.submit()"
             style="background:var(--bg-3);color:var(--text);border:1px solid #334155;
                    border-radius:4px;padding:5px 10px;font-size:13px">{opts}</select>
+    <input type="hidden" name="vista" value="{escape(vista)}">
   </form>
+  <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+    <span style="font-size:11px;color:var(--muted)">Profundidad:</span>
+    {_tab('A', 'Reporte A')}{_tab('B', 'Reporte B')}
+  </div>
 </div>"""
+
+
+@router.get("/inteligencia", response_class=HTMLResponse)
+async def admin_inteligencia(request: Request):
+    """Motor de Inteligencia — Reportes A (automático) y B (con criterio)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import obtener_ultima_version, listar_versiones
+
+    tema_sel = request.query_params.get("tema", list(_IMPACTO_TEMA.keys())[0])
+    if tema_sel not in _IMPACTO_TEMA:
+        tema_sel = list(_IMPACTO_TEMA.keys())[0]
+    vista = request.query_params.get("vista", "B")
+    if vista not in ("A", "B"):
+        vista = "B"
+
+    db = _get_db_path()
+    rep = _reporte_automatico(db, tema_sel)
+    msg = request.query_params.get("msg", "")
+    msg_html = (f'<div class="alert-box alert-info" style="margin-bottom:12px">✓ {escape(msg)}</div>'
+                ) if msg else ""
+    selector = _intel_selector(tema_sel, vista)
 
     if rep is None:
         cuerpo = """
 <div class="card card-accent">
   <div class="card-title">🧠 Motor de Inteligencia</div>
-  <p style="color:var(--muted)">Sin snapshot OSINT disponible aún. El Reporte A lee
+  <p style="color:var(--muted)">Sin snapshot OSINT disponible aún. El reporte lee
   los datos del semáforo, actores y proyección; espera el próximo ciclo del motor.</p>
 </div>"""
-    else:
+        return HTMLResponse(_page(f"Inteligencia · {tema_sel.replace('_',' ').title()}",
+                                  selector + cuerpo, "inteligencia", sesion["username"]))
+
+    titulo_tema = escape(tema_sel.replace('_', ' ').title())
+
+    # ── Reporte A: solo automáticos ──
+    if vista == "A":
         cuerpo = f"""
 <div class="card" style="border-left:3px solid #22c55e">
-  <div style="display:flex;align-items:center;gap:10px">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <span style="font-size:11px;font-weight:700;color:#22c55e;background:#22c55e22;
                  padding:3px 8px;border-radius:4px">REPORTE A · FOTO AUTOMÁTICA</span>
     <span style="font-size:12px;color:var(--muted)">
-      {escape(tema_sel.replace('_',' ').title())} · generado {escape(rep['hoy'])} ·
-      solo pasos automáticos (2 · 3 · 7), sin criterio
+      {titulo_tema} · generado {escape(rep['hoy'])} · solo pasos automáticos (2 · 3 · 7)
     </span>
   </div>
 </div>
-{_reporte_a_html(rep)}
-<div class="card" style="background:transparent;border:1px dashed #334155">
-  <p style="font-size:12px;color:var(--muted);margin:0">
-    <b>Reporte B</b> (escenario, organización de actores, filtro ruido/sustancia, impacto —
-    tu criterio) se construye en la próxima etapa. Esta vista es el Reporte A: foto
-    situacional derivada solo de los datos.
-  </p>
+{_reporte_a_html(rep)}"""
+        return HTMLResponse(_page(f"Inteligencia · {titulo_tema}",
+                                  msg_html + selector + cuerpo, "inteligencia", sesion["username"]))
+
+    # ── Reporte B: criterio (editable) + automáticos, intercalados 1-7 ──
+    ultima = obtener_ultima_version(db, tema_sel) or {}
+    versiones = listar_versiones(db, tema_sel)
+    prop = rep.get("propuesta_paso5", {})
+
+    # Prefill del paso 5: criterio guardado, o la propuesta automática si está vacío
+    p5_sust = ultima.get("paso5_sustancia") or prop.get("sustancia", "")
+    p5_ruido = ultima.get("paso5_ruido") or prop.get("ruido", "")
+
+    paso1 = _card("Paso 1 — Escenario estructural", _crit_badge(), "tu lectura de fondo",
+                  _crit_textarea("paso1_escenario", ultima.get("paso1_escenario"),
+                                 "Marco estructural del tema: tendencias de fondo, condiciones permanentes…"))
+    paso2 = _card("Paso 2 — Evento / coyuntura", _auto_badge(), "del semáforo y la Matriz B", _paso2_html(rep["paso2"]))
+    paso3 = _card("Paso 3 — Actores e intereses", _auto_badge(), "del modelo de actores · orden por índice CVO", _paso3_html(rep["paso3"]))
+    paso4 = _card("Paso 4 — Organización de actores", _crit_badge(), "cómo se alinean / enfrentan",
+                  _crit_textarea("paso4_organizacion", ultima.get("paso4_organizacion"),
+                                 "Coaliciones, alineamientos, rivalidades entre los actores del paso 3…"))
+    paso5 = _card("Paso 5 — Filtro ruido / sustancia", _crit_badge() +
+                  ' <span style="font-size:10px;color:#f59e0b;background:#f59e0b22;padding:2px 7px;border-radius:4px">HÍBRIDO</span>',
+                  "la plataforma propone · tú editas · el ruido se conserva",
+                  f"""
+  <div style="background:var(--bg-3);border-radius:6px;padding:8px 10px;margin:0 0 10px;font-size:11px;color:var(--muted)">
+    <b>Propuesta automática</b> (de los cuadrantes de la Matriz B):<br>
+    · sustancia (grave estructural): {escape(prop.get('sustancia',''))}<br>
+    · ruido (activo, no grave): {escape(prop.get('ruido',''))}
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div>
+      <div style="font-size:11px;font-weight:600;color:#22c55e;margin-bottom:4px">SUSTANCIA (lo que importa)</div>
+      {_crit_textarea("paso5_sustancia", p5_sust, "Lo grave estructural que merece atención…")}
+    </div>
+    <div>
+      <div style="font-size:11px;font-weight:600;color:#f59e0b;margin-bottom:4px">RUIDO (separado, NO borrado)</div>
+      {_crit_textarea("paso5_ruido", p5_ruido, "Lo activo en cobertura pero sin gravedad de fondo — se conserva visible…")}
+    </div>
+  </div>""")
+    paso6 = _card("Paso 6 — Impacto", _crit_badge(), "consecuencias para el decisor",
+                  _crit_textarea("paso6_impacto", ultima.get("paso6_impacto"),
+                                 "Qué implica todo lo anterior: riesgos, oportunidades, recomendaciones…"))
+    paso7 = _card("Paso 7 — Proyecciones", _auto_badge(), f"de Proyección A/B a {rep['paso7']['h_obj']} días", _paso7_html(rep["paso7"]))
+
+    # Historial de versiones
+    if versiones:
+        filas_v = "".join(
+            f'<tr><td style="font-size:12px"><a href="/admin/inteligencia/version/{v["id"]}" '
+            f'style="color:var(--accent)">v{v["version"]}</a></td>'
+            f'<td style="font-size:11px;color:var(--muted)">{escape((v.get("fecha") or "")[:19].replace("T"," "))}</td>'
+            f'<td style="font-size:11px;color:var(--accent)">{escape(v.get("usuario") or "—")}</td></tr>'
+            for v in versiones)
+        hist = f"""
+  <table class="tbl"><thead><tr><th>Versión</th><th>Fecha</th><th>Por</th></tr></thead>
+    <tbody>{filas_v}</tbody></table>"""
+        ult_nota = (f'Última versión guardada: <b>v{ultima.get("version","?")}</b> '
+                    f'({escape((ultima.get("fecha") or "")[:19].replace("T"," "))})')
+    else:
+        hist = '<p style="font-size:12px;color:var(--muted)">Aún no hay versiones guardadas para este tema.</p>'
+        ult_nota = "Sin versiones guardadas todavía — tu criterio parte de la propuesta automática."
+
+    cuerpo = f"""
+<div class="card" style="border-left:3px solid #a78bfa">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-size:11px;font-weight:700;color:#a78bfa;background:#a78bfa22;
+                 padding:3px 8px;border-radius:4px">REPORTE B · COMPLETO</span>
+    <span style="font-size:12px;color:var(--muted)">
+      {titulo_tema} · automáticos generados {escape(rep['hoy'])} · {ult_nota}
+    </span>
+  </div>
+</div>
+<form id="intel-form" method="post" action="/admin/inteligencia/guardar">
+  <input type="hidden" name="tema" value="{escape(tema_sel)}">
+</form>
+{paso1}{paso2}{paso3}{paso4}{paso5}{paso6}{paso7}
+<div class="card">
+  <div style="display:flex;gap:12px;align-items:center">
+    <button type="submit" form="intel-form"
+            style="background:var(--accent);color:#000;border:none;border-radius:6px;
+                   padding:9px 24px;font-size:14px;font-weight:700;cursor:pointer">
+      Guardar versión nueva
+    </button>
+    <span style="font-size:12px;color:var(--muted)">
+      Cada guardado crea una versión fechada y congela la foto automática de este momento.
+    </span>
+  </div>
+</div>
+<div class="card">
+  <div class="card-title">Historial de versiones — {titulo_tema}</div>
+  {hist}
 </div>"""
 
-    return HTMLResponse(_page(
-        f"Inteligencia · {tema_sel.replace('_',' ').title()}",
-        selector + cuerpo, "inteligencia", sesion["username"]))
+    return HTMLResponse(_page(f"Inteligencia · {titulo_tema}",
+                              msg_html + selector + cuerpo, "inteligencia", sesion["username"]))
+
+
+@router.post("/inteligencia/guardar")
+async def admin_inteligencia_guardar(request: Request):
+    """Guarda una versión nueva del criterio + congela la foto automática."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import guardar_analisis, LockTimeoutError
+    form = await request.form()
+    tema = (form.get("tema") or "").strip()
+    if tema not in _IMPACTO_TEMA:
+        return RedirectResponse("/admin/inteligencia?err=Tema+inválido", status_code=303)
+    db = _get_db_path()
+    criterio = {
+        "paso1_escenario": (form.get("paso1_escenario") or "").strip() or None,
+        "paso4_organizacion": (form.get("paso4_organizacion") or "").strip() or None,
+        "paso5_sustancia": (form.get("paso5_sustancia") or "").strip() or None,
+        "paso5_ruido": (form.get("paso5_ruido") or "").strip() or None,
+        "paso6_impacto": (form.get("paso6_impacto") or "").strip() or None,
+    }
+    # Congela la foto automática (pasos 2,3,7) de este momento
+    rep = _reporte_automatico(db, tema)
+    snapshot = json.dumps(rep, ensure_ascii=False) if rep else None
+    try:
+        r = guardar_analisis(db, tema, criterio, snapshot, sesion["username"])
+        return RedirectResponse(
+            f"/admin/inteligencia?tema={tema}&vista=B&msg=Versión+v{r['version']}+guardada",
+            status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse(
+            f"/admin/inteligencia?tema={tema}&vista=B&err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(
+            f"/admin/inteligencia?tema={tema}&vista=B&err={escape(str(e))}", status_code=303)
+
+
+@router.get("/inteligencia/version/{version_id:int}", response_class=HTMLResponse)
+async def admin_inteligencia_version(request: Request, version_id: int):
+    """Vista solo-lectura de una versión histórica: snapshot_auto + criterio de entonces."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import obtener_version
+    db = _get_db_path()
+    v = obtener_version(db, version_id)
+    if not v:
+        return RedirectResponse("/admin/inteligencia?err=Versión+no+encontrada", status_code=303)
+    tema = v["tema"]
+    titulo_tema = escape(tema.replace("_", " ").title())
+
+    # Pasos automáticos: del snapshot CONGELADO (datos de entonces), no en vivo
+    try:
+        rep = json.loads(v["snapshot_auto"]) if v.get("snapshot_auto") else None
+    except Exception:
+        rep = None
+
+    def _crit_ro(titulo, valor):
+        txt = escape(valor) if valor else '<span style="color:var(--muted)">(vacío)</span>'
+        return _card(titulo, _crit_badge(), "",
+                     f'<div style="white-space:pre-wrap;font-size:13px;line-height:1.5;color:var(--text)">{txt}</div>')
+
+    if rep:
+        p2 = _card("Paso 2 — Evento / coyuntura", _auto_badge(), "foto congelada", _paso2_html(rep.get("paso2")))
+        p3 = _card("Paso 3 — Actores e intereses", _auto_badge(), "foto congelada", _paso3_html(rep.get("paso3") or []))
+        p7 = _card("Paso 7 — Proyecciones", _auto_badge(), "foto congelada", _paso7_html(rep["paso7"]))
+    else:
+        nota = '<p style="color:var(--muted);font-size:12px">Sin foto automática congelada en esta versión.</p>'
+        p2 = p3 = p7 = ""
+    p5 = _card("Paso 5 — Filtro ruido / sustancia", _crit_badge(), "",
+               f"""
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div><div style="font-size:11px;font-weight:600;color:#22c55e;margin-bottom:4px">SUSTANCIA</div>
+      <div style="white-space:pre-wrap;font-size:13px;color:var(--text)">{escape(v.get('paso5_sustancia') or '(vacío)')}</div></div>
+    <div><div style="font-size:11px;font-weight:600;color:#f59e0b;margin-bottom:4px">RUIDO (conservado)</div>
+      <div style="white-space:pre-wrap;font-size:13px;color:var(--text)">{escape(v.get('paso5_ruido') or '(vacío)')}</div></div>
+  </div>""")
+
+    cuerpo = f"""
+<div class="card" style="border-left:3px solid #64748b">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-size:11px;font-weight:700;color:#94a3b8;background:#94a3b822;
+                 padding:3px 8px;border-radius:4px">VERSIÓN HISTÓRICA · SOLO LECTURA</span>
+    <span style="font-size:12px;color:var(--muted)">
+      {titulo_tema} · v{v.get('version','?')} · {escape((v.get('fecha') or '')[:19].replace('T',' '))} ·
+      por {escape(v.get('usuario') or '—')}
+    </span>
+    <a href="/admin/inteligencia?tema={escape(tema)}&vista=B" style="margin-left:auto;color:var(--accent);font-size:12px">← Versión actual</a>
+  </div>
+</div>
+{_crit_ro("Paso 1 — Escenario estructural", v.get("paso1_escenario"))}
+{p2}{p3}
+{_crit_ro("Paso 4 — Organización de actores", v.get("paso4_organizacion"))}
+{p5}
+{_crit_ro("Paso 6 — Impacto", v.get("paso6_impacto"))}
+{p7}"""
+
+    return HTMLResponse(_page(f"Inteligencia · {titulo_tema} · v{v.get('version','?')}",
+                              cuerpo, "inteligencia", sesion["username"]))
