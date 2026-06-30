@@ -451,7 +451,9 @@ async def admin_resumen(request: Request):
     last_error   = _scheduler_state.get("last_error")
 
     # Score y artículos
-    score   = snap.get("riesgo", {}).get("score", 0) if snap else 0
+    # El score nacional vive bajo la clave "global" (igual que el dashboard
+    # público). Antes leía "score" (inexistente) → 0.0 fijo desde el día uno.
+    score   = snap.get("riesgo", {}).get("global", 0) if snap else 0
     nivel   = snap.get("riesgo", {}).get("nivel", "—") if snap else "—"
     n_arts  = snap.get("riesgo", {}).get("n_articulos", 0) if snap else 0
     n_24h   = snap.get("riesgo", {}).get("n_articulos_24h", 0) if snap else 0
