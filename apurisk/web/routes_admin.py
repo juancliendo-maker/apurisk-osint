@@ -5814,3 +5814,56 @@ async def admin_inteligencia_version(request: Request, version_id: int):
 
     return HTMLResponse(_page(f"Inteligencia · {titulo_tema} · v{v.get('version','?')}",
                               cuerpo, "inteligencia", sesion["username"]))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# THALOS · Plantilla Base — página demo de componentes (Etapa 3, Fase 1)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/demo-plantilla", response_class=HTMLResponse)
+async def admin_demo_plantilla(request: Request):
+    """Demo de la Plantilla Base THALOS: previsualiza el PDF de componentes."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    contenido = """
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+  <div style="font-size:13px;color:var(--muted)">
+    Plantilla Base THALOS · componentes visuales reutilizables para los Reportes A/B (Fase 1)
+  </div>
+  <a href="/admin/demo-plantilla.pdf" download
+     style="background:var(--accent);color:#000;border-radius:6px;padding:8px 20px;
+            font-size:13px;font-weight:700;text-decoration:none">⬇ Descargar PDF</a>
+</div>
+<div class="card">
+  <div class="card-title">THALOS · Demo de componentes</div>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 12px">
+    Portada · recuadro ejecutivo · tabla profesional · matriz P×I · matriz de urgencia ·
+    gráfico de tendencia · mapa geográfico · iconografía numérica · chips · header/footer.
+    Paleta navy #0F3A66 + oro #D4AF37, sin rayado zebra. Vista previa embebida:
+  </p>
+  <div style="width:100%;height:80vh;border:1px solid #334155;border-radius:6px;overflow:hidden">
+    <iframe src="/admin/demo-plantilla.pdf" style="width:100%;height:100%;border:0"
+            title="THALOS Demo"></iframe>
+  </div>
+</div>"""
+    return HTMLResponse(_page("Plantilla THALOS", contenido, "inteligencia", sesion["username"]))
+
+
+@router.get("/demo-plantilla.pdf")
+async def admin_demo_plantilla_pdf(request: Request):
+    """Genera y devuelve el PDF demo de la Plantilla Base THALOS."""
+    from fastapi.responses import Response
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..reports.thalos_base import construir_demo_pdf
+    from datetime import date
+    try:
+        pdf = construir_demo_pdf(fecha=date.today().isoformat())
+    except Exception as e:
+        return HTMLResponse(_page("Plantilla THALOS",
+            f'<div class="alert-box alert-alto">Error generando PDF: {escape(str(e))}</div>',
+            "inteligencia", sesion["username"]))
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": 'inline; filename="THALOS_Demo_Componentes.pdf"'})
