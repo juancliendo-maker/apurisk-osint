@@ -5315,11 +5315,17 @@ def _reporte_automatico(db: str, tema: str) -> dict | None:
     """
     from ..storage.config_loader import (
         listar_actores_por_activacion, calcular_proyecciones,
+        cargar_factores_pxi_por_tema,
     )
     osint = _cargar_osint_snapshot()
     if not osint:
         return None
     md = _construir_datos_semaforo(osint, db)
+
+    # ── Paso 2 (NUEVO) — Factores de riesgo (Matriz P×I) ──
+    # Lectura pura de la tabla `factores` del último snapshot, filtrada por
+    # categoría que mapea al tema. Sin recálculo.
+    pxi = cargar_factores_pxi_por_tema(db, tema)
 
     # ── Paso 2 — Evento / coyuntura ──
     globo = next((g for g in md.get("globos_b", []) if g["tema"] == tema), None)
@@ -5381,7 +5387,7 @@ def _reporte_automatico(db: str, tema: str) -> dict | None:
         "quiebres": quiebres_tema,
     }
 
-    return {"tema": tema, "paso2": paso2, "paso3": paso3, "paso7": paso7,
+    return {"tema": tema, "pxi": pxi, "paso2": paso2, "paso3": paso3, "paso7": paso7,
             "propuesta_paso5": propuesta_paso5, "hoy": proy.get("hoy", "")}
 
 
@@ -5417,6 +5423,42 @@ def _paso2_html(p2: dict) -> str:
     Cuadrante: <b style="color:var(--text)">{escape(p2['cuadrante'])}</b> ·
     índice de urgencia {p2['indice_urgencia']:.2f}{det}
   </p>"""
+
+
+def _pxi_html(pxi: list) -> str:
+    """Tabla compacta de factores P×I (probabilidad × impacto) del tema."""
+    if not pxi:
+        return ('<p style="color:var(--muted);font-size:12px">'
+                'Sin factores P×I definidos para este tema.</p>')
+    def _nivcol(niv):
+        n = (niv or "").upper()
+        return ("#ef4444" if n in ("CRÍTICO", "CRITICO", "ALTO") else
+                "#f59e0b" if n in ("MEDIO",) else "#94a3b8")
+    def _tend(t):
+        t = (t or "").lower()
+        return ("↑" if "sub" in t or "alza" in t or "crec" in t else
+                "↓" if "baj" in t or "desc" in t else "→")
+    filas = ""
+    for f in pxi:
+        niv = f.get("nivel") or "—"
+        col = _nivcol(niv)
+        filas += f"""<tr>
+  <td style="font-size:12px;color:var(--text)">{escape(f.get('nombre') or f.get('factor_id') or '—')}
+    <span style="font-size:10px;color:var(--muted)">· {escape(f.get('categoria') or '')}</span></td>
+  <td style="text-align:center;color:var(--muted)">{f.get('probabilidad') if f.get('probabilidad') is not None else '—'}</td>
+  <td style="text-align:center;color:var(--muted)">{f.get('impacto') if f.get('impacto') is not None else '—'}</td>
+  <td style="text-align:center;font-weight:700;color:{col}">{f.get('score') if f.get('score') is not None else '—'}</td>
+  <td style="text-align:center"><span style="color:{col};font-weight:600;font-size:11px">{escape(niv)}</span></td>
+  <td style="text-align:center;color:var(--muted)">{_tend(f.get('tendencia'))}</td>
+</tr>\n"""
+    return f"""
+  <table class="tbl" style="margin-top:6px">
+    <thead><tr><th>Factor</th>
+      <th style="text-align:center">Prob.</th><th style="text-align:center">Impacto</th>
+      <th style="text-align:center">Score</th><th style="text-align:center">Nivel</th>
+      <th style="text-align:center">Tend.</th></tr></thead>
+    <tbody>{filas}</tbody>
+  </table>"""
 
 
 def _paso3_html(p3: list) -> str:
@@ -5493,11 +5535,12 @@ def _crit_textarea(name: str, valor: str, placeholder: str) -> str:
 
 
 def _reporte_a_html(rep: dict) -> str:
-    """Reporte A (solo pasos automáticos 2,3,7), en cards."""
+    """Reporte A (solo pasos automáticos 2,3,4,8), en cards."""
     return (
-        _card("Paso 2 — Evento / coyuntura", _auto_badge(), "del semáforo y la Matriz B", _paso2_html(rep["paso2"])) +
-        _card("Paso 3 — Actores e intereses", _auto_badge(), "del modelo de actores · orden por índice de activación (CVO)", _paso3_html(rep["paso3"])) +
-        _card("Paso 7 — Proyecciones", _auto_badge(), f"de Proyección A/B a {rep['paso7']['h_obj']} días", _paso7_html(rep["paso7"]))
+        _card("Paso 2 — Factores de riesgo (Matriz P×I)", _auto_badge(), "de la tabla de factores · probabilidad × impacto", _pxi_html(rep.get("pxi", []))) +
+        _card("Paso 3 — Evento / coyuntura", _auto_badge(), "del semáforo y la Matriz B", _paso2_html(rep["paso2"])) +
+        _card("Paso 4 — Actores e intereses", _auto_badge(), "del modelo de actores · orden por índice de activación (CVO)", _paso3_html(rep["paso3"])) +
+        _card("Paso 8 — Proyecciones", _auto_badge(), f"de Proyección A/B a {rep['paso7']['h_obj']} días", _paso7_html(rep["paso7"]))
     )
 
 
@@ -5572,7 +5615,7 @@ async def admin_inteligencia(request: Request):
     <span style="font-size:11px;font-weight:700;color:#22c55e;background:#22c55e22;
                  padding:3px 8px;border-radius:4px">REPORTE A · FOTO AUTOMÁTICA</span>
     <span style="font-size:12px;color:var(--muted)">
-      {titulo_tema} · generado {escape(rep['hoy'])} · solo pasos automáticos (2 · 3 · 7)
+      {titulo_tema} · generado {escape(rep['hoy'])} · solo pasos automáticos (2 · 3 · 4 · 8)
     </span>
   </div>
 </div>
@@ -5592,12 +5635,13 @@ async def admin_inteligencia(request: Request):
     paso1 = _card("Paso 1 — Escenario estructural", _crit_badge(), "tu lectura de fondo",
                   _crit_textarea("paso1_escenario", ultima.get("paso1_escenario"),
                                  "Marco estructural del tema: tendencias de fondo, condiciones permanentes…"))
-    paso2 = _card("Paso 2 — Evento / coyuntura", _auto_badge(), "del semáforo y la Matriz B", _paso2_html(rep["paso2"]))
-    paso3 = _card("Paso 3 — Actores e intereses", _auto_badge(), "del modelo de actores · orden por índice CVO", _paso3_html(rep["paso3"]))
-    paso4 = _card("Paso 4 — Organización de actores", _crit_badge(), "cómo se alinean / enfrentan",
+    pasopxi = _card("Paso 2 — Factores de riesgo (Matriz P×I)", _auto_badge(), "de la tabla de factores · probabilidad × impacto", _pxi_html(rep.get("pxi", [])))
+    paso2 = _card("Paso 3 — Evento / coyuntura", _auto_badge(), "del semáforo y la Matriz B", _paso2_html(rep["paso2"]))
+    paso3 = _card("Paso 4 — Actores e intereses", _auto_badge(), "del modelo de actores · orden por índice CVO", _paso3_html(rep["paso3"]))
+    paso4 = _card("Paso 5 — Organización de actores", _crit_badge(), "cómo se alinean / enfrentan",
                   _crit_textarea("paso4_organizacion", ultima.get("paso4_organizacion"),
-                                 "Coaliciones, alineamientos, rivalidades entre los actores del paso 3…"))
-    paso5 = _card("Paso 5 — Filtro ruido / sustancia", _crit_badge() +
+                                 "Coaliciones, alineamientos, rivalidades entre los actores del paso 4…"))
+    paso5 = _card("Paso 6 — Filtro ruido / sustancia", _crit_badge() +
                   ' <span style="font-size:10px;color:#f59e0b;background:#f59e0b22;padding:2px 7px;border-radius:4px">HÍBRIDO</span>',
                   "la plataforma propone · tú editas · el ruido se conserva",
                   f"""
@@ -5616,10 +5660,10 @@ async def admin_inteligencia(request: Request):
       {_crit_textarea("paso5_ruido", p5_ruido, "Lo activo en cobertura pero sin gravedad de fondo — se conserva visible…")}
     </div>
   </div>""")
-    paso6 = _card("Paso 6 — Impacto", _crit_badge(), "consecuencias para el decisor",
+    paso6 = _card("Paso 7 — Impacto", _crit_badge(), "consecuencias para el decisor",
                   _crit_textarea("paso6_impacto", ultima.get("paso6_impacto"),
                                  "Qué implica todo lo anterior: riesgos, oportunidades, recomendaciones…"))
-    paso7 = _card("Paso 7 — Proyecciones", _auto_badge(), f"de Proyección A/B a {rep['paso7']['h_obj']} días", _paso7_html(rep["paso7"]))
+    paso7 = _card("Paso 8 — Proyecciones", _auto_badge(), f"de Proyección A/B a {rep['paso7']['h_obj']} días", _paso7_html(rep["paso7"]))
 
     # Historial de versiones
     if versiones:
@@ -5651,7 +5695,7 @@ async def admin_inteligencia(request: Request):
 <form id="intel-form" method="post" action="/admin/inteligencia/guardar">
   <input type="hidden" name="tema" value="{escape(tema_sel)}">
 </form>
-{paso1}{paso2}{paso3}{paso4}{paso5}{paso6}{paso7}
+{paso1}{pasopxi}{paso2}{paso3}{paso4}{paso5}{paso6}{paso7}
 <div class="card">
   <div style="display:flex;gap:12px;align-items:center">
     <button type="submit" form="intel-form"
@@ -5734,13 +5778,13 @@ async def admin_inteligencia_version(request: Request, version_id: int):
                      f'<div style="white-space:pre-wrap;font-size:13px;line-height:1.5;color:var(--text)">{txt}</div>')
 
     if rep:
-        p2 = _card("Paso 2 — Evento / coyuntura", _auto_badge(), "foto congelada", _paso2_html(rep.get("paso2")))
-        p3 = _card("Paso 3 — Actores e intereses", _auto_badge(), "foto congelada", _paso3_html(rep.get("paso3") or []))
-        p7 = _card("Paso 7 — Proyecciones", _auto_badge(), "foto congelada", _paso7_html(rep["paso7"]))
+        ppxi = _card("Paso 2 — Factores de riesgo (Matriz P×I)", _auto_badge(), "foto congelada", _pxi_html(rep.get("pxi", [])))
+        p2 = _card("Paso 3 — Evento / coyuntura", _auto_badge(), "foto congelada", _paso2_html(rep.get("paso2")))
+        p3 = _card("Paso 4 — Actores e intereses", _auto_badge(), "foto congelada", _paso3_html(rep.get("paso3") or []))
+        p7 = _card("Paso 8 — Proyecciones", _auto_badge(), "foto congelada", _paso7_html(rep["paso7"]))
     else:
-        nota = '<p style="color:var(--muted);font-size:12px">Sin foto automática congelada en esta versión.</p>'
-        p2 = p3 = p7 = ""
-    p5 = _card("Paso 5 — Filtro ruido / sustancia", _crit_badge(), "",
+        ppxi = p2 = p3 = p7 = ""
+    p5 = _card("Paso 6 — Filtro ruido / sustancia", _crit_badge(), "",
                f"""
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
     <div><div style="font-size:11px;font-weight:600;color:#22c55e;margin-bottom:4px">SUSTANCIA</div>
@@ -5762,10 +5806,10 @@ async def admin_inteligencia_version(request: Request, version_id: int):
   </div>
 </div>
 {_crit_ro("Paso 1 — Escenario estructural", v.get("paso1_escenario"))}
-{p2}{p3}
-{_crit_ro("Paso 4 — Organización de actores", v.get("paso4_organizacion"))}
+{ppxi}{p2}{p3}
+{_crit_ro("Paso 5 — Organización de actores", v.get("paso4_organizacion"))}
 {p5}
-{_crit_ro("Paso 6 — Impacto", v.get("paso6_impacto"))}
+{_crit_ro("Paso 7 — Impacto", v.get("paso6_impacto"))}
 {p7}"""
 
     return HTMLResponse(_page(f"Inteligencia · {titulo_tema} · v{v.get('version','?')}",
