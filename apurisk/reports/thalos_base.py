@@ -101,7 +101,7 @@ def estilos() -> dict:
     return {
         "h1": ParagraphStyle("h1", fontName=FONT_TITLE, fontSize=26, leading=30,
                              textColor=NAVY, alignment=TA_LEFT, spaceAfter=8),
-        "h2": ParagraphStyle("h2", fontName=FONT_TITLE, fontSize=17, leading=21,
+        "h2": ParagraphStyle("h2", fontName=FONT_TITLE, fontSize=19, leading=23,
                              textColor=NAVY, alignment=TA_LEFT, spaceAfter=6),
         "body": ParagraphStyle("body", fontName=FONT_BODY, fontSize=11, leading=16.5,
                                textColor=GRIS_CUERPO, alignment=TA_JUSTIFY, spaceAfter=6),
@@ -165,7 +165,7 @@ def header_footer(canvas, doc):
     canvas.setFillColor(BLANCO)
     canvas.setFont(FONT_BODY, 9)
     canvas.drawRightString(PAGE_W - MARGEN_LAT, PAGE_H - band_h + 0.20 * inch,
-                           "APURISK OSINT · Inteligencia Estratégica")
+                           doc._header_meta)
     # línea divisora oro bajo el header
     canvas.setStrokeColor(ORO)
     canvas.setLineWidth(1)
@@ -244,10 +244,10 @@ def dibujar_portada(canvas, doc):
 # COMPONENTES A-H
 # ══════════════════════════════════════════════════════════════════════════════
 
-def linea_oro(thickness: float = 1) -> HRFlowable:
-    """H. Línea divisora en oro."""
+def linea_oro(thickness: float = 1.3) -> HRFlowable:
+    """H. Línea divisora en oro — visible y elegante."""
     return HRFlowable(width="100%", color=ORO, thickness=thickness,
-                      spaceBefore=8, spaceAfter=8)
+                      spaceBefore=10, spaceAfter=12)
 
 
 def recuadro_ejecutivo(titulo: str, texto: str, st: dict) -> Table:
@@ -260,10 +260,11 @@ def recuadro_ejecutivo(titulo: str, texto: str, st: dict) -> Table:
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), NAVY),
         ("BOX", (0, 0), (-1, -1), 1.5, ORO),
-        ("LEFTPADDING", (0, 0), (-1, -1), 14),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
-        ("TOPPADDING", (0, 0), (-1, -1), 12),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ("ROUNDEDCORNERS", [5, 5, 5, 5]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 15),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 15),
+        ("TOPPADDING", (0, 0), (-1, -1), 14),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
     ]))
     return t
 
@@ -279,15 +280,16 @@ def tabla_profesional(headers: list, filas: list, col_widths: list) -> Table:
     estilo = [
         ("BACKGROUND", (0, 0), (-1, 0), GRIS_CLARO),
         ("BOX", (0, 0), (-1, -1), 1, ORO),
+        ("ROUNDEDCORNERS", [4, 4, 4, 4]),
         ("LINEBELOW", (0, 0), (-1, 0), 1, ORO),
         # filas blancas, línea inferior oro muy claro (sin zebra)
-        ("LINEBELOW", (0, 1), (-1, -1), 0.4, colors.HexColor("#EFE3B8")),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.5, colors.HexColor("#EADFB0")),
         ("BACKGROUND", (0, 1), (-1, -1), BLANCO),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 11),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 11),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
     ]
     t.setStyle(TableStyle(estilo))
     return t
@@ -401,18 +403,19 @@ def grafico_tendencia() -> Drawing:
     lc.valueAxis.valueStep = 20
     lc.valueAxis.labels.fontName = FONT_BODY
     lc.valueAxis.labels.fontSize = 8
-    lc.valueAxis.gridStrokeColor = colors.HexColor("#EEEEEE")   # grid gris muy claro
+    lc.valueAxis.gridStrokeColor = GRIS_CLARO   # grid gris claro #E8E8E8, sutil
+    lc.valueAxis.gridStrokeWidth = 0.5
     lc.valueAxis.visibleGrid = 1
-    serie_cols = [ROJO_CRIT, AZUL_TERRITORIO, VERDE_INFO]
+    serie_cols = [ROJO_CRIT, AMBAR_ALTO, AZUL_TERRITORIO]
     for i, col in enumerate(serie_cols):
         lc.lines[i].strokeColor = col
-        lc.lines[i].strokeWidth = 2
+        lc.lines[i].strokeWidth = 2.5
     d.add(lc)
     # leyenda
     nombres = ["Riesgo institucional", "Cobertura mediática", "Actividad social"]
     x = 40
     for nom, col in zip(nombres, serie_cols):
-        d.add(Line(x, 6, x + 16, 6, strokeColor=col, strokeWidth=2))
+        d.add(Line(x, 6, x + 16, 6, strokeColor=col, strokeWidth=2.5))
         d.add(String(x + 20, 3, nom, fontName=FONT_BODY, fontSize=8, fillColor=GRIS_CUERPO))
         x += 165
     return d
@@ -495,15 +498,32 @@ def iconografia_numerica(items: list) -> Drawing:
 
 
 def chips_color(items: list) -> Drawing:
-    """G/chips. Rectángulos redondeados coloreados por función/riesgo."""
-    d = Drawing(PAGE_W - 2 * MARGEN_LAT, 34)
-    x = 0
-    for texto, col, txtcol in items:
-        w = max(64, 14 + len(texto) * 6.8)
-        d.add(Rect(x, 6, w, 22, rx=6, ry=6, fillColor=col, strokeColor=ORO, strokeWidth=0.5))
-        d.add(String(x + w / 2, 13, texto, fontName=FONT_TITLE, fontSize=9,
-                     fillColor=txtcol, textAnchor="middle"))
-        x += w + 10
+    """G/chips. Rectángulos redondeados coloreados; envuelve a varias filas."""
+    maxw = PAGE_W - 2 * MARGEN_LAT
+    gap, chip_h, row_gap = 10, 22, 12
+    # precalcular anchos y distribuir en filas que quepan
+    anchos = [max(64, 14 + len(t) * 6.8) for t, _, _ in items]
+    filas, fila, ancho_fila = [], [], 0.0
+    for it, w in zip(items, anchos):
+        if fila and ancho_fila + w > maxw:
+            filas.append(fila)
+            fila, ancho_fila = [], 0.0
+        fila.append((it, w))
+        ancho_fila += w + gap
+    if fila:
+        filas.append(fila)
+    alto = len(filas) * (chip_h + row_gap)
+    d = Drawing(maxw, alto)
+    y = alto - chip_h
+    for fila in filas:
+        x = 0
+        for (texto, col, txtcol), w in fila:
+            d.add(Rect(x, y, w, chip_h, rx=6, ry=6, fillColor=col,
+                       strokeColor=ORO, strokeWidth=0.5))
+            d.add(String(x + w / 2, y + 7, texto, fontName=FONT_TITLE, fontSize=9,
+                         fillColor=txtcol, textAnchor="middle"))
+            x += w + gap
+        y -= (chip_h + row_gap)
     return d
 
 
@@ -512,10 +532,10 @@ def chips_color(items: list) -> Drawing:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _seccion(st, num, titulo):
-    return [KeepTogether([
-        Spacer(1, 6),
+    # Spacer generoso antes de cada sección → aire entre componentes (~0.28")
+    return [Spacer(1, 20), KeepTogether([
         Paragraph(f"{num}. {titulo}", st["h2"]),
-        linea_oro(1),
+        linea_oro(),
     ])]
 
 
@@ -530,6 +550,7 @@ def construir_demo_pdf(fecha: str = "2026-07-01") -> bytes:
         title="THALOS · Demo de Componentes",
     )
     doc._fecha_footer = fecha
+    doc._header_meta = "TIE-001/2026 | JULIO 2026 | LIMA · PERÚ"
     doc._portada = {
         "titulo": "Plantilla Base THALOS",
         "subtitulo": "Componentes visuales para reportes de inteligencia",
