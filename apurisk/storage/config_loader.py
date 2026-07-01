@@ -2308,3 +2308,54 @@ def guardar_analisis(db_path: str, tema: str, criterio: dict,
         )
         return {"ok": True, "id": aid, "version": nueva}
     return _ejecutar_con_reintentos(db_path, _op)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MOTOR DE INTELIGENCIA — lectura de la Matriz P×I por tema (read-only)
+#   Lee la tabla `factores` del último snapshot y filtra por categoría que
+#   mapea al tema. Lectura pura de lo que el pipeline ya computó — sin recálculo.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# tema → subcadenas de categoría a buscar (case-insensitive). Las categorías
+# compuestas ("Militar / Seguridad", "Social / Seguridad") mapean por substring,
+# así un factor relevante a más de un tema aparece en ambos.
+_TEMA_CATEGORIA_PXI = {
+    "estabilidad_gobierno": ["estabilidad gubernamental"],
+    "conflictos_sociales":  ["conflictos sociales", "social"],
+    "riesgo_regulatorio":   ["riesgo regulatorio"],
+    "corrupcion":           ["corrupción", "corrupcion"],
+    "seguridad":            ["seguridad", "militar"],
+    "economico_inversion":  ["económico", "economico"],
+    "electoral":            ["electoral"],      # normalmente sin categoría propia
+    "polarizacion":         ["polarización", "polarizacion"],  # sin factores
+}
+
+
+def cargar_factores_pxi_por_tema(db_path: str, tema: str) -> list:
+    """Factores P×I del último snapshot que mapean al tema.
+
+    Retorna [{factor_id, nombre, categoria, probabilidad, impacto, score,
+              nivel, tendencia}] ordenados por score desc. Lista vacía si el
+    tema no mapea a ninguna categoría o no hay factores.
+    """
+    subs = _TEMA_CATEGORIA_PXI.get(tema, [])
+    if not subs:
+        return []
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT f.factor_id, f.nombre, f.categoria, f.probabilidad, "
+                "f.impacto, f.score, f.nivel, f.tendencia "
+                "FROM factores f JOIN snapshots s ON f.snapshot_id = s.id "
+                "WHERE s.id = (SELECT MAX(id) FROM snapshots) "
+                "ORDER BY f.score DESC",
+            ).fetchall()
+    except Exception as e:
+        print(f"[config_loader] cargar_factores_pxi_por_tema falló: {e}")
+        return []
+    out = []
+    for r in rows:
+        cat = (r["categoria"] or "").lower()
+        if any(sub in cat for sub in subs):
+            out.append(dict(r))
+    return out
