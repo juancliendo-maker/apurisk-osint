@@ -455,21 +455,34 @@ async def admin_resumen(request: Request):
     # público). Antes leía "score" (inexistente) → 0.0 fijo desde el día uno.
     score   = snap.get("riesgo", {}).get("global", 0) if snap else 0
     nivel   = snap.get("riesgo", {}).get("nivel", "—") if snap else "—"
-    n_arts  = snap.get("riesgo", {}).get("n_articulos", 0) if snap else 0
-    n_24h   = snap.get("riesgo", {}).get("n_articulos_24h", 0) if snap else 0
+    # Artículos: dato REAL de la BD (no del snapshot del ciclo, que puede ser 0
+    # en un ciclo puntual y dar un falso "0"). 24h = capturados en la ventana;
+    # total = todos los artículos persistidos.
+    n_arts = 0
+    n_24h = 0
 
-    # Alertas recientes (últimas 24h) desde BD
+    # Alertas recientes (últimas 24h) desde BD — se cuentan DISTINTAS por título:
+    # cada ciclo re-inserta las mismas alertas con snapshot_id nuevo (necesario
+    # para alertas_persistentes), así que COUNT(*) inflaría el KPI. DISTINCT titulo
+    # da el número real de alertas únicas sin tocar el almacenamiento.
     n_alertas_24h = 0
     n_alertas_crit = 0
     try:
         with _db_conn() as conn:
             cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+            r_tot = conn.execute("SELECT COUNT(*) as c FROM articulos").fetchone()
+            n_arts = r_tot["c"] if r_tot else 0
+            r_24 = conn.execute(
+                "SELECT COUNT(*) as c FROM articulos WHERE capturado_en >= ?", (cutoff,)
+            ).fetchone()
+            n_24h = r_24["c"] if r_24 else 0
             row = conn.execute(
-                "SELECT COUNT(*) as c FROM alertas WHERE timestamp >= ?", (cutoff,)
+                "SELECT COUNT(DISTINCT titulo) as c FROM alertas WHERE timestamp >= ?", (cutoff,)
             ).fetchone()
             n_alertas_24h = row["c"] if row else 0
             row2 = conn.execute(
-                "SELECT COUNT(*) as c FROM alertas WHERE nivel='CRÍTICA' AND timestamp >= ?",
+                "SELECT COUNT(DISTINCT titulo) as c FROM alertas "
+                "WHERE nivel='CRÍTICA' AND timestamp >= ?",
                 (cutoff,)
             ).fetchone()
             n_alertas_crit = row2["c"] if row2 else 0
