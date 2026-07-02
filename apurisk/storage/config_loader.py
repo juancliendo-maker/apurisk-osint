@@ -2359,3 +2359,128 @@ def cargar_factores_pxi_por_tema(db_path: str, tema: str) -> list:
         if any(sub in cat for sub in subs):
             out.append(dict(r))
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GENERADOR DE REPORTES (Etapa 3, Fase 3-1) — solicitudes (skeleton)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_REPORTE_TIPOS = {
+    "reporte_a_automatico", "reporte_a_manual", "reporte_b_tema", "reporte_b_caso",
+}
+_REPORTE_RANGOS = {"24h", "7d", "15d", "30d"}
+# Temas válidos para Reporte B (excluye electoral y polarizacion por especificación)
+_REPORTE_TEMAS_B = [
+    "estabilidad_gobierno", "conflictos_sociales", "riesgo_regulatorio",
+    "corrupcion", "seguridad", "economico_inversion",
+]
+
+
+def listar_reportes(db_path: str, limite: int = 50,
+                    tipo: str = None, estado: str = None) -> list:
+    """Reportes generados, recientes primero. Filtros opcionales por tipo/estado."""
+    try:
+        with _conn(db_path) as c:
+            q = "SELECT * FROM reportes_generados WHERE 1=1"
+            args = []
+            if tipo:
+                q += " AND tipo=?"; args.append(tipo)
+            if estado:
+                q += " AND estado=?"; args.append(estado)
+            q += " ORDER BY fecha_generacion DESC, id DESC LIMIT ?"
+            args.append(int(limite))
+            rows = c.execute(q, args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_reportes falló: {e}")
+        return []
+
+
+def _nombre_archivo_reporte(tipo: str, tema: str, rango: str, fecha_iso: str) -> str:
+    ts = fecha_iso.replace("-", "").replace(":", "").replace("T", "_").replace(" ", "_")[:13]
+    if tipo.startswith("reporte_a"):
+        etq = "ReporteA_OSINT"
+    elif tipo == "reporte_b_tema":
+        etq = f"ReporteB_{tema or 'tema'}"
+    else:
+        etq = "ReporteB_caso"
+    return f"{ts}_{etq}_{rango}.pdf"
+
+
+def crear_solicitud_reporte(db_path: str, datos: dict, usuario: str) -> dict:
+    """Inserta una solicitud de reporte (estado 'generando'). Devuelve {ok, id, error?}.
+
+    Valida tipo/rango/tema/caso. NO genera el PDF (eso es Fase 3-2).
+    """
+    tipo = (datos.get("tipo") or "").strip()
+    rango = (datos.get("rango_datos") or "7d").strip()
+    tema = (datos.get("tema") or "").strip() or None
+    caso = (datos.get("caso") or "").strip() or None
+    if tipo not in _REPORTE_TIPOS:
+        return {"ok": False, "error": "Tipo de reporte inválido"}
+    if rango not in _REPORTE_RANGOS:
+        return {"ok": False, "error": "Rango de datos inválido"}
+    if tipo == "reporte_b_tema" and tema not in _REPORTE_TEMAS_B:
+        return {"ok": False, "error": "Tema inválido para Reporte B"}
+    if tipo == "reporte_b_caso" and not caso:
+        return {"ok": False, "error": "Describe el caso para el Reporte B por caso"}
+    if caso and len(caso) > 200:
+        caso = caso[:200]
+
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "INSERT INTO reportes_generados "
+            "(tipo, tema, caso, rango_datos, estado, usuario_solicito) "
+            "VALUES (?,?,?,?, 'generando', ?)",
+            (tipo, tema, caso, rango, usuario),
+        )
+        rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        return {"ok": True, "id": rid}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def obtener_reporte(db_path: str, reporte_id: int) -> dict | None:
+    try:
+        with _conn(db_path) as c:
+            row = c.execute(
+                "SELECT * FROM reportes_generados WHERE id=?", (reporte_id,)
+            ).fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"[config_loader] obtener_reporte falló: {e}")
+        return None
+
+
+def autocompletar_reporte_dummy(db_path: str, reporte_id: int,
+                                segundos: float = 5.0, hoy=None) -> dict | None:
+    """Fase 3-1: simula que una solicitud 'generando' se completa tras N segundos.
+
+    Sin generador real todavía (Fase 3-2). Cuando la solicitud lleva ≥ `segundos`
+    en 'generando', se marca 'completado' con un nombre de archivo y tamaño dummy,
+    para que el polling de la interfaz tenga un estado terminal que mostrar.
+    """
+    from datetime import datetime
+    r = obtener_reporte(db_path, reporte_id)
+    if not r or r["estado"] != "generando":
+        return r
+    try:
+        f = r["fecha_generacion"]
+        dt = datetime.fromisoformat(f.replace("T", " ")) if f else None
+        ahora = hoy or datetime.utcnow()
+        transcurrido = (ahora - dt).total_seconds() if dt else 999
+    except Exception:
+        transcurrido = 999
+    if transcurrido < segundos:
+        return r
+    nombre = _nombre_archivo_reporte(
+        r["tipo"], r.get("tema"), r["rango_datos"], r["fecha_generacion"])
+
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "UPDATE reportes_generados SET estado='completado', ruta_archivo=?, "
+            "tamano_kb=? WHERE id=? AND estado='generando'",
+            (nombre, 240, reporte_id),
+        )
+        return {"ok": True}
+    _ejecutar_con_reintentos(db_path, _op)
+    return obtener_reporte(db_path, reporte_id)
