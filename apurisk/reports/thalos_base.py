@@ -61,34 +61,49 @@ RIESGO_COLORES = {
 
 TAGLINE = "Strategic Intelligence for Complex Decisions"
 
-# ── Tipografía (bundle DejaVu ≈ Open Sans; fallback Helvetica) ────────────────
-# Si más adelante se colocan Montserrat-Bold.ttf / OpenSans-Regular.ttf en
-# static/fonts, basta re-apuntar _FONT_FILES para usar la tipografía exacta.
+# ── Tipografía THALOS ─────────────────────────────────────────────────────────
+# Títulos = Montserrat Bold · cuerpo/metadata = Open Sans Regular.
+# Cadena de fallback por si algún .ttf falta: Montserrat/OpenSans → DejaVu →
+# Helvetica (built-in). reportlab embebe (subset) las TTF en el PDF → el archivo
+# es autónomo y se ve igual en Adobe/Preview aunque no estén instaladas.
+import logging as _logging
+_log = _logging.getLogger("apurisk.thalos_base")
+
 FONT_TITLE = "Helvetica-Bold"
 FONT_BODY = "Helvetica"
-_FONT_FILES = {
-    # nombre_reportlab: (archivo, es_titulo)
-    "THALOS":      ("DejaVuSans.ttf", False),
-    "THALOS-Bold": ("DejaVuSans-Bold.ttf", True),
-}
+
+# (nombre_reportlab, [candidatos .ttf en orden de preferencia])
+_TITLE_CANDIDATOS = ["Montserrat-Bold.ttf", "DejaVuSans-Bold.ttf"]
+_BODY_CANDIDATOS = ["OpenSans-Regular.ttf", "DejaVuSans.ttf"]
 
 
-def _registrar_fuentes() -> None:
-    global FONT_TITLE, FONT_BODY
-    try:
-        for nombre, (archivo, _) in _FONT_FILES.items():
-            ruta = _FONTS / archivo
-            if ruta.exists():
+def _registrar_una(nombre: str, candidatos: list, fallback: str) -> str:
+    """Registra el primer .ttf disponible bajo `nombre`; devuelve el fontName a usar."""
+    for archivo in candidatos:
+        ruta = _FONTS / archivo
+        if ruta.exists():
+            try:
                 pdfmetrics.registerFont(TTFont(nombre, str(ruta)))
-        if (_FONTS / "DejaVuSans.ttf").exists():
-            FONT_BODY = "THALOS"
-        if (_FONTS / "DejaVuSans-Bold.ttf").exists():
-            FONT_TITLE = "THALOS-Bold"
-    except Exception:
-        FONT_TITLE, FONT_BODY = "Helvetica-Bold", "Helvetica"
+                _log.info("✓ %s registrada en reportlab (%s)", nombre, archivo)
+                return nombre
+            except Exception as e:
+                _log.error("✗ Error registrando %s (%s): %s", nombre, archivo, e)
+    _log.warning("⚠ %s no encontrada — fallback a %s", nombre, fallback)
+    return fallback
 
 
-_registrar_fuentes()
+def registrar_fuentes_thalos() -> None:
+    """Registra las fuentes THALOS (Montserrat Bold + Open Sans) en reportlab.
+
+    Idempotente: se puede llamar varias veces. Se invoca una vez al importar
+    el módulo; volver a llamarla no daña nada.
+    """
+    global FONT_TITLE, FONT_BODY
+    FONT_TITLE = _registrar_una("Montserrat-Bold", _TITLE_CANDIDATOS, "Helvetica-Bold")
+    FONT_BODY = _registrar_una("OpenSans-Regular", _BODY_CANDIDATOS, "Helvetica")
+
+
+registrar_fuentes_thalos()
 
 # ── Geometría de página ──────────────────────────────────────────────────────
 PAGE_W, PAGE_H = A4
@@ -585,9 +600,9 @@ def construir_demo_pdf(fecha: str = "2026-07-01") -> bytes:
     S += _seccion(st, "02", "Tabla profesional")
     S.append(tabla_profesional(
         ["Actor", "Peso", "Índice CVO", "Trayectoria"],
-        [["Gremio minero", "72", "78.4", "↑ ASCENSO +11"],
-         ["Ejecutivo", "65", "65.2", "→ ESTABLE +2"],
-         ["Partidos tradicionales", "41", "41.0", "↓ DECLIVE −8"]],
+        [["Gremio minero", "72", "78.4", "ASCENSO (+11)"],
+         ["Ejecutivo", "65", "65.2", "ESTABLE (+2)"],
+         ["Partidos tradicionales", "41", "41.0", "DECLIVE (-8)"]],
         col_widths=[2.4 * inch, 0.9 * inch, 1.2 * inch, 1.9 * inch]))
 
     # 4. Matriz P×I
