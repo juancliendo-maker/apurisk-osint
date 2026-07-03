@@ -402,6 +402,30 @@ CREATE TABLE IF NOT EXISTS config_analisis_log (
 
 CREATE INDEX IF NOT EXISTS idx_analisis_log_tema ON config_analisis_log(tema);
 CREATE INDEX IF NOT EXISTS idx_analisis_log_usuario ON config_analisis_log(usuario);
+
+-- ============================================================
+-- GENERADOR DE REPORTES (Etapa 3, Fase 3) — solicitudes y archivos
+-- ============================================================
+-- Registro de reportes solicitados/generados. En Fase 3-1 solo se guarda la
+-- solicitud (estado 'generando'); el PDF real lo produce Fase 3-2.
+CREATE TABLE IF NOT EXISTS reportes_generados (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha_generacion  TEXT NOT NULL DEFAULT (datetime('now')),
+    tipo              TEXT NOT NULL,   -- reporte_a_automatico | reporte_a_manual | reporte_b_tema | reporte_b_caso
+    tema              TEXT,            -- si reporte_b_tema
+    caso              TEXT,            -- si reporte_b_caso
+    rango_datos       TEXT NOT NULL DEFAULT '7d',   -- 24h | 7d | 15d | 30d
+    ruta_archivo      TEXT,            -- nombre de archivo PDF (relativo a reportes/)
+    tamano_kb         INTEGER,
+    estado            TEXT NOT NULL DEFAULT 'generando',  -- generando | completado | error
+    nota              TEXT,
+    snapshot_id_datos INTEGER,
+    usuario_solicito  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_reportes_fecha ON reportes_generados(fecha_generacion DESC);
+CREATE INDEX IF NOT EXISTS idx_reportes_estado ON reportes_generados(estado);
+CREATE INDEX IF NOT EXISTS idx_reportes_tipo ON reportes_generados(tipo);
 """
 
 _DATOS_INICIALES = [
@@ -767,6 +791,23 @@ _MIGRACIONES = [
 ]
 
 
+# Reportes dummy para poblar la interfaz en Fase 3-1 (solo si la tabla está vacía).
+_REPORTES_DUMMY = [
+    "INSERT INTO reportes_generados "
+    "(fecha_generacion, tipo, tema, caso, rango_datos, ruta_archivo, tamano_kb, estado, usuario_solicito) "
+    "VALUES ('2026-07-02 09:15:00', 'reporte_a_manual', NULL, NULL, '24h', "
+    "'2026-07-02_0915_ReporteA_OSINT_24h.pdf', 245, 'completado', 'seed')",
+    "INSERT INTO reportes_generados "
+    "(fecha_generacion, tipo, tema, caso, rango_datos, ruta_archivo, tamano_kb, estado, usuario_solicito) "
+    "VALUES ('2026-07-01 14:30:00', 'reporte_b_tema', 'estabilidad_gobierno', NULL, '7d', "
+    "'2026-07-01_1430_ReporteB_estabilidad_gobierno_7d.pdf', 312, 'completado', 'seed')",
+    "INSERT INTO reportes_generados "
+    "(fecha_generacion, tipo, tema, caso, rango_datos, ruta_archivo, tamano_kb, estado, usuario_solicito) "
+    "VALUES ('2026-06-30 06:00:00', 'reporte_a_automatico', NULL, NULL, '24h', "
+    "'2026-06-30_0600_ReporteA_OSINT_24h.pdf', 218, 'completado', 'scheduler')",
+]
+
+
 def inicializar_admin_tables(db_path: str) -> None:
     """Crea las tablas de configuración admin en la BD existente e inserta datos iniciales."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -781,6 +822,15 @@ def inicializar_admin_tables(db_path: str) -> None:
                     conn.execute(mig)
                 except sqlite3.OperationalError:
                     pass  # columna ya existe
+            # Seed dummy de reportes (solo si la tabla está vacía) — para que la
+            # interfaz de Fase 3-1 no se vea vacía. Se genera una sola vez.
+            try:
+                vacio = conn.execute("SELECT COUNT(*) FROM reportes_generados").fetchone()[0] == 0
+                if vacio:
+                    for sql in _REPORTES_DUMMY:
+                        conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
     except Exception as e:
         print(f"[admin_tables] Error inicializando tablas admin: {e}")

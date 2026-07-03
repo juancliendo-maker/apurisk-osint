@@ -322,6 +322,7 @@ def _nav_html(activo: str, username: str) -> str:
         ("proyeccion","🔮", "Proyección",     "/admin/proyeccion"),
         ("quiebres",  "🔻", "Puntos de Quiebre", "/admin/quiebres"),
         ("inteligencia","🧠","Inteligencia",  "/admin/inteligencia"),
+        ("reportes",  "📄", "Reportes",       "/admin/reportes"),
         ("alertas",   "🚨", "Alertas",        "/admin/alertas"),
         ("logs",      "📋", "Logs sistema",   "/admin/logs"),
     ]
@@ -5867,3 +5868,282 @@ async def admin_demo_plantilla_pdf(request: Request):
             "inteligencia", sesion["username"]))
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": 'inline; filename="THALOS_Demo_Componentes.pdf"'})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GENERADOR DE REPORTES (Etapa 3, Fase 3-1) — interfaz + skeleton
+# ══════════════════════════════════════════════════════════════════════════════
+
+_REPORTE_TIPO_LABEL = {
+    "reporte_a_automatico": "Reporte A (Automático)",
+    "reporte_a_manual": "Reporte A (OSINT manual)",
+    "reporte_b_tema": "Reporte B (Tema)",
+    "reporte_b_caso": "Reporte B (Caso)",
+}
+_REPORTE_ESTADO_DOT = {"completado": "🟢", "generando": "🟡", "error": "🔴"}
+_REPORTES_DIR = Path(OUTPUT_DIR) / "reportes"
+
+
+def _reporte_tema_caso(r: dict) -> str:
+    if r.get("tema"):
+        return escape(r["tema"].replace("_", " ").title())
+    if r.get("caso"):
+        return escape(r["caso"])
+    return '<span style="color:var(--muted)">Global</span>'
+
+
+@router.get("/reportes", response_class=HTMLResponse)
+async def admin_reportes(request: Request):
+    """Generador de reportes THALOS: tabla de generados + formulario de solicitud."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import (
+        listar_reportes, autocompletar_reporte_dummy, _REPORTE_TEMAS_B,
+    )
+    db = _get_db_path()
+
+    # Fase 3-1: sin generador real; autocompleta dummy las solicitudes 'generando'
+    # que ya llevan ≥5s, para que el estado tenga un terminal visible.
+    for r in listar_reportes(db, limite=50, estado="generando"):
+        autocompletar_reporte_dummy(db, r["id"])
+
+    reportes = listar_reportes(db, limite=50)
+    hay_generando = any(r["estado"] == "generando" for r in reportes)
+
+    msg = request.query_params.get("msg", "")
+    err_msg = request.query_params.get("err", "")
+    msg_html = (f'<div class="alert-box alert-info" style="margin-bottom:12px">✓ {escape(msg)}</div>'
+                ) if msg else ""
+    err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(err_msg)}</div>'
+                ) if err_msg else ""
+
+    filas = ""
+    for r in reportes:
+        estado = r["estado"]
+        dot = _REPORTE_ESTADO_DOT.get(estado, "⚪")
+        fecha = (r.get("fecha_generacion") or "")[:16].replace("T", " ")
+        rango = escape(r.get("rango_datos") or "—")
+        tam = f'{r["tamano_kb"]} KB' if r.get("tamano_kb") else "—"
+        if estado == "completado":
+            descarga = (f'<a href="/admin/reportes/{r["id"]}/descargar" '
+                        f'style="color:var(--accent);font-weight:600">⬇ PDF</a>')
+        elif estado == "generando":
+            descarga = '<span style="color:var(--muted);font-size:11px">generando…</span>'
+        else:
+            descarga = '<span style="color:#ef4444;font-size:11px">error</span>'
+        meta = (f'{fecha} · {tam} · {escape(estado)}'
+                + (f' · {escape(r["nota"])}' if r.get("nota") else ''))
+        filas += f"""<tr>
+  <td style="font-size:12px;white-space:nowrap">{escape(fecha)}</td>
+  <td style="font-size:12px">{escape(_REPORTE_TIPO_LABEL.get(r["tipo"], r["tipo"]))}</td>
+  <td style="font-size:12px">{_reporte_tema_caso(r)}</td>
+  <td style="text-align:center;font-size:12px">{rango}</td>
+  <td style="text-align:center">{dot} {descarga}</td>
+  <td><span title="{escape(meta)}" style="color:var(--muted);font-size:11px;cursor:help">Ver</span></td>
+</tr>\n"""
+    if not filas:
+        filas = ('<tr><td colspan="6" style="color:var(--muted);padding:16px;text-align:center">'
+                 'Aún no hay reportes. Solicita uno abajo.</td></tr>')
+
+    # Selectores del formulario
+    temas_opts = "".join(
+        f'<option value="{t}">{escape(t.replace("_"," ").title())}</option>'
+        for t in _REPORTE_TEMAS_B)
+
+    # Polling: si hay solicitudes en curso, recarga la página cada 5s.
+    poll = ('<meta http-equiv="refresh" content="5">' if hay_generando else '')
+
+    contenido = f"""
+{poll}
+{msg_html}{err_html}
+<div style="font-size:13px;color:var(--muted);margin-bottom:14px">
+  Genera y descarga reportes ejecutivos THALOS. Reporte A = foto global OSINT;
+  Reporte B = análisis profundo por tema o caso. (Fase 3-1: interfaz; el generador
+  de PDFs llega en la próxima fase.)
+</div>
+
+<div class="card">
+  <div class="card-title">Reportes disponibles ({len(reportes)})</div>
+  <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Fecha</th><th>Tipo</th><th>Tema / Caso</th>
+        <th style="text-align:center">Rango</th>
+        <th style="text-align:center">Descarga</th><th>Metadatos</th>
+      </tr></thead>
+      <tbody>{filas}</tbody>
+    </table>
+  </div>
+  {'<p style="font-size:11px;color:#f59e0b;margin-top:8px">🟡 Hay reportes en generación — la página se actualiza sola cada 5s.</p>' if hay_generando else ''}
+</div>
+
+<div class="card">
+  <div class="card-title">Solicitar nuevo reporte</div>
+  <form method="post" action="/admin/reportes" id="rep-form">
+    <div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Tipo de reporte</div>
+      <label style="display:block;margin-bottom:5px;font-size:13px">
+        <input type="radio" name="tipo" value="reporte_a_manual" checked onchange="repToggle()"> Reporte A (OSINT manual) — foto global con datos recientes</label>
+      <label style="display:block;margin-bottom:5px;font-size:13px">
+        <input type="radio" name="tipo" value="reporte_a_automatico" onchange="repToggle()"> Reporte A (Automático diario) — se programa (06:00, próxima fase)</label>
+      <label style="display:block;margin-bottom:5px;font-size:13px">
+        <input type="radio" name="tipo" value="reporte_b_tema" onchange="repToggle()"> Reporte B (Análisis por tema) — 8 pasos, 1 tema</label>
+      <label style="display:block;margin-bottom:5px;font-size:13px">
+        <input type="radio" name="tipo" value="reporte_b_caso" onchange="repToggle()"> Reporte B (Análisis por caso) — caso específico</label>
+    </div>
+
+    <div id="rep-tema" style="display:none;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Tema</div>
+      <select name="tema" style="background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:6px 10px;font-size:13px">
+        {temas_opts}
+      </select>
+    </div>
+
+    <div id="rep-caso" style="display:none;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Caso específico</div>
+      <input type="text" name="caso" maxlength="200" placeholder="Ej. Minería ilegal en Loreto"
+             style="width:100%;max-width:440px;background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:13px">
+    </div>
+
+    <div id="rep-rango" style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Rango de datos</div>
+      <label style="margin-right:14px;font-size:13px"><input type="radio" name="rango_datos" value="24h"> 24 horas</label>
+      <label style="margin-right:14px;font-size:13px"><input type="radio" name="rango_datos" value="7d" checked> 7 días</label>
+      <label style="margin-right:14px;font-size:13px"><input type="radio" name="rango_datos" value="15d"> 15 días</label>
+      <label style="font-size:13px"><input type="radio" name="rango_datos" value="30d"> 30 días</label>
+    </div>
+
+    <div id="rep-auto-nota" style="display:none;margin-bottom:14px;font-size:12px;color:var(--muted)">
+      El Reporte A automático se generará por el scheduler (próxima fase). Al solicitarlo aquí
+      se registra la programación.
+    </div>
+
+    <div style="display:flex;gap:10px;align-items:center">
+      <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:9px 22px;font-size:14px;font-weight:700;cursor:pointer">Generar reporte</button>
+      <a href="/admin/reportes" style="color:var(--muted);font-size:13px">Cancelar</a>
+    </div>
+  </form>
+</div>
+
+<script>
+function repToggle() {{
+  var tipo = document.querySelector('input[name=tipo]:checked').value;
+  document.getElementById('rep-tema').style.display = (tipo==='reporte_b_tema') ? 'block' : 'none';
+  document.getElementById('rep-caso').style.display = (tipo==='reporte_b_caso') ? 'block' : 'none';
+  var esB = tipo.indexOf('reporte_b')===0;
+  document.getElementById('rep-rango').style.display = 'block';
+  document.getElementById('rep-auto-nota').style.display = (tipo==='reporte_a_automatico') ? 'block' : 'none';
+}}
+document.addEventListener('DOMContentLoaded', repToggle);
+</script>"""
+    return HTMLResponse(_page("Reportes", contenido, "reportes", sesion["username"]))
+
+
+@router.post("/reportes")
+async def admin_reportes_post(request: Request):
+    """Registra una solicitud de reporte (estado 'generando'). No genera el PDF aún."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import crear_solicitud_reporte, LockTimeoutError
+    form = await request.form()
+    datos = {
+        "tipo": form.get("tipo", ""),
+        "tema": form.get("tema", ""),
+        "caso": form.get("caso", ""),
+        "rango_datos": form.get("rango_datos", "7d"),
+    }
+    try:
+        r = crear_solicitud_reporte(_get_db_path(), datos, sesion["username"])
+        if not r.get("ok"):
+            return RedirectResponse(f"/admin/reportes?err={escape(r.get('error','Solicitud inválida'))}",
+                                    status_code=303)
+        return RedirectResponse(
+            "/admin/reportes?msg=Solicitud+registrada+·+generando+el+reporte…",
+            status_code=303)
+    except LockTimeoutError:
+        return RedirectResponse("/admin/reportes?err=BD+ocupada.+Reintenta.", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/admin/reportes?err={escape(str(e))}", status_code=303)
+
+
+@router.get("/reportes/{reporte_id:int}/status")
+async def admin_reportes_status(request: Request, reporte_id: int):
+    """Estado actual de un reporte (JSON) — para polling. Autocompleta dummy en Fase 3-1."""
+    from fastapi.responses import JSONResponse
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import obtener_reporte, autocompletar_reporte_dummy
+    db = _get_db_path()
+    autocompletar_reporte_dummy(db, reporte_id)
+    r = obtener_reporte(db, reporte_id)
+    if not r:
+        return JSONResponse({"error": "no encontrado"}, status_code=404)
+    return JSONResponse({
+        "id": r["id"], "estado": r["estado"],
+        "ruta_archivo": r.get("ruta_archivo"),
+        "tamano_kb": r.get("tamano_kb"),
+        "fecha_generacion": r.get("fecha_generacion"),
+    })
+
+
+@router.get("/reportes/{reporte_id:int}/descargar")
+async def admin_reportes_descargar(request: Request, reporte_id: int):
+    """Descarga el PDF del reporte. En Fase 3-1 (sin generador) devuelve un
+    PDF placeholder con branding THALOS; en Fase 3-2 servirá el archivo real."""
+    from fastapi.responses import Response
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import obtener_reporte
+    r = obtener_reporte(_get_db_path(), reporte_id)
+    if not r:
+        return HTMLResponse(_page("Reportes",
+            '<div class="alert-box alert-alto">Reporte no encontrado</div>',
+            "reportes", sesion["username"]))
+    nombre = r.get("ruta_archivo") or f"reporte_{reporte_id}.pdf"
+    archivo = _REPORTES_DIR / nombre
+    if archivo.exists():
+        pdf = archivo.read_bytes()
+    else:
+        # Fase 3-1: sin generador real → placeholder con la plantilla THALOS.
+        pdf = _reporte_placeholder_pdf(r)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{escape(nombre)}"'})
+
+
+def _reporte_placeholder_pdf(r: dict) -> bytes:
+    """PDF de una página, con branding THALOS, indicando que el generador llega en Fase 3-2."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from ..reports.thalos_base import (
+        estilos, dibujar_portada, header_footer, linea_oro, recuadro_ejecutivo,
+    )
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4)
+    doc._fecha_footer = (r.get("fecha_generacion") or "")[:10]
+    doc._header_meta = "REPORTE · THALOS"
+    tipo = _REPORTE_TIPO_LABEL.get(r["tipo"], r["tipo"])
+    doc._portada = {
+        "titulo": "Reporte THALOS",
+        "subtitulo": tipo,
+        "tema_rango": f"{(r.get('tema') or r.get('caso') or 'Global')} · {r.get('rango_datos','')}",
+        "metadata": [
+            ("Solicitado", (r.get("fecha_generacion") or "")[:16]),
+            ("Estado", r.get("estado", "—")),
+            ("Rango", r.get("rango_datos", "—")),
+            ("Generador", "Fase 3-2 (pendiente)"),
+        ],
+    }
+    st = estilos()
+    S = [Paragraph("Reporte en preparación", st["h1"]), linea_oro(),
+         recuadro_ejecutivo("NOTA",
+            "La interfaz de reportes (Fase 3-1) está operativa y esta solicitud quedó "
+            "registrada. El generador de contenido (Reporte A y B sobre la plantilla "
+            "THALOS) se implementa en la Fase 3-2; entonces este archivo contendrá el "
+            "análisis completo.", st)]
+    doc.build(S, onFirstPage=dibujar_portada, onLaterPages=header_footer)
+    return buf.getvalue()
