@@ -5968,7 +5968,7 @@ async def admin_reportes(request: Request):
   <div style="overflow-x:auto">
     <table class="tbl">
       <thead><tr>
-        <th>Fecha</th><th>Tipo</th><th>Tema / Caso</th>
+        <th>Fecha (Lima)</th><th>Tipo</th><th>Tema / Caso</th>
         <th style="text-align:center">Rango</th>
         <th style="text-align:center">Descarga</th><th>Metadatos</th>
       </tr></thead>
@@ -6132,7 +6132,7 @@ def _reporte_placeholder_pdf(r: dict) -> bytes:
         "subtitulo": tipo,
         "tema_rango": f"{(r.get('tema') or r.get('caso') or 'Global')} · {r.get('rango_datos','')}",
         "metadata": [
-            ("Solicitado", (r.get("fecha_generacion") or "")[:16]),
+            ("Solicitado", (r.get("fecha_generacion") or "")[:16].replace("T", " ") + " (America/Lima)"),
             ("Estado", r.get("estado", "—")),
             ("Rango", r.get("rango_datos", "—")),
             ("Generador", "Fase 3-2 (pendiente)"),

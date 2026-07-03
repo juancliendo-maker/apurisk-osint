@@ -2427,12 +2427,17 @@ def crear_solicitud_reporte(db_path: str, datos: dict, usuario: str) -> dict:
     if caso and len(caso) > 200:
         caso = caso[:200]
 
+    # Hora de Lima (PET, UTC-5) explícita — no el DEFAULT datetime('now') de SQLite,
+    # que es UTC (Render corre en UTC). Reusa el helper del resto del sistema.
+    from ..utils.timezone_pe import now_pe_iso
+    fecha = now_pe_iso()
+
     def _op(c: sqlite3.Connection) -> dict:
         c.execute(
             "INSERT INTO reportes_generados "
-            "(tipo, tema, caso, rango_datos, estado, usuario_solicito) "
-            "VALUES (?,?,?,?, 'generando', ?)",
-            (tipo, tema, caso, rango, usuario),
+            "(fecha_generacion, tipo, tema, caso, rango_datos, estado, usuario_solicito) "
+            "VALUES (?,?,?,?,?, 'generando', ?)",
+            (fecha, tipo, tema, caso, rango, usuario),
         )
         rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
         return {"ok": True, "id": rid}
@@ -2459,14 +2464,14 @@ def autocompletar_reporte_dummy(db_path: str, reporte_id: int,
     en 'generando', se marca 'completado' con un nombre de archivo y tamaño dummy,
     para que el polling de la interfaz tenga un estado terminal que mostrar.
     """
-    from datetime import datetime
+    from ..utils.timezone_pe import now_pe, parse_to_pe
     r = obtener_reporte(db_path, reporte_id)
     if not r or r["estado"] != "generando":
         return r
     try:
-        f = r["fecha_generacion"]
-        dt = datetime.fromisoformat(f.replace("T", " ")) if f else None
-        ahora = hoy or datetime.utcnow()
+        # Comparación consistente en hora de Lima (aware), tolera fecha con o sin offset.
+        dt = parse_to_pe(r.get("fecha_generacion"))
+        ahora = hoy or now_pe()
         transcurrido = (ahora - dt).total_seconds() if dt else 999
     except Exception:
         transcurrido = 999
