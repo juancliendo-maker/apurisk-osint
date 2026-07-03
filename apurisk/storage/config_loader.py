@@ -2489,3 +2489,46 @@ def autocompletar_reporte_dummy(db_path: str, reporte_id: int,
         return {"ok": True}
     _ejecutar_con_reintentos(db_path, _op)
     return obtener_reporte(db_path, reporte_id)
+
+
+def cargar_factores_pxi_top(db_path: str, n: int = 3) -> list:
+    """Top-N factores P×I (por score) del último snapshot — foto global, sin filtrar por tema."""
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT f.factor_id, f.nombre, f.categoria, f.probabilidad, "
+                "f.impacto, f.score, f.nivel, f.tendencia "
+                "FROM factores f JOIN snapshots s ON f.snapshot_id = s.id "
+                "WHERE s.id = (SELECT MAX(id) FROM snapshots) "
+                "ORDER BY f.score DESC LIMIT ?",
+                (int(n),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] cargar_factores_pxi_top falló: {e}")
+        return []
+
+
+def marcar_reporte_completado(db_path: str, reporte_id: int,
+                              ruta_archivo: str, tamano_kb: int,
+                              snapshot_id: int = None) -> None:
+    """Marca un reporte como completado con su archivo y tamaño reales."""
+    def _op(c: sqlite3.Connection):
+        c.execute(
+            "UPDATE reportes_generados SET estado='completado', ruta_archivo=?, "
+            "tamano_kb=?, snapshot_id_datos=? WHERE id=?",
+            (ruta_archivo, int(tamano_kb), snapshot_id, reporte_id),
+        )
+        return {"ok": True}
+    _ejecutar_con_reintentos(db_path, _op)
+
+
+def marcar_reporte_error(db_path: str, reporte_id: int, nota: str) -> None:
+    """Marca un reporte como error con una nota."""
+    def _op(c: sqlite3.Connection):
+        c.execute(
+            "UPDATE reportes_generados SET estado='error', nota=? WHERE id=?",
+            (str(nota)[:300], reporte_id),
+        )
+        return {"ok": True}
+    _ejecutar_con_reintentos(db_path, _op)
