@@ -6059,6 +6059,12 @@ async def admin_reportes_post(request: Request):
         if not r.get("ok"):
             return RedirectResponse(f"/admin/reportes?err={escape(r.get('error','Solicitud inválida'))}",
                                     status_code=303)
+        # Fase 3-2: el Reporte A Manual se GENERA de verdad (síncrono). Los demás
+        # tipos (B tema/caso) siguen en dummy hasta sus fases.
+        if datos["tipo"] == "reporte_a_manual":
+            _generar_reporte_a_ahora(_get_db_path(), r["id"])
+            return RedirectResponse(
+                "/admin/reportes?msg=Reporte+A+generado", status_code=303)
         return RedirectResponse(
             "/admin/reportes?msg=Solicitud+registrada+·+generando+el+reporte…",
             status_code=303)
@@ -6066,6 +6072,49 @@ async def admin_reportes_post(request: Request):
         return RedirectResponse("/admin/reportes?err=BD+ocupada.+Reintenta.", status_code=303)
     except Exception as e:
         return RedirectResponse(f"/admin/reportes?err={escape(str(e))}", status_code=303)
+
+
+def _conteos_articulos_bd(db: str) -> dict:
+    """Conteos reales de la tabla articulos: total y últimas 24h (para la nota)."""
+    out = {"total": None, "ultimas_24h": None}
+    try:
+        with _db_conn() as conn:
+            cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+            out["total"] = conn.execute("SELECT COUNT(*) c FROM articulos").fetchone()["c"]
+            out["ultimas_24h"] = conn.execute(
+                "SELECT COUNT(*) c FROM articulos WHERE capturado_en >= ?", (cutoff,)
+            ).fetchone()["c"]
+    except Exception:
+        pass
+    return out
+
+
+def _generar_reporte_a_ahora(db: str, reporte_id: int) -> None:
+    """Genera el PDF del Reporte A Manual, lo guarda y marca el estado."""
+    from ..storage.config_loader import (
+        obtener_reporte, marcar_reporte_completado, marcar_reporte_error,
+    )
+    from ..reports.reporte_a import generar_reporte_a_manual
+    rep = obtener_reporte(db, reporte_id)
+    fecha_iso = (rep or {}).get("fecha_generacion", "")
+    snapshot = _ultimo_snapshot()
+    if not snapshot or not snapshot.get("osint_motor"):
+        marcar_reporte_error(db, reporte_id, "Sin snapshot OSINT disponible")
+        return
+    try:
+        pdf = generar_reporte_a_manual(
+            db, fecha_iso, snapshot, _construir_datos_semaforo,
+            conteos_bd=_conteos_articulos_bd(db))
+        if not pdf:
+            marcar_reporte_error(db, reporte_id, "Sin datos del semáforo en la foto")
+            return
+        ts = fecha_iso.replace("-", "").replace(":", "")[:13].replace("T", "_")
+        nombre = f"{ts}_ReporteA_Manual.pdf"
+        _REPORTES_DIR.mkdir(parents=True, exist_ok=True)
+        (_REPORTES_DIR / nombre).write_bytes(pdf)
+        marcar_reporte_completado(db, reporte_id, nombre, max(1, len(pdf) // 1024))
+    except Exception as e:
+        marcar_reporte_error(db, reporte_id, f"Error generando: {e}")
 
 
 @router.get("/reportes/{reporte_id:int}/status")
