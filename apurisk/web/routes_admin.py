@@ -6017,7 +6017,7 @@ async def admin_reportes(request: Request):
       <label style="display:block;margin-bottom:5px;font-size:13px">
         <input type="radio" name="tipo" value="reporte_a_automatico" onchange="repToggle()"> Reporte A (Automático diario) — se programa (06:00, próxima fase)</label>
       <label style="display:block;margin-bottom:5px;font-size:13px">
-        <input type="radio" name="tipo" value="reporte_b_tema" onchange="repToggle()"> Reporte B (Análisis por tema) — 8 pasos, 1 tema</label>
+        <input type="radio" name="tipo" value="reporte_b_tema" onchange="repToggle()"> Reporte por Tema — OSINT — situación de 1 tema sobre la ventana</label>
       <label style="display:block;margin-bottom:5px;font-size:13px">
         <input type="radio" name="tipo" value="reporte_b_caso" onchange="repToggle()"> Reporte B (Análisis por caso) — caso específico</label>
     </div>
@@ -6094,6 +6094,11 @@ async def admin_reportes_post(request: Request):
             _generar_reporte_a_ahora(_get_db_path(), r["id"])
             return RedirectResponse(
                 "/admin/reportes?msg=Reporte+A+generado", status_code=303)
+        # Fase 3-3b: Reporte por Tema (OSINT) con ventana — generación real.
+        if datos["tipo"] == "reporte_b_tema":
+            _generar_reporte_tema_ahora(_get_db_path(), r["id"])
+            return RedirectResponse(
+                "/admin/reportes?msg=Reporte+por+Tema+generado", status_code=303)
         return RedirectResponse(
             "/admin/reportes?msg=Solicitud+registrada+·+generando+el+reporte…",
             status_code=303)
@@ -6139,6 +6144,38 @@ def _generar_reporte_a_ahora(db: str, reporte_id: int) -> None:
             return
         ts = fecha_iso.replace("-", "").replace(":", "")[:13].replace("T", "_")
         nombre = f"{ts}_ReporteA_Manual.pdf"
+        _REPORTES_DIR.mkdir(parents=True, exist_ok=True)
+        (_REPORTES_DIR / nombre).write_bytes(pdf)
+        marcar_reporte_completado(db, reporte_id, nombre, max(1, len(pdf) // 1024))
+    except Exception as e:
+        marcar_reporte_error(db, reporte_id, f"Error generando: {e}")
+
+
+def _generar_reporte_tema_ahora(db: str, reporte_id: int) -> None:
+    """Genera el PDF del Reporte por Tema (OSINT) sobre la ventana solicitada."""
+    from ..storage.config_loader import (
+        obtener_reporte, marcar_reporte_completado, marcar_reporte_error,
+    )
+    from ..reports.reporte_tema import generar_reporte_tema_osint, RANGO_DIAS
+    rep = obtener_reporte(db, reporte_id)
+    if not rep:
+        return
+    fecha_iso = rep.get("fecha_generacion", "")
+    tema = rep.get("tema")
+    dias = RANGO_DIAS.get(rep.get("rango_datos", "7d"), 7)
+    snapshot = _ultimo_snapshot()
+    if not snapshot or not snapshot.get("osint_motor"):
+        marcar_reporte_error(db, reporte_id, "Sin snapshot OSINT disponible")
+        return
+    try:
+        pdf = generar_reporte_tema_osint(
+            db, tema, dias, snapshot, _construir_datos_semaforo,
+            conteos_bd=_conteos_articulos_bd(db))
+        if not pdf:
+            marcar_reporte_error(db, reporte_id, "Sin datos del semáforo para el tema")
+            return
+        ts = fecha_iso.replace("-", "").replace(":", "")[:13].replace("T", "_")
+        nombre = f"{ts}_ReporteTema_{tema}_OSINT_{dias}d.pdf"
         _REPORTES_DIR.mkdir(parents=True, exist_ok=True)
         (_REPORTES_DIR / nombre).write_bytes(pdf)
         marcar_reporte_completado(db, reporte_id, nombre, max(1, len(pdf) // 1024))
