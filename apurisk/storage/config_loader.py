@@ -1591,8 +1591,15 @@ def guardar_cvo_actor_tema(db_path: str, actor_id: int, tema: str,
 
 
 def listar_actores_por_activacion(db_path: str, tema: str,
-                                   pais: str = "PE") -> list:
+                                   pais: str = "PE", dias: int = 7) -> list:
     """Actores vinculados a un tema, ordenados por índice_activacion DESC.
+
+    `dias` (Fase 3-3a): parámetro de ventana por CONSISTENCIA DE API. El
+    resultado NO cambia con la ventana: las 6 señales CVO y las 7 señales
+    dinámicas (trayectoria) son ENTRADAS MANUALES del analista, no métricas
+    derivadas de artículos — son window-independent. Se acepta el parámetro
+    para que los generadores de reporte llamen igual a todas las funciones,
+    pero se ignora deliberadamente (no se finge variación por ventana).
 
     Retorna [{id, nombre, nivel, tipo, peso_calculado, capacidad_efectiva,
               interes_directo, postura_declarada, antecedente_accion,
@@ -1600,6 +1607,7 @@ def listar_actores_por_activacion(db_path: str, tema: str,
               indice_activacion (puede ser NULL → mostrar como pendiente),
               v_norm, o_norm}]
     """
+    _ = dias  # window-independent por diseño (ver docstring)
     try:
         with _conn(db_path) as c:
             rows = c.execute(
@@ -1918,11 +1926,16 @@ def _dias_hasta(fecha_iso: str, hoy) -> int | None:
         return None
 
 
-def calcular_proyecciones(db_path: str, temas_datos: list, hoy=None) -> dict:
+def calcular_proyecciones(db_path: str, temas_datos: list, hoy=None,
+                          dias: int = 7) -> dict:
     """Calcula las proyecciones A y B para una lista de temas.
 
     temas_datos: [{tema, actividad, velocidad, gravedad}] tomado de globos_b.
     hoy: datetime.date (default = fecha de hoy). Inyectable para tests.
+    `dias` (Fase 3-3a): parámetro de ventana por CONSISTENCIA DE API. La
+    MATEMÁTICA de la proyección (amortiguación, quiebres) es window-independent:
+    la ventana ya está reflejada en `temas_datos` (actividad/velocidad/gravedad
+    que le pasa el llamador). Se acepta el parámetro pero no altera el cálculo.
 
     Devuelve {
       par, horizontes,
@@ -2532,3 +2545,86 @@ def marcar_reporte_error(db_path: str, reporte_id: int, nota: str) -> None:
         )
         return {"ok": True}
     _ejecutar_con_reintentos(db_path, _op)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MOTOR POR VENTANA DE TIEMPO (Fase 3-3a) — foto analítica (crudo) + trayectoria
+# Aditivo: el default reproduce el comportamiento de 7 días de producción.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def conteos_temas_ventana(db_path: str, dias: int) -> tuple:
+    """Cuenta menciones por tema en la ventana [ahora_lima - dias, ahora] y en la
+    ventana previa [ahora - 2·dias, ahora - dias], recomputando desde artículos crudos.
+
+    Reutiliza la MISMA lógica que produce temas_7d_conteos en el pipeline
+    (analyzers.topics.detectar_temas sobre title+summary de la tabla articulos).
+    Devuelve (recientes: dict, previos: dict). Dicts vacíos si no hay artículos.
+    """
+    from datetime import timedelta
+    try:
+        from ..analyzers.topics import detectar_temas
+    except ImportError:
+        from apurisk.analyzers.topics import detectar_temas
+    from ..utils.timezone_pe import now_pe
+
+    class _Art:
+        __slots__ = ("title", "summary")
+        def __init__(self, t, s):
+            self.title = t or ""
+            self.summary = s or ""
+
+    ahora = now_pe()
+    c_rec = (ahora - timedelta(days=dias)).isoformat(timespec="seconds")
+    c_prev = (ahora - timedelta(days=2 * dias)).isoformat(timespec="seconds")
+    recientes, previos = {}, {}
+    try:
+        with _conn(db_path) as c:
+            rows_rec = c.execute(
+                "SELECT title, summary FROM articulos "
+                "WHERE capturado_en >= ? OR published >= ?", (c_rec, c_rec),
+            ).fetchall()
+            rows_prev = c.execute(
+                "SELECT title, summary FROM articulos "
+                "WHERE (capturado_en >= ? AND capturado_en < ?) "
+                "   OR (published >= ? AND published < ?)",
+                (c_prev, c_rec, c_prev, c_rec),
+            ).fetchall()
+        if rows_rec:
+            recientes = detectar_temas([_Art(r["title"], r["summary"]) for r in rows_rec]).get("conteos", {})
+        if rows_prev:
+            previos = detectar_temas([_Art(r["title"], r["summary"]) for r in rows_prev]).get("conteos", {})
+    except Exception as e:
+        print(f"[config_loader] conteos_temas_ventana falló: {e}")
+    return recientes, previos
+
+
+def serie_trayectoria(db_path: str, dias: int = 7,
+                      metrica: str = "score_global") -> list:
+    """Serie temporal de una métrica leída de los snapshots dentro de la ventana.
+
+    LECTURA PURA — no recalcula nada; usa lo ya guardado (la sucesión de
+    snapshots ~cada 30 min es la trayectoria correcta). Para el gráfico de
+    tendencia de los reportes.
+
+    metrica: columna de la tabla snapshots (default 'score_global'; también
+    'n_articulos', 'n_articulos_24h'). Snapshots viejos sin la métrica (NULL)
+    se omiten con gracia, no rompen.
+    Devuelve [{"t": generado_iso, "v": valor}, ...] ordenado por tiempo.
+    """
+    from datetime import timedelta
+    from ..utils.timezone_pe import now_pe
+    columnas = {"score_global", "n_articulos", "n_articulos_24h", "sentimiento"}
+    if metrica not in columnas:
+        return []
+    cutoff = (now_pe() - timedelta(days=dias)).isoformat(timespec="seconds")
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                f"SELECT generado, {metrica} AS v FROM snapshots "
+                "WHERE generado >= ? ORDER BY generado ASC",
+                (cutoff,),
+            ).fetchall()
+        return [{"t": r["generado"], "v": r["v"]} for r in rows if r["v"] is not None]
+    except Exception as e:
+        print(f"[config_loader] serie_trayectoria falló: {e}")
+        return []

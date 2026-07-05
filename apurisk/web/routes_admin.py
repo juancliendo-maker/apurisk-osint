@@ -1707,8 +1707,19 @@ def _origen_badge(origen: str) -> str:
     return f'<span class="badge badge-{cls}">{escape(origen)}</span>'
 
 
-def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
+def _construir_datos_semaforo(osint: dict, db_path: str = None, dias: int = 7) -> dict:
     """Construye los datos de ambas matrices y sus Score Globales desde el snapshot OSINT.
+
+    Ventana (Fase 3-3a): `dias` controla la ventana de la FOTO COYUNTURAL
+    (actividad/velocidad por tema, recomputadas desde artículos crudos).
+      · dias=7 (DEFAULT) → comportamiento EXACTO de producción: usa los conteos
+        7D ya horneados en el snapshot (temas_7d_conteos/prev). Cero regresión.
+      · dias≠7 (1/15/30…) → recomputa actividad/velocidad desde la tabla articulos
+        de esa ventana (via conteos_temas_ventana). La GRAVEDAD (eje Y) es
+        ESTRUCTURAL (piso + PA_tema) y NO cambia con la ventana, por diseño.
+      · P×I y Score Nacional son estructurales (última lectura) — ver
+        md['ventana_nota'] para la etiqueta de honestidad de datos.
+    El resultado añade md['ventana_dias'] y md['ventana_nota'].
 
     Matriz A (volumen):    X = frecuencia relativa, Y = impacto político base.
     Matriz B (estructural): X = actividad actual del tema (mismo cálculo que A),
@@ -1757,6 +1768,21 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     p2 = puntos.get(2, {})
     conteos_ciclo = p2.get("detalle", {})           # {tema: conteo} — solo ciclo actual
     conteos_7d = osint.get("temas_7d_conteos", {})  # {tema: conteo} — ventana 7D rolling
+    # ── Fase 3-3a: ventana coyuntural ≠ 7d → recomputa actividad/velocidad desde crudo.
+    # dias=7 conserva EXACTAMENTE el comportamiento de producción (usa el snapshot).
+    _prev_override = None
+    ventana_nota = None
+    if dias != 7 and db_path:
+        try:
+            from ..storage.config_loader import conteos_temas_ventana
+            _rec_w, _prev_w = conteos_temas_ventana(db_path, dias)
+            if _rec_w:
+                conteos_7d = _rec_w
+            _prev_override = _prev_w
+            ventana_nota = (f"Actividad y coyuntura: ventana de {dias} días. "
+                            "Factores P×I y Score Nacional: última lectura estructural.")
+        except Exception as e:
+            print(f"[semaforo] ventana {dias}d falló → uso 7d: {e}")
     detalle_temas = conteos_7d if conteos_7d else conteos_ciclo
     usando_7d = bool(conteos_7d)
     total_menciones = max(1, sum(detalle_temas.values()))
@@ -1784,7 +1810,8 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     # ── Velocidad por tema: %actividad(0-7d) − %actividad(7-14d) ──────────────
     # Mide si el tema gana cuota de cobertura mediática. El color del globo (urgencia)
     # se deriva de esto. Si no hay ventana previa, velocidad = 0 (todo "latente").
-    conteos_prev = osint.get("temas_prev7d_conteos", {})  # {tema: conteo} ventana 7-14d
+    conteos_prev = (_prev_override if _prev_override is not None
+                    else osint.get("temas_prev7d_conteos", {}))  # {tema: conteo} ventana previa
     total_prev = max(1, sum(conteos_prev.values()))
     hay_velocidad = bool(conteos_prev)
 
@@ -2028,6 +2055,8 @@ def _construir_datos_semaforo(osint: dict, db_path: str = None) -> dict:
     }
 
     return {
+        "ventana_dias": dias,
+        "ventana_nota": ventana_nota,
         "globos_a": globos_a,
         "globos_b": globos_b,
         "score_global_a": score_global_a,
