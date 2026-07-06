@@ -147,6 +147,58 @@ def redactar_insight(contexto_intel: str,
     return redactar_narrativa(prompt, contexto_intel, max_tokens=max_tokens)
 
 
+def redactar_con_sistema(system_prompt: str, material: str,
+                         max_tokens: int, model: str,
+                         reintentos: int = 2) -> tuple:
+    """Llamada con SYSTEM prompt (doctrina/grounding) + material como user.
+
+    Para redacciones largas con grounding estricto (ej. Análisis Político 24h):
+    el system codifica las reglas; el material (hechos + métricas) va como user.
+    Reintenta hasta `reintentos` veces con backoff simple.
+
+    Devuelve (texto|None, detalle_error|None). texto None si no hay key,
+    falta el SDK, o fallan todos los intentos.
+    """
+    import time
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return None, "ANTHROPIC_API_KEY no configurada"
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        return None, "paquete 'anthropic' no instalado"
+
+    backoff = 1.5
+    ultimo_err = None
+    for intento in range(reintentos + 1):
+        try:
+            client = Anthropic(api_key=api_key, timeout=TIMEOUT_S)
+            respuesta = client.messages.create(
+                model=model, max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": material}],
+            )
+            _TOKENS_USADOS["llamadas"] += 1
+            try:
+                _TOKENS_USADOS["input"] += respuesta.usage.input_tokens
+                _TOKENS_USADOS["output"] += respuesta.usage.output_tokens
+            except Exception:
+                pass
+            if respuesta.content and len(respuesta.content) > 0:
+                texto = respuesta.content[0].text
+                if texto and texto.strip():
+                    return texto.strip(), None
+            ultimo_err = "respuesta vacía"
+        except Exception as e:
+            ultimo_err = f"{type(e).__name__}: {str(e)[:200]}"
+            _TOKENS_USADOS["fallos"] += 1
+            log.warning("LLM sistema: intento %d falló → %s", intento + 1, ultimo_err)
+        if intento < reintentos:
+            time.sleep(backoff)
+            backoff *= 2
+    return None, ultimo_err
+
+
 def estado_uso() -> dict:
     """Devuelve métricas de uso del LLM en este runtime (para debug)."""
     return dict(_TOKENS_USADOS)
