@@ -6020,6 +6020,8 @@ async def admin_reportes(request: Request):
         <input type="radio" name="tipo" value="reporte_b_tema" onchange="repToggle()"> Reporte por Tema — OSINT — situación de 1 tema sobre la ventana</label>
       <label style="display:block;margin-bottom:5px;font-size:13px">
         <input type="radio" name="tipo" value="reporte_b_caso" onchange="repToggle()"> Reporte B (Análisis por caso) — caso específico</label>
+      <label style="display:block;margin-bottom:5px;font-size:13px">
+        <input type="radio" name="tipo" value="analisis_politico_24h" onchange="repToggle()"> Análisis Político (24h) — los hechos del día en contexto (narrativa)</label>
     </div>
 
     <div id="rep-tema" style="display:none;margin-bottom:14px">
@@ -6060,8 +6062,8 @@ function repToggle() {{
   var tipo = document.querySelector('input[name=tipo]:checked').value;
   document.getElementById('rep-tema').style.display = (tipo==='reporte_b_tema') ? 'block' : 'none';
   document.getElementById('rep-caso').style.display = (tipo==='reporte_b_caso') ? 'block' : 'none';
-  var esB = tipo.indexOf('reporte_b')===0;
-  document.getElementById('rep-rango').style.display = 'block';
+  // El Análisis Político 24h no lleva ventana ni tema (siempre 24h global).
+  document.getElementById('rep-rango').style.display = (tipo==='analisis_politico_24h') ? 'none' : 'block';
   document.getElementById('rep-auto-nota').style.display = (tipo==='reporte_a_automatico') ? 'block' : 'none';
 }}
 document.addEventListener('DOMContentLoaded', repToggle);
@@ -6083,6 +6085,10 @@ async def admin_reportes_post(request: Request):
         "caso": form.get("caso", ""),
         "rango_datos": form.get("rango_datos", "7d"),
     }
+    # El Análisis Político 24h es siempre global y 24h (sin tema ni ventana).
+    if datos["tipo"] == "analisis_politico_24h":
+        datos["rango_datos"] = "24h"
+        datos["tema"] = ""
     try:
         r = crear_solicitud_reporte(_get_db_path(), datos, sesion["username"])
         if not r.get("ok"):
@@ -6099,6 +6105,11 @@ async def admin_reportes_post(request: Request):
             _generar_reporte_tema_ahora(_get_db_path(), r["id"])
             return RedirectResponse(
                 "/admin/reportes?msg=Reporte+por+Tema+generado", status_code=303)
+        # Fase 3-3c: Análisis Político 24h (narrativa vía API) — generación real.
+        if datos["tipo"] == "analisis_politico_24h":
+            _generar_ap24_ahora(_get_db_path(), r["id"])
+            return RedirectResponse(
+                "/admin/reportes?msg=Análisis+Político+24h+procesado", status_code=303)
         return RedirectResponse(
             "/admin/reportes?msg=Solicitud+registrada+·+generando+el+reporte…",
             status_code=303)
@@ -6147,6 +6158,67 @@ def _generar_reporte_a_ahora(db: str, reporte_id: int) -> None:
         _REPORTES_DIR.mkdir(parents=True, exist_ok=True)
         (_REPORTES_DIR / nombre).write_bytes(pdf)
         marcar_reporte_completado(db, reporte_id, nombre, max(1, len(pdf) // 1024))
+    except Exception as e:
+        marcar_reporte_error(db, reporte_id, f"Error generando: {e}")
+
+
+@router.get("/ap24/test-api")
+async def admin_ap24_test_api(request: Request):
+    """Smoke test de la API de Anthropic: llamada mínima → {ok, detalle}.
+    Permite al Coronel verificar la conexión en producción en 5s, sin gastar
+    un reporte completo. La key nunca se expone."""
+    from fastapi.responses import JSONResponse
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    import os as _os
+    if not _os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return JSONResponse({"ok": False,
+                             "detalle": "ANTHROPIC_API_KEY no configurada en el entorno"})
+    from ..storage.config_loader import cargar_parametros_ap24
+    from ..utils.llm_client import redactar_con_sistema
+    par = cargar_parametros_ap24(_get_db_path())
+    texto, e = redactar_con_sistema(
+        "Responde solo con la palabra: OK.", "Prueba de conexión.",
+        max_tokens=10, model=par.get("modelo", "claude-sonnet-4-6"), reintentos=1)
+    if texto:
+        return JSONResponse({"ok": True, "modelo": par.get("modelo"),
+                             "respuesta": texto[:40]})
+    return JSONResponse({"ok": False, "modelo": par.get("modelo"), "detalle": e})
+
+
+def _generar_ap24_ahora(db: str, reporte_id: int) -> None:
+    """Genera el Análisis Político 24h (narrativa vía API + PDF THALOS)."""
+    from ..storage.config_loader import (
+        obtener_reporte, marcar_reporte_completado, marcar_reporte_error,
+    )
+    from ..reports.analisis_politico import generar_analisis_politico_24h
+    rep = obtener_reporte(db, reporte_id)
+    if not rep:
+        return
+    fecha_iso = rep.get("fecha_generacion", "")
+    snapshot = _ultimo_snapshot()
+    try:
+        res = generar_analisis_politico_24h(
+            db, snapshot, _construir_datos_semaforo,
+            conteos_bd=_conteos_articulos_bd(db))
+        if res.get("estado") == "error" or not res.get("pdf"):
+            marcar_reporte_error(db, reporte_id, res.get("nota", "Error"))
+            return
+        ts = fecha_iso.replace("-", "").replace(":", "")[:13].replace("T", "_")
+        nombre = f"{ts}_AnalisisPolitico_24h.pdf"
+        _REPORTES_DIR.mkdir(parents=True, exist_ok=True)
+        (_REPORTES_DIR / nombre).write_bytes(res["pdf"])
+        marcar_reporte_completado(db, reporte_id, nombre, max(1, len(res["pdf"]) // 1024))
+        # nota de degradación visible en metadatos si hubo fallback
+        if res.get("nota") and res["nota"] != "calibración":
+            from ..storage.config_loader import _conn as _c
+            try:
+                with _c(db) as cc:
+                    cc.execute("UPDATE reportes_generados SET nota=? WHERE id=?",
+                               (res["nota"][:300], reporte_id))
+            except Exception:
+                pass
     except Exception as e:
         marcar_reporte_error(db, reporte_id, f"Error generando: {e}")
 

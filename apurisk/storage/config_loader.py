@@ -2380,6 +2380,7 @@ def cargar_factores_pxi_por_tema(db_path: str, tema: str) -> list:
 
 _REPORTE_TIPOS = {
     "reporte_a_automatico", "reporte_a_manual", "reporte_b_tema", "reporte_b_caso",
+    "analisis_politico_24h",
 }
 _REPORTE_RANGOS = {"24h", "7d", "15d", "30d"}
 # Temas válidos para Reporte B (excluye electoral y polarizacion por especificación)
@@ -2627,4 +2628,62 @@ def serie_trayectoria(db_path: str, dias: int = 7,
         return [{"t": r["generado"], "v": r["v"]} for r in rows if r["v"] is not None]
     except Exception as e:
         print(f"[config_loader] serie_trayectoria falló: {e}")
+        return []
+
+
+def cargar_parametros_ap24(db_path: str) -> dict:
+    """Parámetros del Análisis Político 24h con defaults seguros."""
+    defaults = {
+        "modelo": "claude-sonnet-4-6",
+        "max_tokens": 3000,
+        "top_n": 120,
+        "modo_calibracion": 1,
+        "prompt_maestro": "",
+    }
+    mapa = {
+        "AP24_MODELO": ("modelo", str),
+        "AP24_MAX_TOKENS": ("max_tokens", int),
+        "AP24_TOP_N_ARTICULOS": ("top_n", int),
+        "AP24_MODO_CALIBRACION": ("modo_calibracion", int),
+        "AP24_PROMPT_MAESTRO": ("prompt_maestro", str),
+    }
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT clave, valor FROM config_parametros WHERE clave IN "
+                "('AP24_MODELO','AP24_MAX_TOKENS','AP24_TOP_N_ARTICULOS',"
+                "'AP24_MODO_CALIBRACION','AP24_PROMPT_MAESTRO')",
+            ).fetchall()
+        for r in rows:
+            if r["clave"] in mapa:
+                k, cast = mapa[r["clave"]]
+                try:
+                    defaults[k] = cast(r["valor"])
+                except (TypeError, ValueError):
+                    pass
+    except Exception as e:
+        print(f"[config_loader] cargar_parametros_ap24 falló: {e}")
+    return defaults
+
+
+def articulos_ultimas_24h(db_path: str, limite: int = 120) -> list:
+    """Artículos capturados en las últimas 24h (hora Lima), recientes primero.
+
+    Devuelve [{title, source_name, capturado_en, summary}]. Para el material del
+    Análisis Político y la tabla de titulares del PDF.
+    """
+    from datetime import timedelta
+    from ..utils.timezone_pe import now_pe
+    cutoff = (now_pe() - timedelta(hours=24)).isoformat(timespec="seconds")
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT title, source_name, capturado_en, summary FROM articulos "
+                "WHERE capturado_en >= ? OR published >= ? "
+                "ORDER BY capturado_en DESC LIMIT ?",
+                (cutoff, cutoff, int(limite)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] articulos_ultimas_24h falló: {e}")
         return []

@@ -791,6 +791,46 @@ _MIGRACIONES = [
 ]
 
 
+_AP24_PROMPT_MAESTRO_V1 = (
+    "Eres el redactor de inteligencia de THALOS Strategic Intelligence. "
+    "Redactas el \"Análisis Político — Últimas 24 horas\" para altos decisores "
+    "(CEO, autoridades). Registro: español formal de inteligencia estratégica, "
+    "sobrio, preciso, sin adjetivación innecesaria.\n\n"
+    "REGLAS ABSOLUTAS:\n"
+    "1. Usa ÚNICAMENTE los hechos provistos en el material adjunto. No uses "
+    "conocimiento externo. No inventes hechos, cifras, declaraciones ni "
+    "conexiones que el material no soporte.\n"
+    "2. Al citar un hecho concreto, indica la fuente entre paréntesis.\n"
+    "3. NO hagas proyecciones, escenarios, hipótesis ni recomendaciones. Tu "
+    "función es DESCRIBIR y CONTEXTUALIZAR el día, no juzgarlo.\n"
+    "4. Separa la sustancia del ruido: prioriza lo que altera el equilibrio "
+    "político-institucional sobre lo anecdótico. No desaparezcas el ruido: si "
+    "algo es ruidoso pero menor, puedes decirlo en una línea.\n"
+    "5. Si el material de un tema es escaso, dilo con honestidad.\n\n"
+    "ESTRUCTURA DE SALIDA (usa estos encabezados exactos):\n"
+    "SÍNTESIS DEL DÍA — un párrafo (5-7 líneas) con la lectura integral.\n"
+    "DESARROLLOS PRINCIPALES — 3 a 5 bloques breves, cada uno: qué ocurrió, qué "
+    "actores involucra, en qué contexto se inscribe (según el material).\n"
+    "CONEXIONES Y CONTEXTO — un párrafo que hile los desarrollos entre sí y con "
+    "las métricas de riesgo provistas (qué temas concentran actividad).\n"
+    "NOTA DE MATERIAL — una línea: volumen y límites del material del día."
+)
+
+# Parámetros del Análisis Político 24h (Fase 3-3c). Editables por config.
+_AP24_PARAMS = [
+    ("AP24_MODELO", "claude-sonnet-4-6", "string",
+     "Análisis Político 24h: modelo de la API de Anthropic (editable)"),
+    ("AP24_MAX_TOKENS", "3000", "int",
+     "Análisis Político 24h: máximo de tokens de salida"),
+    ("AP24_TOP_N_ARTICULOS", "120", "int",
+     "Análisis Político 24h: máximo de artículos 24h enviados (control de costo)"),
+    ("AP24_MODO_CALIBRACION", "1", "int",
+     "Análisis Político 24h: 1 = marca de calibración visible en el PDF; 0 = operativo"),
+    ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V1, "string",
+     "Análisis Político 24h: system prompt maestro (doctrina THALOS, editable)"),
+]
+
+
 # Reportes dummy para poblar la interfaz en Fase 3-1 (solo si la tabla está vacía).
 _REPORTES_DUMMY = [
     "INSERT INTO reportes_generados "
@@ -822,6 +862,12 @@ def inicializar_admin_tables(db_path: str) -> None:
                     conn.execute(mig)
                 except sqlite3.OperationalError:
                     pass  # columna ya existe
+            # Parámetros AP24 (idempotente; no pisa ediciones del analista)
+            for clave, valor, tipo, desc in _AP24_PARAMS:
+                conn.execute(
+                    "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
+                    "VALUES (?,?,?,?, 'GLOBAL')", (clave, valor, tipo, desc),
+                )
             # Seed dummy de reportes (solo si la tabla está vacía) — para que la
             # interfaz de Fase 3-1 no se vea vacía. Se genera una sola vez.
             try:
