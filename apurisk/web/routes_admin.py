@@ -6290,13 +6290,22 @@ async def admin_reportes_descargar(request: Request, reporte_id: int):
         return HTMLResponse(_page("Reportes",
             '<div class="alert-box alert-alto">Reporte no encontrado</div>',
             "reportes", sesion["username"]))
+    from ..storage.config_loader import _REPORTE_DUMMY_TIPOS
     nombre = r.get("ruta_archivo") or f"reporte_{reporte_id}.pdf"
     archivo = _REPORTES_DIR / nombre
     if archivo.exists():
         pdf = archivo.read_bytes()
-    else:
-        # Fase 3-1: sin generador real → placeholder con la plantilla THALOS.
+    elif r.get("tipo") in _REPORTE_DUMMY_TIPOS:
+        # Tipos sin generador real todavía → placeholder de Fase 3-1.
         pdf = _reporte_placeholder_pdf(r)
+    else:
+        # Tipo con generador real cuyo archivo falta (p.ej. generación cortada):
+        # NO servir el placeholder equivocado — mensaje honesto y reintentable.
+        return HTMLResponse(_page("Reportes",
+            '<div class="alert-box alert-alto">Archivo del reporte no encontrado. '
+            'La generación pudo interrumpirse — vuelve a solicitarlo desde el '
+            '<a href="/admin/reportes" style="color:var(--accent)">generador</a>.</div>',
+            "reportes", sesion["username"]))
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{escape(nombre)}"'})
 
