@@ -2388,6 +2388,12 @@ _REPORTE_TEMAS_B = [
     "estabilidad_gobierno", "conflictos_sociales", "riesgo_regulatorio",
     "corrupcion", "seguridad", "economico_inversion",
 ]
+# LISTA BLANCA del autocompletador dummy: SOLO estos tipos (sin generador real
+# todavía) pueden ser completados con el PDF placeholder. Los tipos con generador
+# real (reporte_a_manual, reporte_b_tema, analisis_politico_24h) NUNCA los toca el
+# dummy — así una generación real lenta/en curso no queda secuestrada por el
+# placeholder. Al agregar el generador real de un tipo, quítalo de esta lista.
+_REPORTE_DUMMY_TIPOS = {"reporte_a_automatico", "reporte_b_caso"}
 
 
 def listar_reportes(db_path: str, limite: int = 50,
@@ -2480,7 +2486,9 @@ def autocompletar_reporte_dummy(db_path: str, reporte_id: int,
     """
     from ..utils.timezone_pe import now_pe, parse_to_pe
     r = obtener_reporte(db_path, reporte_id)
-    if not r or r["estado"] != "generando":
+    # Lista blanca: el dummy SOLO actúa sobre tipos sin generador real. Nunca
+    # completa un reporte real (que puede estar generándose de verdad).
+    if not r or r["estado"] != "generando" or r["tipo"] not in _REPORTE_DUMMY_TIPOS:
         return r
     try:
         # Comparación consistente en hora de Lima (aware), tolera fecha con o sin offset.
