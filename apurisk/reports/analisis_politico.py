@@ -132,7 +132,10 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
     narrativa, err = redactar_con_sistema(
         par.get("prompt_maestro", ""), material,
         max_tokens=par.get("max_tokens", 3000),
-        model=par.get("modelo", "claude-sonnet-4-6"), reintentos=2)
+        model=par.get("modelo", "claude-sonnet-4-6"), reintentos=2,
+        # Timeout largo (config AP24_TIMEOUT_S, default 120s): generar ~3000
+        # tokens tarda 40-90s; el default global de 30s abortaba cada intento.
+        timeout_s=par.get("timeout_s", 120))
 
     degradado = narrativa is None
     nota_deg = None

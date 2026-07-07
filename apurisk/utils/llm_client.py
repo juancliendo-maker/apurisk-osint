@@ -149,12 +149,17 @@ def redactar_insight(contexto_intel: str,
 
 def redactar_con_sistema(system_prompt: str, material: str,
                          max_tokens: int, model: str,
-                         reintentos: int = 2) -> tuple:
+                         reintentos: int = 2,
+                         timeout_s: float = TIMEOUT_S) -> tuple:
     """Llamada con SYSTEM prompt (doctrina/grounding) + material como user.
 
     Para redacciones largas con grounding estricto (ej. Análisis Político 24h):
     el system codifica las reglas; el material (hechos + métricas) va como user.
     Reintenta hasta `reintentos` veces con backoff simple.
+
+    timeout_s: timeout por intento. El default global (30s) es corto para
+    generaciones largas (~3000 tokens tardan 40-90s) — los llamadores de
+    redacción larga deben pasar un timeout mayor (ej. AP24_TIMEOUT_S=120).
 
     Devuelve (texto|None, detalle_error|None). texto None si no hay key,
     falta el SDK, o fallan todos los intentos.
@@ -172,7 +177,7 @@ def redactar_con_sistema(system_prompt: str, material: str,
     ultimo_err = None
     for intento in range(reintentos + 1):
         try:
-            client = Anthropic(api_key=api_key, timeout=TIMEOUT_S)
+            client = Anthropic(api_key=api_key, timeout=timeout_s)
             respuesta = client.messages.create(
                 model=model, max_tokens=max_tokens,
                 system=system_prompt,
