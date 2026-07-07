@@ -826,6 +826,12 @@ _AP24_PARAMS = [
      "Análisis Político 24h: máximo de artículos 24h enviados (control de costo)"),
     ("AP24_MODO_CALIBRACION", "1", "int",
      "Análisis Político 24h: 1 = marca de calibración visible en el PDF; 0 = operativo"),
+    ("AP24_TIMEOUT_S", "120", "int",
+     "Análisis Político 24h: timeout (segundos) por intento de la llamada a la API "
+     "(la generación de ~3000 tokens tarda 40-90s; el default global de 30s es corto)"),
+    ("REPORTES_WATCHDOG_MIN", "10", "int",
+     "Reportes: minutos tras los cuales una entry en 'generando' se marca 'error' "
+     "(anti-huérfanas: proceso muerto a mitad de generación)"),
     ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V1, "string",
      "Análisis Político 24h: system prompt maestro (doctrina THALOS, editable)"),
 ]

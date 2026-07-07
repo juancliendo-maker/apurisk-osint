@@ -2556,6 +2556,45 @@ def marcar_reporte_error(db_path: str, reporte_id: int, nota: str) -> None:
     _ejecutar_con_reintentos(db_path, _op)
 
 
+def watchdog_reportes(db_path: str, max_min: int = None) -> int:
+    """Anti-huérfanas: toda entry en 'generando' con más de max_min minutos pasa
+    a 'error' con nota. Cubre muertes no capturables (deploy/restart/OOM a mitad
+    de generación) — ninguna entry miente en 'generando' para siempre.
+
+    max_min: minutos de gracia; si None, lee REPORTES_WATCHDOG_MIN (default 10).
+    Retroactivo: aplica a cualquier huérfana existente, no solo a las nuevas.
+    Devuelve cuántas entries marcó.
+    """
+    from datetime import timedelta
+    from ..utils.timezone_pe import now_pe
+    if max_min is None:
+        max_min = 10
+        try:
+            with _conn(db_path) as c:
+                row = c.execute(
+                    "SELECT valor FROM config_parametros WHERE clave='REPORTES_WATCHDOG_MIN'"
+                ).fetchone()
+            if row and row["valor"]:
+                max_min = int(row["valor"])
+        except Exception:
+            pass
+    cutoff = (now_pe() - timedelta(minutes=max_min)).isoformat(timespec="seconds")
+    try:
+        def _op(c: sqlite3.Connection):
+            cur = c.execute(
+                "UPDATE reportes_generados SET estado='error', "
+                "nota='Generación interrumpida — vuelva a solicitar' "
+                "WHERE estado='generando' AND fecha_generacion < ?",
+                (cutoff,),
+            )
+            return {"n": cur.rowcount}
+        r = _ejecutar_con_reintentos(db_path, _op)
+        return r.get("n", 0)
+    except Exception as e:
+        print(f"[config_loader] watchdog_reportes falló: {e}")
+        return 0
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # MOTOR POR VENTANA DE TIEMPO (Fase 3-3a) — foto analítica (crudo) + trayectoria
 # Aditivo: el default reproduce el comportamiento de 7 días de producción.
@@ -2646,6 +2685,7 @@ def cargar_parametros_ap24(db_path: str) -> dict:
         "max_tokens": 3000,
         "top_n": 120,
         "modo_calibracion": 1,
+        "timeout_s": 120,
         "prompt_maestro": "",
     }
     mapa = {
@@ -2653,6 +2693,7 @@ def cargar_parametros_ap24(db_path: str) -> dict:
         "AP24_MAX_TOKENS": ("max_tokens", int),
         "AP24_TOP_N_ARTICULOS": ("top_n", int),
         "AP24_MODO_CALIBRACION": ("modo_calibracion", int),
+        "AP24_TIMEOUT_S": ("timeout_s", int),
         "AP24_PROMPT_MAESTRO": ("prompt_maestro", str),
     }
     try:
@@ -2660,7 +2701,7 @@ def cargar_parametros_ap24(db_path: str) -> dict:
             rows = c.execute(
                 "SELECT clave, valor FROM config_parametros WHERE clave IN "
                 "('AP24_MODELO','AP24_MAX_TOKENS','AP24_TOP_N_ARTICULOS',"
-                "'AP24_MODO_CALIBRACION','AP24_PROMPT_MAESTRO')",
+                "'AP24_MODO_CALIBRACION','AP24_TIMEOUT_S','AP24_PROMPT_MAESTRO')",
             ).fetchall()
         for r in rows:
             if r["clave"] in mapa:

@@ -5929,11 +5929,16 @@ async def admin_reportes(request: Request):
         return err
     from ..storage.config_loader import (
         listar_reportes, autocompletar_reporte_dummy, _REPORTE_TEMAS_B,
+        watchdog_reportes,
     )
     db = _get_db_path()
 
-    # Fase 3-1: sin generador real; autocompleta dummy las solicitudes 'generando'
-    # que ya llevan ≥5s, para que el estado tenga un terminal visible.
+    # Watchdog anti-huérfanas: entries 'generando' con más de N minutos (config
+    # REPORTES_WATCHDOG_MIN, default 10) pasan a 'error' con nota. Retroactivo:
+    # limpia también huérfanas previas (proceso muerto a mitad de generación).
+    watchdog_reportes(db)
+
+    # Fase 3-1: dummy solo para tipos en lista blanca (sin generador real).
     for r in listar_reportes(db, limite=50, estado="generando"):
         autocompletar_reporte_dummy(db, r["id"])
 
@@ -6094,22 +6099,21 @@ async def admin_reportes_post(request: Request):
         if not r.get("ok"):
             return RedirectResponse(f"/admin/reportes?err={escape(r.get('error','Solicitud inválida'))}",
                                     status_code=303)
-        # Fase 3-2: el Reporte A Manual se GENERA de verdad (síncrono). Los demás
-        # tipos (B tema/caso) siguen en dummy hasta sus fases.
-        if datos["tipo"] == "reporte_a_manual":
-            _generar_reporte_a_ahora(_get_db_path(), r["id"])
+        # Generación REAL en SEGUNDO PLANO (hilo daemon): el POST responde de
+        # inmediato y la generación corre fuera del ciclo request/response.
+        # Antes era síncrona dentro del handler async → bloqueaba el event loop
+        # completo (health check caído → restart de Render → entry huérfana).
+        _GENERADORES_REALES = {
+            "reporte_a_manual": _generar_reporte_a_ahora,
+            "reporte_b_tema": _generar_reporte_tema_ahora,
+            "analisis_politico_24h": _generar_ap24_ahora,
+        }
+        gen = _GENERADORES_REALES.get(datos["tipo"])
+        if gen is not None:
+            _lanzar_generacion_bg(gen, _get_db_path(), r["id"])
             return RedirectResponse(
-                "/admin/reportes?msg=Reporte+A+generado", status_code=303)
-        # Fase 3-3b: Reporte por Tema (OSINT) con ventana — generación real.
-        if datos["tipo"] == "reporte_b_tema":
-            _generar_reporte_tema_ahora(_get_db_path(), r["id"])
-            return RedirectResponse(
-                "/admin/reportes?msg=Reporte+por+Tema+generado", status_code=303)
-        # Fase 3-3c: Análisis Político 24h (narrativa vía API) — generación real.
-        if datos["tipo"] == "analisis_politico_24h":
-            _generar_ap24_ahora(_get_db_path(), r["id"])
-            return RedirectResponse(
-                "/admin/reportes?msg=Análisis+Político+24h+procesado", status_code=303)
+                "/admin/reportes?msg=Generando+en+segundo+plano+—+la+tabla+se+actualiza+sola",
+                status_code=303)
         return RedirectResponse(
             "/admin/reportes?msg=Solicitud+registrada+·+generando+el+reporte…",
             status_code=303)
@@ -6117,6 +6121,30 @@ async def admin_reportes_post(request: Request):
         return RedirectResponse("/admin/reportes?err=BD+ocupada.+Reintenta.", status_code=303)
     except Exception as e:
         return RedirectResponse(f"/admin/reportes?err={escape(str(e))}", status_code=303)
+
+
+def _lanzar_generacion_bg(fn, db: str, reporte_id: int) -> None:
+    """Lanza la generación de un reporte en un hilo daemon, fuera del request.
+
+    SQLite es seguro aquí: cada operación abre su propia conexión (config_loader
+    ._conn por llamada), nada se comparte entre el request y el hilo. Los
+    _generar_*_ahora ya capturan excepciones y marcan 'error'; este wrapper es
+    una red de seguridad extra para que NADA deje la entry en 'generando' por
+    un fallo capturable. (Muertes no capturables las cubre watchdog_reportes.)
+    """
+    import threading
+
+    def _run():
+        try:
+            fn(db, reporte_id)
+        except Exception as e:
+            from ..storage.config_loader import marcar_reporte_error
+            try:
+                marcar_reporte_error(db, reporte_id, f"Error en background: {e}")
+            except Exception:
+                pass
+
+    threading.Thread(target=_run, daemon=True, name=f"reporte-{reporte_id}").start()
 
 
 def _conteos_articulos_bd(db: str) -> dict:
