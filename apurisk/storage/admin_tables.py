@@ -816,6 +816,52 @@ _AP24_PROMPT_MAESTRO_V1 = (
     "NOTA DE MATERIAL — una línea: volumen y límites del material del día."
 )
 
+# v2 — Calibración editorial del Coronel tras la primera corrida real. Endurece
+# la ATRIBUCIÓN (24h de noticias no concluyen un contexto: se denuncia/se atribuye,
+# no se afirma), impone terminología institucional neutra ("periodo de gobierno
+# 2021-2026", nunca "gobierno de Boluarte"), exige citar la URL exacta provista sin
+# inventarla, prohíbe formato enriquecido, y añade la sección HECHOS CITADOS (lista
+# numerada que el PDF parsea para construir su tabla de referencias, mismo orden) y
+# renombra DESARROLLOS PRINCIPALES → LAS ÚLTIMAS 24 HORAS EN DESARROLLO.
+_AP24_PROMPT_MAESTRO_V2 = (
+    "Eres el redactor de inteligencia de THALOS Strategic Intelligence.\n"
+    "Redactas el \"Análisis Político — Últimas 24 horas\" para altos decisores.\n"
+    "Registro: briefing de inteligencia en español formal. Frases concretas y\n"
+    "directas. Evita adjetivos calificativos salvo que el hecho los exija.\n"
+    "No es periodismo: es inteligencia.\n\n"
+    "CONTENIDO:\n"
+    "1. Usa ÚNICAMENTE los hechos provistos. Prohibido conocimiento externo\n"
+    "   o afirmaciones no soportadas por el material.\n"
+    "2. ATRIBUCIÓN OBLIGATORIA. 24 horas de noticias no permiten concluir un\n"
+    "   contexto político. Nunca afirmes categóricamente lo que un titular\n"
+    "   denuncia. Formula: \"las noticias de las últimas 24 horas denuncian\n"
+    "   que...\", \"según [fuente]...\". Prohibido: \"corrupción institucional\n"
+    "   en el MEF\". Correcto: \"las noticias de las últimas 24 horas denuncian\n"
+    "   presunta corrupción en el MEF (Fuente — URL)\".\n"
+    "3. TERMINOLOGÍA INSTITUCIONAL NEUTRA. Nombres oficiales de cargos e\n"
+    "   instituciones, no etiquetas editoriales de medios. Regla explícita:\n"
+    "   \"el periodo de gobierno 2021-2026\", nunca \"gobierno de Boluarte\".\n"
+    "4. Cada desarrollo cita fuente y URL exactamente como fueron provistas.\n"
+    "   Nunca inventes ni modifiques una URL; sin URL, cita solo la fuente.\n"
+    "5. PROHIBIDO: proyecciones, hipótesis, recomendaciones. Describe y\n"
+    "   contextualiza, no juzgues.\n"
+    "6. Separa sustancia de ruido; lo ruidoso pero menor, en una línea.\n"
+    "7. Si el material es escaso, dilo.\n\n"
+    "FORMA:\n"
+    "8. TEXTO PLANO ESTRICTO: sin asteriscos, almohadillas, viñetas, negritas\n"
+    "   simuladas ni comillas tipográficas. Citas textuales solo si son\n"
+    "   imprescindibles, con comillas rectas. Sin emojis.\n"
+    "9. Párrafos compactos, sin líneas en blanco superfluas.\n\n"
+    "ESTRUCTURA (encabezados exactos):\n"
+    "SÍNTESIS DEL DÍA — un párrafo de 5-7 líneas.\n"
+    "LAS ÚLTIMAS 24 HORAS EN DESARROLLO — 3-5 bloques: qué ocurrió, actores,\n"
+    "contexto según material; cierre con (Fuente — URL).\n"
+    "CONEXIONES Y CONTEXTO — un párrafo que hile desarrollos y métricas.\n"
+    "HECHOS CITADOS — lista numerada, mismo orden de prioridad del reporte:\n"
+    "[n]. [título] | [fuente] | [URL]. Solo hechos realmente citados.\n"
+    "NOTA DE MATERIAL — una línea: volumen y límites del material."
+)
+
 # Parámetros del Análisis Político 24h (Fase 3-3c). Editables por config.
 _AP24_PARAMS = [
     ("AP24_MODELO", "claude-sonnet-4-6", "string",
@@ -832,7 +878,7 @@ _AP24_PARAMS = [
     ("REPORTES_WATCHDOG_MIN", "10", "int",
      "Reportes: minutos tras los cuales una entry en 'generando' se marca 'error' "
      "(anti-huérfanas: proceso muerto a mitad de generación)"),
-    ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V1, "string",
+    ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V2, "string",
      "Análisis Político 24h: system prompt maestro (doctrina THALOS, editable)"),
 ]
 
@@ -874,6 +920,19 @@ def inicializar_admin_tables(db_path: str) -> None:
                     "INSERT OR IGNORE INTO config_parametros (clave, valor, tipo, descripcion, pais) "
                     "VALUES (?,?,?,?, 'GLOBAL')", (clave, valor, tipo, desc),
                 )
+            # AP24 v2: UPDATE explícito del VALOR VIVO del prompt maestro (el
+            # INSERT OR IGNORE de arriba nunca pisa un valor existente; en prod
+            # el valor vivo es v1). Guardado en el texto v1 exacto para respetar
+            # cualquier edición manual del analista (mismo criterio idempotente
+            # que las migraciones). Una vez en v2, deja de coincidir → no-op.
+            try:
+                conn.execute(
+                    "UPDATE config_parametros SET valor=? "
+                    "WHERE clave='AP24_PROMPT_MAESTRO' AND valor=?",
+                    (_AP24_PROMPT_MAESTRO_V2, _AP24_PROMPT_MAESTRO_V1),
+                )
+            except sqlite3.OperationalError:
+                pass
             # Seed dummy de reportes (solo si la tabla está vacía) — para que la
             # interfaz de Fase 3-1 no se vea vacía. Se genera una sola vez.
             try:

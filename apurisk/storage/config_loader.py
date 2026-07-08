@@ -2718,8 +2718,9 @@ def cargar_parametros_ap24(db_path: str) -> dict:
 def articulos_ultimas_24h(db_path: str, limite: int = 120) -> list:
     """Artículos capturados en las últimas 24h (hora Lima), recientes primero.
 
-    Devuelve [{title, source_name, capturado_en, summary}]. Para el material del
-    Análisis Político y la tabla de titulares del PDF.
+    Devuelve [{title, source_name, capturado_en, summary, url}]. Para el material
+    del Análisis Político (AP24 v2: se envía la URL de cada artículo a la API,
+    con atribución obligatoria) y la tabla de titulares del PDF.
     """
     from datetime import timedelta
     from ..utils.timezone_pe import now_pe
@@ -2727,7 +2728,7 @@ def articulos_ultimas_24h(db_path: str, limite: int = 120) -> list:
     try:
         with _conn(db_path) as c:
             rows = c.execute(
-                "SELECT title, source_name, capturado_en, summary FROM articulos "
+                "SELECT title, source_name, capturado_en, summary, url FROM articulos "
                 "WHERE capturado_en >= ? OR published >= ? "
                 "ORDER BY capturado_en DESC LIMIT ?",
                 (cutoff, cutoff, int(limite)),
