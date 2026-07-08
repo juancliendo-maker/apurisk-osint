@@ -14,6 +14,7 @@ Provee:
   · construir_demo_pdf(): arma la página demo con todos los componentes.
 """
 from __future__ import annotations
+import math
 from pathlib import Path
 from io import BytesIO
 
@@ -28,7 +29,7 @@ from reportlab.platypus import (
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.graphics.shapes import Drawing, Circle, String, Rect, Line, Polygon
+from reportlab.graphics.shapes import Drawing, Circle, String, Rect, Line, Polygon, Wedge
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
 
 _STATIC = Path(__file__).resolve().parent.parent / "static"
@@ -129,12 +130,18 @@ def estilos() -> dict:
     }
 
 
-def _logo_drawing(svg_path: Path, width: float):
+def _logo_drawing(svg_path: Path, width: float, max_h: float = None):
     """Carga un SVG y lo normaliza a `width` usando sus bounds reales.
 
     Algunos SVG (p.ej. thalos-mark-white) declaran width=2400 con un viewBox
     diminuto → escalar por d.width falla. getBounds() da el bounding box real
     y lo ajustamos exacto, trasladando el contenido al origen.
+
+    max_h: si se pasa y la altura resultante (bh*s) lo excede, se re-escala por
+    altura en vez de por ancho. Evita que un logo ~cuadrado escalado a `width`
+    quede más alto que su contenedor (banda del header) y se recorte por el
+    borde de la página. El Drawing devuelto usa las dimensiones REALES del
+    contenido escalado (bw*s, bh*s) para que el centrado del llamador sea exacto.
     """
     try:
         from svglib.svglib import svg2rlg
@@ -151,9 +158,11 @@ def _logo_drawing(svg_path: Path, width: float):
         if bw <= 0 or bh <= 0:
             return None
         s = width / bw
+        if max_h is not None and bh * s > max_h:
+            s = max_h / bh
         g = Group(*d.contents)
         g.transform = (s, 0, 0, s, -x0 * s, -y0 * s)
-        out = Drawing(width, bh * s)
+        out = Drawing(bw * s, bh * s)
         out.add(g)
         return out
     except Exception:
@@ -170,7 +179,10 @@ def header_footer(canvas, doc):
     band_h = 0.55 * inch
     canvas.setFillColor(NAVY)
     canvas.rect(0, PAGE_H - band_h, PAGE_W, band_h, fill=1, stroke=0)
-    logo = _logo_drawing(LOGO_WHITE_SVG, width=0.8 * inch)
+    # Logo acotado en altura al alto de la banda (con ~8pt de padding vertical)
+    # para que el globo se vea COMPLETO y proporcionado, sin recortarse por el
+    # borde superior de la página.
+    logo = _logo_drawing(LOGO_WHITE_SVG, width=0.8 * inch, max_h=band_h - 8)
     if logo is not None:
         logo.drawOn(canvas, MARGEN_LAT, PAGE_H - band_h + (band_h - logo.height) / 2)
     else:
@@ -200,20 +212,21 @@ def header_footer(canvas, doc):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PORTADA — full-bleed navy + acento vertical oro + logo + metadata
+# PORTADA — full-bleed navy sólido (un solo color) + logo + metadata
 # ══════════════════════════════════════════════════════════════════════════════
 
 def dibujar_portada(canvas, doc):
-    """Portada full-bleed (callback onFirstPage): navy + acento oro + logo + meta."""
+    """Portada full-bleed (callback onFirstPage): navy sólido + logo + meta.
+
+    Sin banda/acento lateral: la portada es de UN SOLO COLOR (Navy #0F3A66),
+    limpia. Los acentos oro quedan solo en la línea divisora y el tagline.
+    """
     p = doc._portada
     c = canvas
     c.saveState()
     # fondo navy full-bleed (coords absolutas de página)
     c.setFillColor(NAVY)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
-    # acento vertical oro (0.3")
-    c.setFillColor(ORO)
-    c.rect(0, 0, 0.3 * inch, PAGE_H, fill=1, stroke=0)
     cx = PAGE_W / 2
     # logo centrado (mark blanco), moderado y por encima del título
     logo = _logo_drawing(LOGO_WHITE_SVG, width=1.5 * inch)
@@ -395,6 +408,105 @@ def _leyenda_riesgo() -> Drawing:
                      fillColor=GRIS_CUERPO))
         x += 108
     return d
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VELOCÍMETRO (GAUGE) DEL SCORE GLOBAL — componente reutilizable
+# ══════════════════════════════════════════════════════════════════════════════
+# Bandas discretas del Score Global (0-100). Fuente única de verdad del gauge:
+# gobiernan la banda del arco, el color de la aguja/número y la etiqueta de nivel.
+# Preservan los cortes del motor (45 y 70) y añaden verde (bajo) y el split
+# superior (MUY ALTO / CRÍTICO) pedidos por el Coronel. Paleta THALOS.
+GAUGE_BANDAS = [
+    (0,  20,  "BAJO",     VERDE_INFO),
+    (20, 45,  "MODERADO", AMARILLO_BAJO),
+    (45, 70,  "ALTO",     NARANJA_MOD),
+    (70, 88,  "MUY ALTO", AMBAR_ALTO),
+    (88, 100, "CRÍTICO",  ROJO_CRIT),
+]
+
+
+def nivel_score(score: float):
+    """Devuelve (etiqueta, color) del Score Global según GAUGE_BANDAS."""
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        s = 0.0
+    s = max(0.0, min(100.0, s))
+    for lo, hi, lbl, col in GAUGE_BANDAS:
+        if lo <= s <= hi:
+            return lbl, col
+    return GAUGE_BANDAS[-1][2], GAUGE_BANDAS[-1][3]
+
+
+def _gauge_ang(score: float) -> float:
+    """Ángulo (grados) del semicírculo: score 0 → 180° (izq), 100 → 0° (der)."""
+    s = max(0.0, min(100.0, float(score)))
+    return 180.0 - (s / 100.0) * 180.0
+
+
+def gauge_score(score: float, width: float = 260) -> Drawing:
+    """Velocímetro del Score Global: semicírculo 0-100 con bandas de color,
+    aguja al valor actual, y número + etiqueta de nivel debajo del eje.
+
+    Dibujado con primitivas reportlab (Wedge/Polygon/Circle/String) — sin
+    dependencias nuevas (matplotlib NO está en el servidor de Render)."""
+    try:
+        sc = max(0.0, min(100.0, float(score)))
+    except (TypeError, ValueError):
+        sc = 0.0
+    R = width / 2.0 - 8
+    r = R * 0.60
+    cx = width / 2.0
+    cy = 52                      # eje elevado: deja sitio abajo para el texto
+    d = Drawing(width, cy + R + 8)
+    # bandas anulares
+    for lo, hi, lbl, col in GAUGE_BANDAS:
+        d.add(Wedge(cx, cy, R, _gauge_ang(hi), _gauge_ang(lo), radius1=r,
+                    fillColor=col, strokeColor=BLANCO, strokeWidth=1))
+    lbl, col = nivel_score(sc)
+    # aguja (triángulo esbelto) + cubo central
+    ang = math.radians(_gauge_ang(sc))
+    perp = ang + math.pi / 2
+    tip = (cx + (R - 4) * math.cos(ang), cy + (R - 4) * math.sin(ang))
+    b1 = (cx + 5 * math.cos(perp), cy + 5 * math.sin(perp))
+    b2 = (cx - 5 * math.cos(perp), cy - 5 * math.sin(perp))
+    d.add(Polygon([tip[0], tip[1], b1[0], b1[1], b2[0], b2[1]],
+                  fillColor=NAVY, strokeColor=NAVY))
+    d.add(Circle(cx, cy, 8, fillColor=NAVY, strokeColor=ORO, strokeWidth=1.2))
+    # marcas de escala 0 y 100 (bajo la base del arco, sin tocar las bandas)
+    d.add(String(cx - R + 1, cy - 11, "0", fontName=FONT_BODY, fontSize=8,
+                 fillColor=GRIS_META, textAnchor="middle"))
+    d.add(String(cx + R - 1, cy - 11, "100", fontName=FONT_BODY, fontSize=8,
+                 fillColor=GRIS_META, textAnchor="middle"))
+    # número + etiqueta de nivel, debajo del eje, en el color de la banda
+    d.add(String(cx, cy - 30, f"{sc:.0f}", fontName=FONT_TITLE, fontSize=28,
+                 fillColor=col, textAnchor="middle"))
+    d.add(String(cx, cy - 44, lbl, fontName=FONT_TITLE, fontSize=11,
+                 fillColor=col, textAnchor="middle"))
+    return d
+
+
+def bloque_score_gauge(riesgo: dict, st: dict) -> list:
+    """Bloque 'Score Global · Riesgo Nacional' con el velocímetro dentro de una
+    tarjeta THALOS (gris claro, borde oro). Reemplaza el número grande.
+    Reutilizable por cualquier reporte que muestre el Score Global."""
+    score = (riesgo or {}).get("global", 0)
+    lbl = Paragraph("Score Global · Riesgo Nacional",
+                    ParagraphStyle("sg_lbl", fontName=FONT_BODY, fontSize=10,
+                                   textColor=GRIS_META))
+    card = Table([[gauge_score(score, width=2.9 * inch)]],
+                 colWidths=[PAGE_W - 2 * MARGEN_LAT])
+    card.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BOX", (0, 0), (-1, -1), 1.2, ORO),
+        ("ROUNDEDCORNERS", [6, 6, 6, 6]),
+        ("BACKGROUND", (0, 0), (-1, -1), GRIS_CLARO),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    return [lbl, Spacer(1, 4), card]
 
 
 def grafico_tendencia() -> Drawing:

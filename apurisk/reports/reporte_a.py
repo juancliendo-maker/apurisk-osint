@@ -102,30 +102,10 @@ def _leer_datos(db_path: str, snapshot: dict, construir_semaforo):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _score_global_bloque(riesgo: dict, st: dict):
-    score = riesgo.get("global", 0)
-    nivel = riesgo.get("nivel", "—")
-    col = _color_nivel_nacional(nivel)
-    inner = Table([[
-        Paragraph(f'<font size="46">{_fmt(score,0)}</font>',
-                  ParagraphStyle("sg", fontName=T.FONT_TITLE, fontSize=46,
-                                 textColor=col, alignment=TA_CENTER, leading=50)),
-        Paragraph(f'{escape_txt(str(nivel).upper())}',
-                  ParagraphStyle("sn", fontName=T.FONT_TITLE, fontSize=20,
-                                 textColor=col, alignment=TA_LEFT, leading=24)),
-    ]], colWidths=[2.2 * inch, 3.3 * inch])
-    inner.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOX", (0, 0), (-1, -1), 1.2, T.ORO),
-        ("ROUNDEDCORNERS", [6, 6, 6, 6]),
-        ("BACKGROUND", (0, 0), (-1, -1), T.GRIS_CLARO),
-        ("LEFTPADDING", (0, 0), (-1, -1), 16),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-    ]))
-    lbl = Paragraph("Score Global · Riesgo Nacional",
-                    ParagraphStyle("l", fontName=T.FONT_BODY, fontSize=10,
-                                   textColor=T.GRIS_META))
-    return [lbl, Spacer(1, 4), inner]
+    """Bloque del Score Global. Delega en el VELOCÍMETRO reutilizable de la
+    plantilla base (T.bloque_score_gauge): sustituye el número grande por el
+    gauge de aguja. El nivel/color los deriva el gauge de GAUGE_BANDAS."""
+    return T.bloque_score_gauge(riesgo, st)
 
 
 def _grid_temas(globos: list, st: dict):
