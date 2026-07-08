@@ -285,7 +285,10 @@ def _render_narrativa(secciones: list, st: dict, filas_hechos: list,
                       articulos: list) -> list:
     S = []
     for enc, cuerpo in secciones:
-        display = enc.title()
+        # Mayúscula sostenida: propio de un briefing de inteligencia y evita
+        # capitalizar artículos/preposiciones ("En", "Las") como haría Title Case
+        # en español. enc ya es el nombre canónico de la sección.
+        display = enc.upper()
         if enc == "HECHOS CITADOS":
             contenido = _contenido_hechos(filas_hechos, articulos, st)
         else:
@@ -395,7 +398,7 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
         S.append(Paragraph("Se presenta la foto de métricas y los hechos del día "
                             "como respaldo.", st["body"]))
         S.append(Spacer(1, 6))
-        S += _bloque_seccion("Hechos Citados", _contenido_hechos([], articulos, st), st)
+        S += _bloque_seccion("HECHOS CITADOS", _contenido_hechos([], articulos, st), st)
 
     # Tablero de métricas (grid 8 temas + Score Nacional) — foto de contexto.
     # Fluye tras la narrativa (sin PageBreak forzado, para no dejar huecos); el
