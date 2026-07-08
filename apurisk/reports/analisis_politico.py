@@ -23,18 +23,25 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
+    KeepTogether,
 )
 
 from . import thalos_base as T
 from .reporte_a import _grid_temas, _score_global_bloque, _fmt, escape_txt
 
-_SECCIONES = ["SÍNTESIS DEL DÍA", "DESARROLLOS PRINCIPALES",
-              "CONEXIONES Y CONTEXTO", "NOTA DE MATERIAL"]
+# Secciones v2 (el prompt maestro v2 las exige en este orden). Se tolera el
+# encabezado viejo "DESARROLLOS PRINCIPALES" como fallback de transición.
+_SECCIONES = ["SÍNTESIS DEL DÍA", "LAS ÚLTIMAS 24 HORAS EN DESARROLLO",
+              "DESARROLLOS PRINCIPALES",   # fallback v1 (transición)
+              "CONEXIONES Y CONTEXTO", "HECHOS CITADOS", "NOTA DE MATERIAL"]
 
 
 def _material_para_llm(articulos: list, globos: list, riesgo: dict,
                        actores: list, ahora_iso: str) -> str:
-    """Arma el bloque de material (hechos + métricas) que se envía como user."""
+    """Arma el bloque de material (hechos + métricas) que se envía como user.
+
+    Cada artículo incluye su URL (si existe) para que el modelo la cite tal cual.
+    """
     lineas = [f"FECHA/HORA (Lima): {ahora_iso}",
               "VENTANA: últimas 24 horas.", "",
               "=== MÉTRICAS DEL MOTOR (para contexto, no para copiar como cifras) ===",
@@ -48,20 +55,53 @@ def _material_para_llm(articulos: list, globos: list, riesgo: dict,
         lineas.append("Actores de mayor peso: " +
                       ", ".join(f"{a.get('nombre','?')} (peso {a.get('peso_calculado',0):.0f})"
                                 for a in actores[:5]))
-    lineas += ["", f"=== HECHOS DEL DÍA — {len(articulos)} titulares de fuentes abiertas ==="]
+    lineas += ["", f"=== HECHOS DEL DÍA — {len(articulos)} titulares de fuentes abiertas ===",
+               "Formato: título | fuente | fecha-hora Lima | URL | resumen"]
     for a in articulos:
         fecha = (a.get("capturado_en") or "")[:16].replace("T", " ")
         fuente = a.get("source_name") or "fuente"
         titulo = (a.get("title") or "").strip()
         resumen = (a.get("summary") or "").strip()
-        item = f"- [{fuente}] {titulo}"
+        url = (a.get("url") or "").strip()
+        partes = [titulo, fuente, fecha]
+        if url:
+            partes.append(url)
         if resumen:
-            item += f" — {resumen[:220]}"
-        lineas.append(item)
+            partes.append(resumen[:220])
+        lineas.append("- " + " | ".join(partes))
     lineas += ["", "Redacta el Análisis Político siguiendo EXACTAMENTE la estructura "
-               "y las reglas del system. Solo estos hechos; cita la fuente entre "
-               "paréntesis al mencionar un hecho concreto."]
+               "y las reglas del system. Solo estos hechos; cita fuente y URL tal "
+               "como fueron provistos."]
     return "\n".join(lineas)
+
+
+def sanitizar_narrativa(texto: str) -> str:
+    """Cinturón-y-tirantes: limpia la salida del modelo aunque el prompt v2 ya
+    prohíba el marcado. No rompe la lista numerada de HECHOS CITADOS ([n].)."""
+    import re
+    if not texto:
+        return texto
+    t = texto
+    # negritas/cursivas markdown → conservar el texto interior
+    t = re.sub(r"\*\*(.+?)\*\*", r"\1", t, flags=re.S)
+    t = re.sub(r"\*(.+?)\*", r"\1", t, flags=re.S)
+    t = t.replace("*", "")
+    # almohadillas de encabezado al inicio de línea
+    t = re.sub(r"(?m)^\s*#{1,6}\s*", "", t)
+    # comillas tipográficas → rectas
+    t = t.replace("“", '"').replace("”", '"')
+    t = t.replace("‘", "'").replace("’", "'")
+    # viñetas de símbolo al inicio de línea SOLO si el resto es prosa
+    # (no tocar líneas numeradas tipo "[n]." o "n." de HECHOS CITADOS)
+    def _quitar_vineta(m):
+        resto = m.group(1)
+        if re.match(r"^\[?\d+\]?[\.\)]", resto):
+            return m.group(0)  # línea numerada: intacta
+        return resto
+    t = re.sub(r"(?m)^\s*[•\-–]\s+(.*)$", _quitar_vineta, t)
+    # colapsar 3+ saltos de línea a máximo 2
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
 
 
 def _parsear_secciones(texto: str) -> list:
@@ -69,7 +109,6 @@ def _parsear_secciones(texto: str) -> list:
     import re
     if not texto:
         return []
-    # localizar posiciones de cada encabezado (tolerante a mayúsculas/guiones)
     marcas = []
     for sec in _SECCIONES:
         m = re.search(re.escape(sec), texto, re.IGNORECASE)
@@ -87,15 +126,71 @@ def _parsear_secciones(texto: str) -> list:
     return out
 
 
-def _render_narrativa(secciones: list, st: dict) -> list:
+def parsear_hechos_citados(cuerpo: str, urls_material: set) -> list:
+    """Parsea la sección HECHOS CITADOS: líneas '[n]. título | fuente | URL'.
+
+    Anti-invención: solo se conservan URLs que EXISTEN en el material enviado;
+    si una URL no matchea, el hecho se conserva SIN URL. Devuelve
+    [{titulo, fuente, url}] en el orden del modelo; [] si no parsea nada.
+    """
+    import re
+    hechos = []
+    for linea in (cuerpo or "").split("\n"):
+        linea = linea.strip()
+        m = re.match(r"^\[?(\d+)\]?[\.\)]\s*(.+)$", linea)
+        if not m:
+            continue
+        partes = [p.strip() for p in m.group(2).split("|")]
+        if not partes or not partes[0]:
+            continue
+        titulo = partes[0]
+        fuente = partes[1] if len(partes) > 1 else "—"
+        url = ""
+        if len(partes) > 2:
+            candidata = partes[2].strip()
+            if candidata in urls_material:
+                url = candidata
+        hechos.append({"titulo": titulo, "fuente": fuente, "url": url})
+    return hechos
+
+
+def _url_corta(url: str, max_len: int = 58) -> str:
+    """Versión visual truncada de la URL (dominio + ruta corta)."""
+    u = url.replace("https://", "").replace("http://", "")
+    return u if len(u) <= max_len else u[:max_len - 1] + "…"
+
+
+def _linkificar(texto_escapado: str, urls_material: set) -> str:
+    """Convierte URLs del material presentes en el texto en links clicables,
+    mostrados en pequeño y gris. Solo URLs que existen en el material."""
+    out = texto_escapado
+    for u in urls_material:
+        esc = escape_txt(u)
+        if esc in out:
+            out = out.replace(
+                esc,
+                f'<link href="{esc}"><font size="9" color="#999999">{escape_txt(_url_corta(u))}</font></link>')
+    return out
+
+
+def _render_narrativa(secciones: list, st: dict, urls_material: set) -> list:
+    """Render de las secciones de prosa. HECHOS CITADOS NO se renderiza aquí
+    (alimenta la tabla de hechos). Títulos con KeepTogether (sin huérfanos)."""
     S = []
     for enc, cuerpo in secciones:
-        S.append(Paragraph(escape_txt(enc.title()), st["h2"]))
-        S.append(T.linea_oro())
-        # cada párrafo/línea del cuerpo
-        for parte in [p for p in cuerpo.split("\n") if p.strip()]:
-            S.append(Paragraph(escape_txt(parte.strip()), st["body"]))
-        S.append(Spacer(1, 8))
+        if enc == "HECHOS CITADOS":
+            continue
+        parrafos = [p.strip() for p in cuerpo.split("\n") if p.strip()]
+        flow = [Paragraph(_linkificar(escape_txt(p), urls_material), st["body"])
+                for p in parrafos]
+        titulo = [Paragraph(escape_txt(enc.title()), st["h2"]), T.linea_oro()]
+        if flow:
+            # título + primer párrafo juntos: un encabezado nunca queda huérfano
+            S.append(KeepTogether(titulo + flow[:1]))
+            S.extend(flow[1:])
+        else:
+            S.append(KeepTogether(titulo))
+        S.append(Spacer(1, 6))
     return S
 
 
@@ -176,41 +271,79 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
             "sujeta a revisión analítica. No sustituye el juicio del analista.", st))
         S.append(Spacer(1, 10))
 
+    # URLs del material: la única fuente de verdad para links (anti-invención)
+    urls_material = {(a.get("url") or "").strip() for a in articulos if (a.get("url") or "").strip()}
+
+    hechos_citados = []
     if not degradado:
+        # Sanitización cinturón-y-tirantes ANTES de parsear/renderizar
+        narrativa = sanitizar_narrativa(narrativa)
         secciones = _parsear_secciones(narrativa)
-        S += _render_narrativa(secciones, st)
+        # Coherencia estructural: HECHOS CITADOS del modelo alimenta la tabla
+        cuerpo_hc = next((c for e, c in secciones if e == "HECHOS CITADOS"), "")
+        hechos_citados = parsear_hechos_citados(cuerpo_hc, urls_material)
+        S += _render_narrativa(secciones, st, urls_material)
     else:
-        S.append(Paragraph("Narrativa no disponible", st["h2"]))
-        S.append(T.linea_oro())
-        S.append(Paragraph(escape_txt(nota_deg), st["body"]))
-        S.append(Paragraph("Se presenta la foto de métricas y los titulares del día "
-                            "como respaldo.", st["body"]))
+        S.append(KeepTogether([
+            Paragraph("Narrativa no disponible", st["h2"]),
+            T.linea_oro(),
+            Paragraph(escape_txt(nota_deg), st["body"]),
+            Paragraph("Se presenta la foto de métricas y los titulares del día "
+                      "como respaldo.", st["body"]),
+        ]))
 
     # Tablero de métricas (grid 8 temas + Score Nacional) — junto a la prosa
-    S.append(Spacer(1, 6))
-    S.append(Paragraph("Tablero de métricas (semáforo 24h)", st["h2"]))
-    S.append(T.linea_oro())
-    S += _score_global_bloque(riesgo, st)
+    S.append(KeepTogether(
+        [Paragraph("Tablero de métricas (semáforo 24h)", st["h2"]), T.linea_oro()]
+        + _score_global_bloque(riesgo, st)))
     S.append(Spacer(1, 8))
     if globos:
         S.append(_grid_temas(globos, st))
-        S.append(Spacer(1, 6))
+        S.append(Spacer(1, 4))
         S.append(T._leyenda_riesgo())
 
     S.append(PageBreak())
 
-    # ── Hechos destacados + integridad ──
-    S.append(Paragraph("Hechos destacados", st["h1"]))
-    S.append(T.linea_oro())
-    if articulos:
-        filas = [[(a.get("title") or "")[:90], (a.get("source_name") or "—")[:22],
-                  (a.get("capturado_en") or "")[:16].replace("T", " ")]
-                 for a in articulos[:15]]
-        S.append(T.tabla_profesional(["Titular", "Fuente", "Hora (Lima)"], filas,
-                                     [3.4 * inch, 1.4 * inch, 1.3 * inch]))
+    # ── Hechos citados + integridad ──
+    # La tabla se construye desde la sección HECHOS CITADOS del modelo (mismo
+    # orden de prioridad de la narrativa). Fallback: top titulares desde BD.
+    usar_citados = bool(hechos_citados)
+    if not usar_citados and not degradado:
+        print("[ap24] HECHOS CITADOS no parseó — fallback a titulares de BD")
+    titulo_hechos = "Hechos citados" if usar_citados else "Hechos destacados"
+    filas = []
+    if usar_citados:
+        for h in hechos_citados[:15]:
+            celda_titulo = escape_txt(h["titulo"][:90])
+            if h["url"]:
+                celda_titulo += (f'<br/><link href="{escape_txt(h["url"])}">'
+                                 f'<font size="9" color="#999999">{escape_txt(_url_corta(h["url"]))}</font></link>')
+            filas.append([celda_titulo, escape_txt(h["fuente"][:22])])
+        headers = ["Hecho (con enlace)", "Fuente"]
+        widths = [4.6 * inch, 1.5 * inch]
+    elif articulos:
+        for a in articulos[:15]:
+            celda_titulo = escape_txt((a.get("title") or "")[:90])
+            u = (a.get("url") or "").strip()
+            if u:
+                celda_titulo += (f'<br/><link href="{escape_txt(u)}">'
+                                 f'<font size="9" color="#999999">{escape_txt(_url_corta(u))}</font></link>')
+            filas.append([celda_titulo, escape_txt((a.get("source_name") or "—")[:22]),
+                          (a.get("capturado_en") or "")[:16].replace("T", " ")])
+        headers = ["Titular", "Fuente", "Hora (Lima)"]
+        widths = [3.4 * inch, 1.4 * inch, 1.3 * inch]
+    if filas:
+        # KeepTogether: si no cabe entero, reportlab lo parte igual (degrada con
+        # gracia) y la tabla repite su header (repeatRows=1). Lo que evita es el
+        # título huérfano al pie de página.
+        S.append(KeepTogether([
+            Paragraph(titulo_hechos, st["h1"]), T.linea_oro(),
+            T.tabla_profesional(headers, filas, widths)]))
     else:
-        S.append(Paragraph("Sin titulares en las últimas 24h.", st["body"]))
-    S.append(Spacer(1, 12))
+        S.append(KeepTogether([
+            Paragraph(titulo_hechos, st["h1"]), T.linea_oro(),
+            Paragraph("Sin titulares en las últimas 24h.", st["body"])]))
+    S.append(Spacer(1, 10))
     cb = conteos_bd or {}
     partes = []
     if cb.get("total") is not None:
