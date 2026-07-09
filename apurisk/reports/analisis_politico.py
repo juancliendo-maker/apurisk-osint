@@ -170,6 +170,41 @@ def _detectar_seccion(linea: str):
     return None
 
 
+# Formas normalizadas EXACTAS de los encabezados (para limpiar marcadores que el
+# modelo deja colgando dentro del cuerpo, p.ej. "LAS ÚLTIMAS 24 HORAS EN
+# DESARROLLO" al final de SÍNTESIS). Match exacto → seguro (no borra prosa que
+# apenas contenga una palabra suelta como "desarrollo").
+_MARCADORES_NORM = {
+    _norm_hdr(x) for x in (
+        "SÍNTESIS DEL DÍA", "LAS ÚLTIMAS 24 HORAS EN DESARROLLO",
+        "ÚLTIMAS 24 HORAS EN DESARROLLO", "DESARROLLOS PRINCIPALES",
+        "CONEXIONES Y CONTEXTO", "HECHOS CITADOS", "NOTA DE MATERIAL",
+    )
+}
+
+
+def _limpiar_cuerpo(cuerpo: str) -> str:
+    """Quita marcadores de sección que se filtraron dentro de un cuerpo:
+    - líneas que SON exactamente un encabezado (marcador huérfano);
+    - un encabezado pegado al final del último párrafo (las últimas k palabras
+      normalizan a un encabezado exacto). Match exacto → no borra prosa legítima.
+    """
+    if not cuerpo:
+        return cuerpo
+    lineas = [ln for ln in cuerpo.split("\n") if _norm_hdr(ln) not in _MARCADORES_NORM]
+    txt = "\n".join(lineas).strip()
+    palabras = txt.split()
+    # greedy: probar la cola MÁS LARGA primero, para no dejar restos ("LAS")
+    # cuando el marcador existe con y sin artículo inicial en _MARCADORES_NORM.
+    for k in range(min(7, len(palabras) - 1), 1, -1):
+        if _norm_hdr(" ".join(palabras[-k:])) in _MARCADORES_NORM:
+            # conservar el punto final de la oración; quitar solo separadores
+            # de marcador (— : ; y espacios), no el punto ni la coma legítimos.
+            txt = " ".join(palabras[:-k]).rstrip(" \t—–:;·")
+            break
+    return txt.strip()
+
+
 def _parsear_secciones(texto: str) -> list:
     """Divide la salida del LLM en [(sección_canónica, cuerpo)] de forma ROBUSTA.
 
@@ -177,7 +212,8 @@ def _parsear_secciones(texto: str) -> list:
     espacios, dos puntos finales y numeración/markdown. Anti-pérdida: cualquier
     texto antes del primer encabezado se conserva (se antepone a la 1ª sección);
     si NO se detecta ningún encabezado, se vuelca todo el texto bajo un
-    encabezado genérico (nunca se descarta contenido).
+    encabezado genérico (nunca se descarta contenido). Cada cuerpo se limpia de
+    marcadores de sección filtrados.
     """
     if not texto or not texto.strip():
         return []
@@ -200,7 +236,7 @@ def _parsear_secciones(texto: str) -> list:
         cuerpo = "\n".join(lineas[idx + 1:fin]).strip().lstrip("—-:").strip()
         if j == 0 and preambulo:
             cuerpo = (preambulo + "\n" + cuerpo).strip()
-        out.append((canon, cuerpo))
+        out.append((canon, _limpiar_cuerpo(cuerpo)))
     return out
 
 
@@ -357,10 +393,25 @@ def _contenido_hechos(filas: list, articulos: list, st: dict) -> list:
     return [_tabla_hechos_bd(articulos)]
 
 
-def _bloque_seccion(titulo: str, contenido: list, st: dict) -> list:
-    """Título + línea de oro + contenido, con el título pegado a su primer
-    flowable (KeepTogether) para que nunca quede huérfano al pie de página."""
-    cab = [Paragraph(escape_txt(titulo), st["h2"]), T.linea_oro()]
+def _encabezado_seccion(enc: str, st: dict) -> Paragraph:
+    """Encabezado de sección. Caso especial (punto 1): la sección de desarrollos
+    se rotula como título grande "RIESGO POLÍTICO" + bajada pequeña, en tipo
+    oración y mismo color, en la MISMA línea. El resto: mayúscula sostenida."""
+    if enc == "LAS ÚLTIMAS 24 HORAS EN DESARROLLO":
+        h2 = st["h2"]
+        estilo = ParagraphStyle("sec_dev", parent=h2, leading=h2.fontSize + 4)
+        # h2.fontSize (título) grande; bajada más pequeña, mismo color (NAVY)
+        return Paragraph(
+            f'<font size="{h2.fontSize:.0f}">RIESGO POLÍTICO</font>'
+            f'<font size="13">&nbsp;&nbsp;Las últimas 24 horas en desarrollo</font>',
+            estilo)
+    return Paragraph(escape_txt(enc.upper()), st["h2"])
+
+
+def _bloque_seccion(header, contenido: list) -> list:
+    """Encabezado (Paragraph) + línea de oro + contenido, con el encabezado
+    pegado a su primer flowable (KeepTogether) para que nunca quede huérfano."""
+    cab = [header, T.linea_oro()]
     if contenido:
         return [KeepTogether(cab + [contenido[0]])] + contenido[1:]
     return [KeepTogether(cab)]
@@ -415,8 +466,22 @@ def _linkificar_prosa(raw: str, urls_ok: dict) -> str:
     return s
 
 
+# Subtítulo de bloque: el modelo lo prefija con «» » (marcador del prompt v4).
+_RE_SUBTITULO = re.compile(r"^\s*[»›▸]+\s*(.+)$")
+
+
+def _estilo_subtitulo(st: dict) -> ParagraphStyle:
+    """Subtítulo temático de bloque: negrita, algo mayor que el cuerpo, resalta."""
+    return ParagraphStyle("dev_sub", fontName=T.FONT_TITLE, fontSize=12.5,
+                          leading=15, textColor=T.NAVY, spaceBefore=6, spaceAfter=2)
+
+
 def _parrafo_prosa(linea: str, urls_ok: dict, st: dict) -> Paragraph:
-    """Párrafo de prosa con URLs crudas convertidas a enlace limpio."""
+    """Párrafo de prosa. Si la línea es un subtítulo de bloque (prefijo »), se
+    renderiza en negrita/resaltado; si no, prosa con URLs limpias."""
+    m = _RE_SUBTITULO.match(linea)
+    if m:
+        return Paragraph(f"<b>{escape_txt(m.group(1).strip())}</b>", _estilo_subtitulo(st))
     return Paragraph(_linkificar_prosa(linea.strip(), urls_ok), st["body"])
 
 
@@ -424,18 +489,30 @@ def _render_narrativa(secciones: list, st: dict, filas_hechos: list,
                       articulos: list, urls_ok: dict) -> list:
     S = []
     for enc, cuerpo in secciones:
-        # Mayúscula sostenida: propio de un briefing de inteligencia y evita
-        # capitalizar artículos/preposiciones ("En", "Las") como haría Title Case
-        # en español. enc ya es el nombre canónico de la sección.
-        display = enc.upper()
         if enc == "HECHOS CITADOS":
             contenido = _contenido_hechos(filas_hechos, articulos, st)
         else:
             contenido = [_parrafo_prosa(p, urls_ok, st)
                          for p in cuerpo.split("\n") if p.strip()]
-        S += _bloque_seccion(display, contenido, st)
+        S += _bloque_seccion(_encabezado_seccion(enc, st), contenido)
         S.append(Spacer(1, 6))
     return S
+
+
+def _nota_pesos_score() -> str:
+    """Nota metodológica (punto 5): explica en lenguaje simple que el Score
+    Global NO es el promedio de los riesgos, con los pesos REALES leídos del
+    motor (config.yaml → score_engine). None si no se pueden leer."""
+    from ..storage.config_loader import cargar_pesos_score_nacional
+    info = cargar_pesos_score_nacional()
+    pesos = info.get("pesos") or []
+    if not pesos:
+        return None
+    detalle = "; ".join(f"{et} {p}%" for et, p in pesos)
+    return ("El Score Global no es el promedio de los riesgos mostrados debajo. "
+            "Cada dimensión pondera distinto según su impacto en la estabilidad "
+            f"nacional: {detalle}. Por eso el valor integral puede diferir del "
+            "promedio simple de los indicadores.")
 
 
 def generar_analisis_politico_24h(db_path: str, snapshot: dict,
@@ -547,19 +624,24 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
         S.append(Paragraph("Se presenta la foto de métricas y los hechos del día "
                             "como respaldo.", st["body"]))
         S.append(Spacer(1, 6))
-        S += _bloque_seccion("HECHOS CITADOS", _contenido_hechos([], articulos, st), st)
+        S += _bloque_seccion(_encabezado_seccion("HECHOS CITADOS", st),
+                             _contenido_hechos([], articulos, st))
 
-    # Tablero de métricas (grid 8 temas + Score Nacional) — foto de contexto.
-    # Fluye tras la narrativa (sin PageBreak forzado, para no dejar huecos); el
-    # título se mantiene con su primer bloque para no quedar huérfano.
-    S.append(Spacer(1, 14))
-    S += _bloque_seccion("Tablero de métricas (semáforo 24h)",
-                         _score_global_bloque(riesgo, st), st)
-    S.append(Spacer(1, 8))
+    # ── Velocímetro + tablero de métricas: JUNTOS en su propia página (punto 4).
+    # PageBreak para arrancar en página nueva + KeepTogether para que el bloque
+    # (gauge con nota de pesos + grid de 8 temas + leyenda) no se parta entre
+    # páginas. La nota bajo el gauge lleva los pesos REALES del motor (punto 5).
+    S.append(PageBreak())
+    metricas = []
+    cab_tab = Paragraph("Tablero de métricas (semáforo 24h)", st["h2"])
+    metricas += _bloque_seccion(
+        cab_tab, T.bloque_score_gauge(riesgo, st, nota=_nota_pesos_score()))
+    metricas.append(Spacer(1, 8))
     if globos:
-        S.append(_grid_temas(globos, st))
-        S.append(Spacer(1, 6))
-        S.append(T._leyenda_riesgo())
+        metricas.append(_grid_temas(globos, st))
+        metricas.append(Spacer(1, 6))
+        metricas.append(T._leyenda_riesgo())
+    S.append(KeepTogether(metricas))
     S.append(Spacer(1, 12))
 
     # ── Integridad de datos ──
