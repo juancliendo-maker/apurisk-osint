@@ -109,7 +109,13 @@ def _score_global_bloque(riesgo: dict, st: dict):
 
 
 def _grid_temas(globos: list, st: dict):
-    """Grid 2×4 de los 8 temas, coloreado por gravedad."""
+    """Grid 2×4 de los 8 temas, coloreado por gravedad.
+
+    Nombre (línea[s] de 8.5pt) y número (18pt) van en FILAS separadas con su
+    propio leading — antes iban en un solo Paragraph con leading=13, y el número
+    de 19pt se montaba sobre el nombre (superposición). Ahora cada uno se lee
+    claro aunque el nombre ocupe dos líneas.
+    """
     cell_w = (T.PAGE_W - 2 * T.MARGEN_LAT) / 4
     cell_h = 0.82 * inch
     orden = sorted(globos, key=lambda g: g.get("y", 0), reverse=True)
@@ -119,16 +125,22 @@ def _grid_temas(globos: list, st: dict):
         y = g.get("y", 0)
         col = _color_gravedad(y)
         txtcol = T.NAVY if col == T.AMARILLO_BAJO else T.BLANCO
-        celdas.append(Table([[Paragraph(
-            f'<font size="9">{escape_txt(nom)}</font><br/><font size="19"><b>{_fmt(y,0)}</b></font>',
-            ParagraphStyle("gt", fontName=T.FONT_TITLE, fontSize=9,
-                           textColor=txtcol, alignment=TA_CENTER, leading=13))]],
-            colWidths=[cell_w - 6], rowHeights=[cell_h]))
+        st_nom = ParagraphStyle("gt_nom", fontName=T.FONT_TITLE, fontSize=8.5,
+                                textColor=txtcol, alignment=TA_CENTER, leading=10)
+        st_num = ParagraphStyle("gt_num", fontName=T.FONT_TITLE, fontSize=18,
+                                textColor=txtcol, alignment=TA_CENTER, leading=20)
+        celdas.append(Table(
+            [[Paragraph(escape_txt(nom), st_nom)],
+             [Paragraph(f"<b>{_fmt(y, 0)}</b>", st_num)]],
+            colWidths=[cell_w - 6], rowHeights=[0.46 * inch, 0.36 * inch]))
         celdas[-1].setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), col),
             ("BOX", (0, 0), (-1, -1), 0.5, T.ORO),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER")]))
+            ("VALIGN", (0, 0), (0, 0), "BOTTOM"),   # nombre pegado al número
+            ("VALIGN", (0, 1), (0, 1), "TOP"),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1)]))
     filas = [celdas[i:i + 4] for i in range(0, len(celdas), 4)]
     # completar última fila si falta
     while filas and len(filas[-1]) < 4:

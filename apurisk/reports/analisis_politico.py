@@ -110,133 +110,218 @@ def _material_para_llm(articulos: list, globos: list, riesgo: dict,
                       ", ".join(f"{a.get('nombre','?')} (peso {a.get('peso_calculado',0):.0f})"
                                 for a in actores[:5]))
     lineas += ["", f"=== HECHOS DEL DÍA — {len(articulos)} titulares de fuentes abiertas ===",
-               "Formato por hecho:  título | fuente | fecha (Lima) | URL | resumen.",
-               "Cita la URL EXACTAMENTE como aparece aquí; si un hecho trae "
-               "(sin URL), cita solo la fuente.", ""]
+               "Formato por hecho:  título | fuente | fecha (Lima) | resumen.",
+               "NO se envían URLs: en HECHOS CITADOS escribe solo título | fuente; "
+               "el sistema añade el enlace.", ""]
     for a in articulos:
         fecha = (a.get("capturado_en") or a.get("published") or "")[:16].replace("T", " ")
         fuente = a.get("source_name") or "fuente"
         titulo = (a.get("title") or "").strip()
         resumen = (a.get("summary") or "").strip()
-        url = (a.get("url") or "").strip()
         campos = [titulo or "—", fuente, fecha or "—",
-                  url or "(sin URL)", (resumen[:220] if resumen else "—")]
+                  (resumen[:220] if resumen else "—")]
         lineas.append("- " + " | ".join(campos))
-    lineas += ["", "Redacta el Análisis Político siguiendo EXACTAMENTE la estructura "
-               "y las reglas del system. Usa solo estos hechos; en cada desarrollo "
-               "cita (Fuente — URL) tal como fueron provistas."]
+    lineas += ["", "Redacta el Reporte de Riesgo Político siguiendo EXACTAMENTE la "
+               "estructura y las reglas del system. Usa solo estos hechos; en cada "
+               "desarrollo cita la fuente (según [medio]). No escribas URLs."]
     return "\n".join(lineas)
 
 
-def _parsear_secciones(texto: str) -> list:
-    """Divide la salida del LLM en (encabezado_canónico, cuerpo).
+def _quitar_tildes(s: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", s or "")
+                   if not unicodedata.combining(c))
 
-    Tolerante a mayúsculas y al encabezado viejo (remapeado al nuevo). Si un
-    canónico y su alias aparecen a la vez, se conserva el primero por posición.
+
+def _norm_hdr(linea: str) -> str:
+    """Normaliza una línea para detectar encabezados: sin tildes, MAYÚS, sin
+    numeración/markdown al inicio, sin dos puntos/guiones al final, espacios
+    colapsados."""
+    s = _quitar_tildes(linea).upper().strip()
+    s = re.sub(r"^[\s#>*_\-–—0-9.)(]+", "", s)     # numeración / markdown inicial
+    s = re.sub(r"[\s:：.\-–—_]+$", "", s)            # puntuación final
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+# Firmas tolerantes de cada sección (sobre la línea normalizada). El orden
+# importa: lo más específico primero. Cubren variaciones del modelo (tildes,
+# dos puntos, texto ligeramente distinto del encabezado).
+_SIG_SECCIONES = [
+    ("SÍNTESIS DEL DÍA",                  r"\bSINTESIS\b"),
+    ("LAS ÚLTIMAS 24 HORAS EN DESARROLLO",
+     r"\bULTIMAS?\s+24\s+HORAS\b|\bDESARROLLOS?\s+PRINCIPALES\b|\bDESARROLLO\b"),
+    ("CONEXIONES Y CONTEXTO",             r"\bCONEXION(?:ES)?\b"),
+    ("HECHOS CITADOS",                    r"\bHECHOS\s+CITADOS\b|\bHECHOS\b"),
+    ("NOTA DE MATERIAL",                  r"\bNOTA\b"),
+]
+
+
+def _detectar_seccion(linea: str):
+    """Devuelve la sección canónica si la línea ES un encabezado (tolerante), o
+    None. Exige que la línea sea corta y de pocas palabras (encabezado, no una
+    oración del cuerpo que mencione la palabra)."""
+    norm = _norm_hdr(linea)
+    if not norm or len(norm) > 55 or len(norm.split()) > 8:
+        return None
+    for canon, pat in _SIG_SECCIONES:
+        if re.search(pat, norm):
+            return canon
+    return None
+
+
+def _parsear_secciones(texto: str) -> list:
+    """Divide la salida del LLM en [(sección_canónica, cuerpo)] de forma ROBUSTA.
+
+    Detección de encabezados línea a línea, tolerante a tildes, mayúsc/minúsc,
+    espacios, dos puntos finales y numeración/markdown. Anti-pérdida: cualquier
+    texto antes del primer encabezado se conserva (se antepone a la 1ª sección);
+    si NO se detecta ningún encabezado, se vuelca todo el texto bajo un
+    encabezado genérico (nunca se descarta contenido).
     """
-    if not texto:
+    if not texto or not texto.strip():
         return []
-    marcas = []
-    buscar = list(_SECCIONES) + list(_ALIAS_SECCIONES.keys())
-    for sec in buscar:
-        m = re.search(re.escape(sec), texto, re.IGNORECASE)
-        if m:
-            canon = _ALIAS_SECCIONES.get(sec, sec)
-            marcas.append((m.start(), canon, m.end()))
-    marcas.sort()
+    lineas = texto.split("\n")
+    marcas = []  # (idx_linea, canon)
+    vistos = set()
+    for i, ln in enumerate(lineas):
+        canon = _detectar_seccion(ln)
+        if canon and canon not in vistos:
+            vistos.add(canon)
+            marcas.append((i, canon))
     if not marcas:
-        return [("ANÁLISIS", texto.strip())]
-    # dedup por sección canónica (por si aparecen canónico y alias)
-    vistos, limpias = set(), []
-    for ini, sec, fin in marcas:
-        if sec in vistos:
-            continue
-        vistos.add(sec)
-        limpias.append((ini, sec, fin))
+        # No se pudo segmentar: volcar TODO bajo un encabezado genérico.
+        return [("ANÁLISIS COMPLETO", texto.strip())]
     out = []
-    for i, (ini, sec, fin) in enumerate(limpias):
-        cuerpo_fin = limpias[i + 1][0] if i + 1 < len(limpias) else len(texto)
-        cuerpo = texto[fin:cuerpo_fin].strip().lstrip("—-:").strip()
-        out.append((sec, cuerpo))
+    # preámbulo (texto antes del primer encabezado) → no se pierde
+    preambulo = "\n".join(lineas[:marcas[0][0]]).strip()
+    for j, (idx, canon) in enumerate(marcas):
+        fin = marcas[j + 1][0] if j + 1 < len(marcas) else len(lineas)
+        cuerpo = "\n".join(lineas[idx + 1:fin]).strip().lstrip("—-:").strip()
+        if j == 0 and preambulo:
+            cuerpo = (preambulo + "\n" + cuerpo).strip()
+        out.append((canon, cuerpo))
     return out
 
 
-# ── Parseo de HECHOS CITADOS + anti-invención de URLs ─────────────────────────
+def _secciones_faltantes(secciones: list) -> list:
+    """Cuáles de las 5 secciones esperadas NO se detectaron (para log)."""
+    presentes = {s for s, _ in secciones}
+    return [s for s in _SECCIONES if s not in presentes]
+
+
+# ── HECHOS CITADOS: parseo + enlace LIMPIO (sobre el título) ──────────────────
 def _norm_url(u: str) -> str:
     return (u or "").strip().rstrip("/")
 
 
-def _parse_hechos_citados(cuerpo: str, urls_material: dict) -> list:
-    """Parsea la lista "[n]. título | fuente | URL" de HECHOS CITADOS.
+def _norm_titulo(s: str) -> str:
+    """Normaliza un título para casarlo con la BD (sin tildes, minúsculas, sin
+    puntuación, espacios colapsados)."""
+    s = _quitar_tildes(s or "").lower()
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
-    urls_material: {url_normalizada: url_original} de lo REALMENTE enviado a la
-    API. Anti-invención: si el modelo cita una URL que no está en ese material,
-    se descarta (se imprime el hecho sin URL). Si coincide, se imprime la URL
-    original del material (exacta), no la copia del modelo.
 
-    Devuelve [{n, titulo, fuente, url}] en el orden del reporte.
+def _dominio(url: str) -> str:
+    """Dominio corto (sin esquema ni www) para una etiqueta clicable legible."""
+    m = re.match(r"https?://([^/]+)", url or "")
+    host = (m.group(1) if m else (url or "")).lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _indexar_articulos(articulos: list) -> dict:
+    return {_norm_titulo(a.get("title") or ""): a
+            for a in articulos if (a.get("title") or "").strip()}
+
+
+def _match_articulo(titulo: str, idx: dict, articulos: list):
+    """Casa el título citado por el modelo con un artículo de la BD para
+    recuperar su URL (el enlace NO viene del modelo). Exacto → subcadena →
+    solape de tokens ≥0.6."""
+    nt = _norm_titulo(titulo)
+    if not nt:
+        return None
+    if nt in idx:
+        return idx[nt]
+    for a in articulos:
+        at = _norm_titulo(a.get("title") or "")
+        if at and (nt in at or at in nt) and abs(len(at) - len(nt)) < 40:
+            return a
+    toks = set(nt.split())
+    if not toks:
+        return None
+    mejor, mejor_sc = None, 0.0
+    for a in articulos:
+        at = set(_norm_titulo(a.get("title") or "").split())
+        if not at:
+            continue
+        sc = len(toks & at) / len(toks | at)
+        if sc > mejor_sc:
+            mejor, mejor_sc = a, sc
+    return mejor if mejor_sc >= 0.6 else None
+
+
+def _parse_hechos_citados(cuerpo: str, articulos: list) -> list:
+    """Parsea la lista "[n]. título | fuente" de HECHOS CITADOS y ATA la URL
+    desde la BD (match de título). El enlace NUNCA sale del modelo → no hay
+    URLs crudas ni inventadas. Devuelve [{n, titulo, fuente, url}] en orden.
     """
     filas = []
     if not cuerpo:
         return filas
+    idx = _indexar_articulos(articulos)
     for ln in cuerpo.split("\n"):
         ln = ln.strip()
         m = re.match(r"^\[?(\d+)\]?[.)]\s*(.+)$", ln)
         if not m:
             continue
         n, resto = m.group(1), m.group(2).strip()
-        # extraer URL si aparece en la línea
-        url = ""
-        um = re.search(r"https?://\S+", resto)
-        if um:
-            crudo = um.group(0).rstrip(".,;)]")
-            resto = (resto[:um.start()] + resto[um.end():]).strip()
-            norm = _norm_url(crudo)
-            # anti-invención: solo si estaba en el material enviado
-            url = urls_material.get(norm, "")
+        # descartar cualquier URL cruda que el modelo pudiera haber colado
+        resto = re.sub(r"https?://\S+", "", resto).strip()
         partes = [p.strip(" |[]") for p in re.split(r"\s*\|\s*", resto) if p.strip(" |[]")]
         titulo = partes[0] if partes else resto.strip(" |[]")
         fuente = partes[1] if len(partes) >= 2 else ""
         if not titulo:
             continue
+        art = _match_articulo(titulo, idx, articulos)
+        url = (art.get("url") or "").strip() if art else ""
+        if not fuente and art:
+            fuente = art.get("source_name") or ""
         filas.append({"n": n, "titulo": titulo, "fuente": fuente, "url": url})
     return filas
 
 
-# ── Render de la tabla de HECHOS CITADOS ──────────────────────────────────────
-def _celda_url(url: str, st_u) -> Paragraph:
-    """URL en 9pt gris, clicable y truncada visualmente si es larga."""
-    if not url:
-        return Paragraph("—", st_u)
-    disp = url if len(url) <= 44 else (url[:41] + "…")
-    safe_href = escape_txt(url)
-    safe_disp = escape_txt(disp)
-    return Paragraph(
-        f'<link href="{safe_href}"><font color="#999999">{safe_disp}</font></link>',
-        st_u)
-
-
+# ── Render de la lista de HECHOS CITADOS (enlace limpio sobre el título) ───────
 def _tabla_hechos_citados(filas: list) -> Table:
-    """Tabla de referencias construida desde HECHOS CITADOS (mismo orden)."""
+    """Lista de hechos citados: el TÍTULO es el hipervínculo clicable (limpio,
+    sin ristra de URL cruda). Columnas: N° · Hecho (enlace) · Fuente."""
     st_h = ParagraphStyle("hc_h", fontName=T.FONT_TITLE, fontSize=10,
                           textColor=T.NAVY, leading=12)
     st_n = ParagraphStyle("hc_n", fontName=T.FONT_TITLE, fontSize=10,
                           textColor=T.NAVY, leading=12, alignment=TA_CENTER)
     st_t = ParagraphStyle("hc_t", fontName=T.FONT_BODY, fontSize=10,
                           textColor=T.GRIS_CUERPO, leading=13, alignment=TA_LEFT)
-    st_u = ParagraphStyle("hc_u", fontName=T.FONT_BODY, fontSize=9,
-                          textColor=T.GRIS_META, leading=11, alignment=TA_LEFT)
+    st_link = ParagraphStyle("hc_link", fontName=T.FONT_BODY, fontSize=10,
+                             textColor=T.NAVY, leading=13, alignment=TA_LEFT)
+    st_f = ParagraphStyle("hc_f", fontName=T.FONT_BODY, fontSize=9,
+                          textColor=T.GRIS_META, leading=12, alignment=TA_LEFT)
     data = [[Paragraph("N°", st_h), Paragraph("Hecho citado", st_h),
-             Paragraph("Fuente", st_h), Paragraph("Referencia", st_h)]]
+             Paragraph("Fuente", st_h)]]
     for f in filas:
+        titulo = escape_txt((f["titulo"] or "")[:160])
+        url = (f.get("url") or "").strip()
+        if url:
+            # el enlace va SOBRE el título (texto legible en navy), no la ristra
+            hecho = Paragraph(f'<link href="{escape_txt(url)}">{titulo}</link>', st_link)
+        else:
+            hecho = Paragraph(titulo, st_t)
         data.append([
             Paragraph(escape_txt(str(f["n"])), st_n),
-            Paragraph(escape_txt((f["titulo"] or "")[:140]), st_t),
-            Paragraph(escape_txt((f["fuente"] or "—")[:26]), st_t),
-            _celda_url(f["url"], st_u),
+            hecho,
+            Paragraph(escape_txt((f["fuente"] or "—")[:28]), st_f),
         ])
-    t = Table(data, colWidths=[0.42 * inch, 3.28 * inch, 1.2 * inch, 1.4 * inch],
-              repeatRows=1)
+    t = Table(data, colWidths=[0.42 * inch, 4.28 * inch, 1.5 * inch], repeatRows=1)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), T.GRIS_CLARO),
         ("BOX", (0, 0), (-1, -1), 1, T.ORO),
@@ -281,8 +366,62 @@ def _bloque_seccion(titulo: str, contenido: list, st: dict) -> list:
     return [KeepTogether(cab)]
 
 
+# Alternancia: "(Fuente — URL)" | URL suelta. Se procesa sobre texto CRUDO (para
+# casar la URL con urls_ok, cuyas claves llevan '&' sin escapar) escapando cada
+# segmento literal e insertando los tags con href escapado.
+_LINK_RE = re.compile(
+    r"\(([^()]*?)[\s—,:\-]+(https?://[^\s)]+)\)"   # (Fuente — URL)
+    r"|(https?://[^\s)\]<]+)")                       # URL suelta
+
+
+def _linkificar_prosa(raw: str, urls_ok: dict) -> str:
+    """Convierte cualquier URL cruda del texto en enlace LIMPIO y elimina la
+    ristra de caracteres. Nunca deja el https://... visible como texto.
+
+    - "(Fuente — URL)" → "(Fuente)" con la fuente clicable si la URL es nuestra.
+    - URL suelta → enlace sobre el dominio corto (si es nuestra); si es ajena o
+      no resoluble, se elimina.
+    Devuelve markup seguro (texto escapado + tags <link>). urls_ok:
+    {url_normalizada: url_original}."""
+    raw = raw or ""
+    if "http" not in raw:
+        return escape_txt(raw)
+
+    def _resolver(u):
+        return urls_ok.get(_norm_url(u.rstrip(".,;)]")), "")
+
+    partes, last = [], 0
+    for m in _LINK_RE.finditer(raw):
+        partes.append(escape_txt(raw[last:m.start()]))
+        if m.group(3) is None:  # patrón (Fuente — URL)
+            fuente = (m.group(1) or "").strip(" ,;:—-") or "Fuente"
+            url = _resolver(m.group(2))
+            if url:
+                partes.append(f'(<link href="{escape_txt(url)}">'
+                              f'<font color="#0F3A66">{escape_txt(fuente)}</font></link>)')
+            else:
+                partes.append("(" + escape_txt(fuente) + ")")
+        else:                   # URL suelta
+            url = _resolver(m.group(3))
+            if url:
+                partes.append(f'<link href="{escape_txt(url)}">'
+                              f'<font color="#0F3A66">{escape_txt(_dominio(url))}</font></link>')
+            # ajena/cruda → se descarta (nunca imprimir la ristra)
+        last = m.end()
+    partes.append(escape_txt(raw[last:]))
+    s = "".join(partes)
+    s = re.sub(r"\(\s*[—,:\-]?\s*\)", "", s)   # paréntesis vacíos residuales
+    s = re.sub(r"[ \t]{2,}", " ", s).strip()
+    return s
+
+
+def _parrafo_prosa(linea: str, urls_ok: dict, st: dict) -> Paragraph:
+    """Párrafo de prosa con URLs crudas convertidas a enlace limpio."""
+    return Paragraph(_linkificar_prosa(linea.strip(), urls_ok), st["body"])
+
+
 def _render_narrativa(secciones: list, st: dict, filas_hechos: list,
-                      articulos: list) -> list:
+                      articulos: list, urls_ok: dict) -> list:
     S = []
     for enc, cuerpo in secciones:
         # Mayúscula sostenida: propio de un briefing de inteligencia y evita
@@ -292,7 +431,7 @@ def _render_narrativa(secciones: list, st: dict, filas_hechos: list,
         if enc == "HECHOS CITADOS":
             contenido = _contenido_hechos(filas_hechos, articulos, st)
         else:
-            contenido = [Paragraph(escape_txt(p.strip()), st["body"])
+            contenido = [_parrafo_prosa(p, urls_ok, st)
                          for p in cuerpo.split("\n") if p.strip()]
         S += _bloque_seccion(display, contenido, st)
         S.append(Spacer(1, 6))
@@ -324,16 +463,17 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
     md = construir_semaforo(osint, db_path, dias=1)   # ventana 24h para el semáforo
     globos = md.get("globos_b", [])
     riesgo = (snapshot or {}).get("riesgo", {}) or {}
-    articulos = articulos_ultimas_24h(db_path, par.get("top_n", 120))
+    articulos = articulos_ultimas_24h(db_path, par.get("top_n", 150))
     actores = listar_actores(db_path, pais="PE", solo_activos=True)
     ahora = now_pe_iso()
 
-    # URLs realmente enviadas a la API (para la anti-invención en el parseo).
-    urls_material = {}
+    # URLs de la BD (para linkear prosa de forma segura: solo enlazamos URLs
+    # nuestras). El enlace se arma en el código, no lo emite el modelo.
+    urls_ok = {}
     for a in articulos:
         u = (a.get("url") or "").strip()
         if u:
-            urls_material[_norm_url(u)] = u
+            urls_ok[_norm_url(u)] = u
 
     material = _material_para_llm(articulos, globos, riesgo, actores, ahora)
     narrativa, err = redactar_con_sistema(
@@ -357,21 +497,22 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=T.MARGEN_LAT, rightMargin=T.MARGEN_LAT,
                             topMargin=T.MARGEN_SUP, bottomMargin=T.MARGEN_INF,
-                            title="Análisis Político · Últimas 24 Horas")
+                            title="Reporte de Riesgo Político · Últimas 24 Horas")
     estado_txt = "CALIBRACIÓN" if calibracion else "OPERATIVO"
     doc._fecha_footer = ahora[:10] + (" · VERSIÓN DE CALIBRACIÓN" if calibracion else "")
-    doc._header_meta = "ANÁLISIS POLÍTICO · 24h · THALOS"
+    doc._header_meta = "REPORTE DE RIESGO POLÍTICO · THALOS"
     gen = (snapshot.get("generado") or ahora)[:16].replace("T", " ")
     from datetime import timedelta
     from ..utils.timezone_pe import now_pe
     desde = (now_pe() - timedelta(hours=24)).isoformat(timespec="minutes")[:16].replace("T", " ")
     doc._portada = {
-        "titulo": "Análisis Político — Últimas 24 Horas",
-        "subtitulo": "Los hechos del día en contexto",
+        # Punto 4: título nuevo; sin "Últimas 24 Horas" en el rótulo de portada.
+        "titulo": "Reporte de Riesgo Político",
+        "subtitulo": "Los Hechos del Día en Contexto",
         "tema_rango": (f"Ventana: {desde} → {ahora[:16].replace('T',' ')} (Lima)"
                        + ("  ·  VERSIÓN DE CALIBRACIÓN" if calibracion else "")),
         "metadata": [
-            ("Tipo", "Análisis Político · 24h · global"),
+            ("Tipo", "Riesgo Político · 24h · global"),
             ("Generado", ahora[:16].replace("T", " ") + " (America/Lima)"),
             ("Estado", estado_txt + (" · RESPALDO" if degradado else "")),
             ("Clasificación", "USO INTERNO"),
@@ -388,9 +529,17 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
 
     if not degradado:
         secciones = _parsear_secciones(narrativa_s)
+        # ANTI-PÉRDIDA SILENCIOSA: log de secciones esperadas que no llegaron
+        # (bug de 2da corrida: se perdían en silencio). El contenido que sí
+        # llegó se renderiza igual; nada se descarta.
+        faltan = _secciones_faltantes(secciones)
+        if faltan:
+            log.warning("AP24: secciones no detectadas en la salida del modelo: %s "
+                        "(se renderiza lo recibido; %d secciones sí detectadas)",
+                        ", ".join(faltan), len(secciones))
         cuerpo_hc = next((c for (s, c) in secciones if s == "HECHOS CITADOS"), "")
-        filas_hechos = _parse_hechos_citados(cuerpo_hc, urls_material)
-        S += _render_narrativa(secciones, st, filas_hechos, articulos)
+        filas_hechos = _parse_hechos_citados(cuerpo_hc, articulos)
+        S += _render_narrativa(secciones, st, filas_hechos, articulos, urls_ok)
     else:
         S.append(Paragraph("Narrativa no disponible", st["h2"]))
         S.append(T.linea_oro())
