@@ -393,6 +393,132 @@ def _contenido_hechos(filas: list, articulos: list, st: dict) -> list:
     return [_tabla_hechos_bd(articulos)]
 
 
+# ── ACTORES POLÍTICOS EN RIESGO — datos del MOTOR REAL (no IA) ─────────────────
+def _rol_actor(tipo: str, territorio: str) -> str:
+    """ROL = clasificación real del actor (tipo + territorio del motor). Decisión
+    del Coronel: sin campo 'rol'/'sector' dedicado, se compone de lo que existe."""
+    partes = [p.strip().capitalize() for p in (tipo, territorio) if p and p.strip()]
+    return " · ".join(partes) if partes else "—"
+
+
+def _tema_legible(tema: str) -> str:
+    s = (tema or "").replace("_", " ").strip()
+    return s[:1].upper() + s[1:] if s else "—"
+
+
+def _nivel_riesgo_tema(y: float):
+    """Nivel + color THALOS del riesgo, derivado de la gravedad del tema (semáforo):
+    ALTO ámbar/naranja · MEDIO amarillo · BAJO verde · CRÍTICO rojo."""
+    try:
+        v = float(y)
+    except (TypeError, ValueError):
+        v = 0.0
+    if v >= 80:
+        return "CRÍTICO", T.ROJO_CRIT
+    if v >= 60:
+        return "ALTO", T.AMBAR_ALTO
+    if v >= 40:
+        return "MEDIO", T.AMARILLO_BAJO
+    return "BAJO", T.VERDE_INFO
+
+
+def _actores_en_riesgo(db_path: str, globos: list, top_n: int = 6) -> list:
+    """Filas de la tabla 'Actores políticos en riesgo' desde el MOTOR de actores.
+
+    Fuente: listar_actores_por_activacion (por tema, con índice de activación) +
+    listar_actores (para tipo/territorio del ROL). VINCULADO A = tema-amenaza;
+    RIESGO = nivel de gravedad de ese tema (semáforo). Dedup por actor (se queda
+    con su amenaza de mayor gravedad). Orden por riesgo desc. Sin datos → [].
+    """
+    from ..storage.config_loader import listar_actores, listar_actores_por_activacion
+    grav = {g.get("tema"): g.get("y", 0) for g in (globos or []) if g.get("tema")}
+    temas = sorted((t for t, y in grav.items() if (y or 0) > 0),
+                   key=lambda t: grav[t], reverse=True)
+    if not temas:
+        return []
+    # tipo/territorio por actor (listar_actores trae territorio; la otra no)
+    meta = {}
+    try:
+        for a in listar_actores(db_path, pais="PE", solo_activos=True):
+            meta[a.get("id")] = (a.get("tipo") or "", a.get("territorio") or "")
+    except Exception:
+        pass
+    filas, vistos = [], set()
+    for tema in temas:
+        y = grav[tema]
+        nivel, color = _nivel_riesgo_tema(y)
+        for act in listar_actores_por_activacion(db_path, tema, pais="PE"):
+            aid = act.get("id")
+            if aid in vistos:
+                continue
+            vistos.add(aid)
+            tipo, terr = meta.get(aid, (act.get("tipo") or "", ""))
+            filas.append({
+                "actor": (act.get("nombre") or "—").strip(),
+                "rol": _rol_actor(tipo, terr),
+                "vinculado": _tema_legible(tema),
+                "nivel": nivel, "color": color,
+                "_grav": y or 0, "_act": act.get("indice_activacion") or 0,
+            })
+    filas.sort(key=lambda f: (f["_grav"], f["_act"]), reverse=True)
+    return filas[:max(1, int(top_n or 6))]
+
+
+def _tabla_actores_riesgo(filas: list) -> Table:
+    """Tabla ACTOR | ROL | VINCULADO A | RIESGO, con el nivel coloreado (THALOS)."""
+    st_h = ParagraphStyle("ar_h", fontName=T.FONT_TITLE, fontSize=9.5,
+                          textColor=T.NAVY, leading=12)
+    st_c = ParagraphStyle("ar_c", fontName=T.FONT_BODY, fontSize=9.5,
+                          textColor=T.GRIS_CUERPO, leading=12, alignment=TA_LEFT)
+    data = [[Paragraph("ACTOR", st_h), Paragraph("ROL", st_h),
+             Paragraph("VINCULADO A", st_h), Paragraph("RIESGO", st_h)]]
+    estilo = [
+        ("BACKGROUND", (0, 0), (-1, 0), T.GRIS_CLARO),
+        ("BOX", (0, 0), (-1, -1), 1, T.ORO),
+        ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+        ("LINEBELOW", (0, 0), (-1, 0), 1, T.ORO),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.5, T.colors.HexColor("#EADFB0")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (3, 0), (3, -1), "CENTER"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]
+    for i, f in enumerate(filas, start=1):
+        # texto del nivel: navy sobre amarillo (claro), blanco sobre el resto
+        txt = T.NAVY if f["color"] == T.AMARILLO_BAJO else T.BLANCO
+        st_r = ParagraphStyle(f"ar_r{i}", fontName=T.FONT_TITLE, fontSize=9,
+                              textColor=txt, alignment=TA_CENTER, leading=11)
+        data.append([
+            Paragraph(escape_txt(f["actor"][:40]), st_c),
+            Paragraph(escape_txt(f["rol"][:34]), st_c),
+            Paragraph(escape_txt(f["vinculado"][:34]), st_c),
+            Paragraph(escape_txt(f["nivel"]), st_r),
+        ])
+        estilo.append(("BACKGROUND", (3, i), (3, i), f["color"]))
+    t = Table(data, colWidths=[1.9 * inch, 1.7 * inch, 1.8 * inch, 0.9 * inch],
+              repeatRows=1)
+    t.setStyle(TableStyle(estilo))
+    return t
+
+
+def _bloque_actores_riesgo(db_path: str, globos: list, st: dict, top_n: int) -> list:
+    """Bloque completo: título + subtítulo + tabla (o nota honesta si no hay datos)."""
+    filas = _actores_en_riesgo(db_path, globos, top_n)
+    sub = Paragraph(
+        "Principales actores vinculados a las amenazas de las últimas 24 horas",
+        ParagraphStyle("ar_sub", fontName=T.FONT_BODY, fontSize=10, textColor=T.GRIS_META))
+    cab = Paragraph("ACTORES POLÍTICOS EN RIESGO", st["h2"])
+    if not filas:
+        log.info("AP24: sin actores en riesgo vinculados a las amenazas del período")
+        cuerpo = [sub, Spacer(1, 6),
+                  Paragraph("Sin actores en riesgo significativo en el período.", st["body"])]
+    else:
+        cuerpo = [sub, Spacer(1, 6), _tabla_actores_riesgo(filas)]
+    return _bloque_seccion(cab, cuerpo)
+
+
 def _encabezado_seccion(enc: str, st: dict) -> Paragraph:
     """Encabezado de sección. Caso especial (punto 1): la sección de desarrollos
     se rotula como título grande "RIESGO POLÍTICO" + bajada pequeña, en tipo
@@ -627,21 +753,24 @@ def generar_analisis_politico_24h(db_path: str, snapshot: dict,
         S += _bloque_seccion(_encabezado_seccion("HECHOS CITADOS", st),
                              _contenido_hechos([], articulos, st))
 
-    # ── Velocímetro + tablero de métricas: JUNTOS en su propia página (punto 4).
-    # PageBreak para arrancar en página nueva + KeepTogether para que el bloque
-    # (gauge con nota de pesos + grid de 8 temas + leyenda) no se parta entre
-    # páginas. La nota bajo el gauge lleva los pesos REALES del motor (punto 5).
+    # ── Página de contexto (propia): "Actores políticos en riesgo" (motor real,
+    # no IA) ARRIBA + velocímetro + tablero, TODO en un solo KeepTogether para que
+    # la tabla de actores quede JUNTO al velocímetro en la misma página (llena el
+    # espacio en blanco de la maqueta y no separa actores del velocímetro).
+    # La nota bajo el gauge lleva los pesos REALES del motor (punto 5).
     S.append(PageBreak())
-    metricas = []
+    contexto = []
+    contexto += _bloque_actores_riesgo(db_path, globos, st, par.get("actores_top_n", 6))
+    contexto.append(Spacer(1, 14))
     cab_tab = Paragraph("Tablero de métricas (semáforo 24h)", st["h2"])
-    metricas += _bloque_seccion(
+    contexto += _bloque_seccion(
         cab_tab, T.bloque_score_gauge(riesgo, st, nota=_nota_pesos_score()))
-    metricas.append(Spacer(1, 8))
+    contexto.append(Spacer(1, 8))
     if globos:
-        metricas.append(_grid_temas(globos, st))
-        metricas.append(Spacer(1, 6))
-        metricas.append(T._leyenda_riesgo())
-    S.append(KeepTogether(metricas))
+        contexto.append(_grid_temas(globos, st))
+        contexto.append(Spacer(1, 6))
+        contexto.append(T._leyenda_riesgo())
+    S.append(KeepTogether(contexto))
     S.append(Spacer(1, 12))
 
     # ── Integridad de datos ──
