@@ -931,8 +931,9 @@ _AP24_PARAMS = [
     ("AP24_TOP_N_ARTICULOS", "150", "int",
      "Análisis Político 24h: máximo de artículos 24h enviados (control de costo; "
      "≥150 para que el material alcance para ≥10 hechos citados)"),
-    ("AP24_MODO_CALIBRACION", "1", "int",
-     "Análisis Político 24h: 1 = marca de calibración visible en el PDF; 0 = operativo"),
+    ("AP24_MODO_CALIBRACION", "0", "int",
+     "Análisis Político 24h: 1 = marca 'VERSIÓN DE CALIBRACIÓN' visible en el PDF; "
+     "0 = operativo (producto aprobado; default operativo)"),
     ("AP24_ACTORES_TOP_N", "6", "int",
      "Análisis Político 24h: máximo de filas en la tabla 'Actores políticos en "
      "riesgo' (actores de mayor riesgo vinculados a las amenazas del período)"),
@@ -1021,6 +1022,26 @@ def inicializar_admin_tables(db_path: str) -> None:
                     "UPDATE config_parametros SET valor='150' "
                     "WHERE clave='AP24_TOP_N_ARTICULOS' AND valor='120'",
                 )
+            except sqlite3.OperationalError:
+                pass
+            # AP24 producto APROBADO: apagar la marca de CALIBRACIÓN una sola vez
+            # (pasa a OPERATIVO). One-shot con centinela: el flip 1→0 ocurre en la
+            # primera pasada tras el deploy y NUNCA se vuelve a forzar → si el
+            # analista reactiva la calibración por config, su elección se respeta.
+            try:
+                ya = conn.execute(
+                    "SELECT 1 FROM config_parametros WHERE clave='AP24_CALIBRACION_OFF_V1'"
+                ).fetchone()
+                if not ya:
+                    conn.execute(
+                        "UPDATE config_parametros SET valor='0' "
+                        "WHERE clave='AP24_MODO_CALIBRACION' AND valor='1'")
+                    conn.execute(
+                        "INSERT OR IGNORE INTO config_parametros "
+                        "(clave, valor, tipo, descripcion, pais) VALUES "
+                        "('AP24_CALIBRACION_OFF_V1','1','int',"
+                        "'Centinela one-shot: marca de calibración AP24 apagada al "
+                        "aprobar el producto (no re-forzar).','GLOBAL')")
             except sqlite3.OperationalError:
                 pass
             # Seed dummy de reportes (solo si la tabla está vacía) — para que la
