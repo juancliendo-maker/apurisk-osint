@@ -487,22 +487,33 @@ def gauge_score(score: float, width: float = 260) -> Drawing:
     return d
 
 
-def bloque_score_gauge(riesgo: dict, st: dict) -> list:
+def bloque_score_gauge(riesgo: dict, st: dict, nota: str = None) -> list:
     """Bloque 'Score Global · Riesgo Nacional' con el velocímetro dentro de una
     tarjeta THALOS (gris claro, borde oro). Reemplaza el número grande.
-    Reutilizable por cualquier reporte que muestre el Score Global."""
+    Reutilizable por cualquier reporte que muestre el Score Global.
+
+    nota: si se pasa, se agrega como nota al pie del componente (9pt gris) —
+    p.ej. la explicación de los pesos del Score. Va DENTRO de la tarjeta, bajo
+    el gauge, para que viaje junto con el velocímetro."""
     score = (riesgo or {}).get("global", 0)
     lbl = Paragraph("Score Global · Riesgo Nacional",
                     ParagraphStyle("sg_lbl", fontName=FONT_BODY, fontSize=10,
                                    textColor=GRIS_META))
-    card = Table([[gauge_score(score, width=2.9 * inch)]],
-                 colWidths=[PAGE_W - 2 * MARGEN_LAT])
+    interior = [gauge_score(score, width=2.9 * inch)]
+    if nota:
+        interior.append(Spacer(1, 6))
+        interior.append(Paragraph(
+            nota, ParagraphStyle("sg_nota", fontName=FONT_BODY, fontSize=9,
+                                 leading=11.5, textColor=GRIS_META, alignment=TA_LEFT)))
+    card = Table([[interior]], colWidths=[PAGE_W - 2 * MARGEN_LAT])
     card.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BOX", (0, 0), (-1, -1), 1.2, ORO),
         ("ROUNDEDCORNERS", [6, 6, 6, 6]),
         ("BACKGROUND", (0, 0), (-1, -1), GRIS_CLARO),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
         ("TOPPADDING", (0, 0), (-1, -1), 12),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
     ]))

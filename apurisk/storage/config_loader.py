@@ -2715,6 +2715,61 @@ def cargar_parametros_ap24(db_path: str) -> dict:
     return defaults
 
 
+_ETIQUETAS_DIMENSION = {
+    "gobernabilidad": "Gobernabilidad",
+    "conflictividad_social": "Conflictividad social",
+    "seguridad_crimen": "Seguridad y crimen",
+    "economia_politica": "Economía política",
+    "relaciones_exteriores": "Relaciones exteriores",
+    # fallback v1 (indicadores_riesgo)
+    "estabilidad_gobierno": "Estabilidad de gobierno",
+    "conflictos_sociales": "Conflictos sociales",
+    "riesgo_regulatorio": "Riesgo regulatorio",
+    "polarizacion": "Polarización",
+    "corrupcion": "Corrupción",
+    "seguridad": "Seguridad",
+}
+
+
+def cargar_pesos_score_nacional() -> dict:
+    """Lee de config.yaml los pesos REALES con que hoy se pondera el Score Global.
+
+    NO hardcodea: abre apurisk/config.yaml y devuelve el motor activo y sus pesos.
+      - v2 (activo): score_engine.pesos_dimension (5 dimensiones, suma 1.0).
+      - v1 (fallback): indicadores_riesgo (6 categorías).
+    Devuelve {version, pesos: [(etiqueta, porcentaje_int), ...] ordenado desc}.
+    Lista vacía si no se puede leer (el llamador omite la nota).
+    """
+    from pathlib import Path
+    out = {"version": None, "pesos": []}
+    try:
+        import yaml
+        # config_loader está en apurisk/storage/ → parent.parent = apurisk/
+        ruta = Path(__file__).resolve().parent.parent / "config.yaml"
+        with open(ruta, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        se = cfg.get("score_engine", {}) or {}
+        version = (se.get("version") or "v1").lower()
+        if version == "v2" and se.get("pesos_dimension"):
+            pesos = se["pesos_dimension"]
+        else:
+            version = "v1"
+            pesos = cfg.get("indicadores_riesgo", {})
+        items = []
+        for clave, peso in pesos.items():
+            try:
+                pct = round(float(peso) * 100)
+            except (TypeError, ValueError):
+                continue
+            items.append((_ETIQUETAS_DIMENSION.get(clave, clave.replace("_", " ").capitalize()), pct))
+        items.sort(key=lambda x: x[1], reverse=True)
+        out["version"] = version
+        out["pesos"] = items
+    except Exception as e:
+        print(f"[config_loader] cargar_pesos_score_nacional falló: {e}")
+    return out
+
+
 def articulos_ultimas_24h(db_path: str, limite: int = 120) -> list:
     """Artículos capturados en las últimas 24h (hora Lima), recientes primero.
 

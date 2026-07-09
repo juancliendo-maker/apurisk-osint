@@ -908,6 +908,20 @@ _AP24_PROMPT_MAESTRO_V3 = (
     "de 10 hechos relevantes, dilo aquí)."
 )
 
+# v4 — Ajustes finales. Cada bloque de "LAS ÚLTIMAS 24 HORAS EN DESARROLLO" abre
+# con su subtítulo temático en línea propia, prefijado con «» » (marcador que el
+# render detecta y pone en negrita). Resto de la doctrina v3 intacta. Se construye
+# a partir de v3 cambiando solo la línea de estructura de esa sección.
+_AP24_PROMPT_MAESTRO_V4 = _AP24_PROMPT_MAESTRO_V3.replace(
+    "LAS ÚLTIMAS 24 HORAS EN DESARROLLO — 3-5 bloques: qué ocurrió, actores,\n"
+    "contexto según material; cierre con (según [fuente]).\n",
+    "LAS ÚLTIMAS 24 HORAS EN DESARROLLO — 3 a 5 bloques. Cada bloque ABRE con su\n"
+    "subtítulo temático en una línea propia, prefijada con «» » (ejemplo:\n"
+    "» Transición política y conformación del gabinete). En el párrafo\n"
+    "siguiente: qué ocurrió, actores, contexto según material; cierre con\n"
+    "(según [fuente]). Usa el prefijo » SOLO en la línea del subtítulo.\n",
+)
+
 # Parámetros del Análisis Político 24h (Fase 3-3c). Editables por config.
 _AP24_PARAMS = [
     ("AP24_MODELO", "claude-sonnet-4-6", "string",
@@ -925,7 +939,7 @@ _AP24_PARAMS = [
     ("REPORTES_WATCHDOG_MIN", "10", "int",
      "Reportes: minutos tras los cuales una entry en 'generando' se marca 'error' "
      "(anti-huérfanas: proceso muerto a mitad de generación)"),
-    ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V3, "string",
+    ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V4, "string",
      "Análisis Político 24h: system prompt maestro (doctrina THALOS, editable)"),
 ]
 
@@ -989,6 +1003,14 @@ def inicializar_admin_tables(db_path: str) -> None:
                     "UPDATE config_parametros SET valor=? "
                     "WHERE clave='AP24_PROMPT_MAESTRO' AND valor=?",
                     (_AP24_PROMPT_MAESTRO_V3, _AP24_PROMPT_MAESTRO_V2),
+                )
+                # AP24 v4: UPDATE del valor vivo v3 → v4 (subtítulos de bloque con
+                # marcador «» »). Encadenado tras v2→v3; guardado en el texto v3
+                # exacto (respeta ediciones del analista; en v4 deja de coincidir).
+                conn.execute(
+                    "UPDATE config_parametros SET valor=? "
+                    "WHERE clave='AP24_PROMPT_MAESTRO' AND valor=?",
+                    (_AP24_PROMPT_MAESTRO_V4, _AP24_PROMPT_MAESTRO_V3),
                 )
                 # TOP_N: subir el default vivo 120 → 150 (para ≥10 hechos). Solo
                 # si sigue en el default original (respeta ajuste del analista).
