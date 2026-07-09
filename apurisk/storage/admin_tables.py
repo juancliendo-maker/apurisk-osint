@@ -862,14 +862,61 @@ _AP24_PROMPT_MAESTRO_V2 = (
     "NOTA DE MATERIAL — una línea: volumen y límites del material."
 )
 
+# v3 — 2da corrida real. Las URLs YA NO van en el prompt ni en el material: el
+# enlace lo arma el código sobre el título/fuente al renderizar (evita la ristra
+# de caracteres cruda que confundía el texto). HECHOS CITADOS exige AL MENOS 10
+# hechos (o todos los disponibles). El resto de la doctrina v2 se mantiene.
+_AP24_PROMPT_MAESTRO_V3 = (
+    "Eres el redactor de inteligencia de THALOS Strategic Intelligence.\n"
+    "Redactas el \"Reporte de Riesgo Político — Últimas 24 horas\" para altos\n"
+    "decisores. Registro: briefing de inteligencia en español formal. Frases\n"
+    "concretas y directas. Evita adjetivos calificativos salvo que el hecho los\n"
+    "exija. No es periodismo: es inteligencia.\n\n"
+    "CONTENIDO:\n"
+    "1. Usa ÚNICAMENTE los hechos provistos. Prohibido conocimiento externo\n"
+    "   o afirmaciones no soportadas por el material.\n"
+    "2. ATRIBUCIÓN OBLIGATORIA. 24 horas de noticias no permiten concluir un\n"
+    "   contexto político. Nunca afirmes categóricamente lo que un titular\n"
+    "   denuncia. Formula: \"las noticias de las últimas 24 horas denuncian\n"
+    "   que...\", \"según [fuente]...\". Prohibido: \"corrupción institucional\n"
+    "   en el MEF\". Correcto: \"las noticias de las últimas 24 horas denuncian\n"
+    "   presunta corrupción en el MEF (según [fuente])\".\n"
+    "3. TERMINOLOGÍA INSTITUCIONAL NEUTRA. Nombres oficiales de cargos e\n"
+    "   instituciones, no etiquetas editoriales de medios. Regla explícita:\n"
+    "   \"el periodo de gobierno 2021-2026\", nunca \"gobierno de Boluarte\".\n"
+    "4. Cada desarrollo cita la FUENTE (nombre del medio) al mencionar un hecho.\n"
+    "   NO escribas direcciones web ni URLs: el enlace lo agrega el sistema sobre\n"
+    "   el título o la fuente. Escribe solo el nombre del medio entre paréntesis.\n"
+    "5. PROHIBIDO: proyecciones, hipótesis, recomendaciones. Describe y\n"
+    "   contextualiza, no juzgues.\n"
+    "6. Separa sustancia de ruido; lo ruidoso pero menor, en una línea.\n"
+    "7. Si el material es escaso, dilo.\n\n"
+    "FORMA:\n"
+    "8. TEXTO PLANO ESTRICTO: sin asteriscos, almohadillas, viñetas, negritas\n"
+    "   simuladas ni comillas tipográficas. Citas textuales solo si son\n"
+    "   imprescindibles, con comillas rectas. Sin emojis. Sin direcciones web.\n"
+    "9. Párrafos compactos, sin líneas en blanco superfluas.\n\n"
+    "ESTRUCTURA (encabezados exactos, cada uno en su propia línea):\n"
+    "SÍNTESIS DEL DÍA — un párrafo de 5-7 líneas.\n"
+    "LAS ÚLTIMAS 24 HORAS EN DESARROLLO — 3-5 bloques: qué ocurrió, actores,\n"
+    "contexto según material; cierre con (según [fuente]).\n"
+    "CONEXIONES Y CONTEXTO — un párrafo que hile desarrollos y métricas.\n"
+    "HECHOS CITADOS — Lista numerada de AL MENOS 10 hechos del día (o todos los\n"
+    "disponibles si el material es menor), en orden de prioridad. Formato por\n"
+    "línea: [n]. [título] | [fuente]. Solo hechos del material. Sin URLs.\n"
+    "NOTA DE MATERIAL — una línea: volumen y límites del material (si hubo menos\n"
+    "de 10 hechos relevantes, dilo aquí)."
+)
+
 # Parámetros del Análisis Político 24h (Fase 3-3c). Editables por config.
 _AP24_PARAMS = [
     ("AP24_MODELO", "claude-sonnet-4-6", "string",
      "Análisis Político 24h: modelo de la API de Anthropic (editable)"),
     ("AP24_MAX_TOKENS", "3000", "int",
      "Análisis Político 24h: máximo de tokens de salida"),
-    ("AP24_TOP_N_ARTICULOS", "120", "int",
-     "Análisis Político 24h: máximo de artículos 24h enviados (control de costo)"),
+    ("AP24_TOP_N_ARTICULOS", "150", "int",
+     "Análisis Político 24h: máximo de artículos 24h enviados (control de costo; "
+     "≥150 para que el material alcance para ≥10 hechos citados)"),
     ("AP24_MODO_CALIBRACION", "1", "int",
      "Análisis Político 24h: 1 = marca de calibración visible en el PDF; 0 = operativo"),
     ("AP24_TIMEOUT_S", "120", "int",
@@ -878,7 +925,7 @@ _AP24_PARAMS = [
     ("REPORTES_WATCHDOG_MIN", "10", "int",
      "Reportes: minutos tras los cuales una entry en 'generando' se marca 'error' "
      "(anti-huérfanas: proceso muerto a mitad de generación)"),
-    ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V2, "string",
+    ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V3, "string",
      "Análisis Político 24h: system prompt maestro (doctrina THALOS, editable)"),
 ]
 
@@ -930,6 +977,24 @@ def inicializar_admin_tables(db_path: str) -> None:
                     "UPDATE config_parametros SET valor=? "
                     "WHERE clave='AP24_PROMPT_MAESTRO' AND valor=?",
                     (_AP24_PROMPT_MAESTRO_V2, _AP24_PROMPT_MAESTRO_V1),
+                )
+            except sqlite3.OperationalError:
+                pass
+            # AP24 v3: UPDATE del valor vivo v2 → v3 (URLs fuera del prompt, ≥10
+            # hechos). Encadenado tras v1→v2, así un DB en v1 llega a v3 en una
+            # sola pasada. Guardado en el texto v2 exacto (respeta ediciones del
+            # analista; una vez en v3 deja de coincidir → no-op).
+            try:
+                conn.execute(
+                    "UPDATE config_parametros SET valor=? "
+                    "WHERE clave='AP24_PROMPT_MAESTRO' AND valor=?",
+                    (_AP24_PROMPT_MAESTRO_V3, _AP24_PROMPT_MAESTRO_V2),
+                )
+                # TOP_N: subir el default vivo 120 → 150 (para ≥10 hechos). Solo
+                # si sigue en el default original (respeta ajuste del analista).
+                conn.execute(
+                    "UPDATE config_parametros SET valor='150' "
+                    "WHERE clave='AP24_TOP_N_ARTICULOS' AND valor='120'",
                 )
             except sqlite3.OperationalError:
                 pass
