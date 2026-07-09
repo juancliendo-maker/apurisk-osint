@@ -2686,6 +2686,7 @@ def cargar_parametros_ap24(db_path: str) -> dict:
         "top_n": 120,
         "modo_calibracion": 1,
         "timeout_s": 120,
+        "actores_top_n": 6,
         "prompt_maestro": "",
     }
     mapa = {
@@ -2694,6 +2695,7 @@ def cargar_parametros_ap24(db_path: str) -> dict:
         "AP24_TOP_N_ARTICULOS": ("top_n", int),
         "AP24_MODO_CALIBRACION": ("modo_calibracion", int),
         "AP24_TIMEOUT_S": ("timeout_s", int),
+        "AP24_ACTORES_TOP_N": ("actores_top_n", int),
         "AP24_PROMPT_MAESTRO": ("prompt_maestro", str),
     }
     try:
@@ -2701,7 +2703,8 @@ def cargar_parametros_ap24(db_path: str) -> dict:
             rows = c.execute(
                 "SELECT clave, valor FROM config_parametros WHERE clave IN "
                 "('AP24_MODELO','AP24_MAX_TOKENS','AP24_TOP_N_ARTICULOS',"
-                "'AP24_MODO_CALIBRACION','AP24_TIMEOUT_S','AP24_PROMPT_MAESTRO')",
+                "'AP24_MODO_CALIBRACION','AP24_TIMEOUT_S','AP24_ACTORES_TOP_N',"
+                "'AP24_PROMPT_MAESTRO')",
             ).fetchall()
         for r in rows:
             if r["clave"] in mapa:

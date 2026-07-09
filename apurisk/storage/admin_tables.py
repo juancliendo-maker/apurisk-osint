@@ -933,6 +933,9 @@ _AP24_PARAMS = [
      "≥150 para que el material alcance para ≥10 hechos citados)"),
     ("AP24_MODO_CALIBRACION", "1", "int",
      "Análisis Político 24h: 1 = marca de calibración visible en el PDF; 0 = operativo"),
+    ("AP24_ACTORES_TOP_N", "6", "int",
+     "Análisis Político 24h: máximo de filas en la tabla 'Actores políticos en "
+     "riesgo' (actores de mayor riesgo vinculados a las amenazas del período)"),
     ("AP24_TIMEOUT_S", "120", "int",
      "Análisis Político 24h: timeout (segundos) por intento de la llamada a la API "
      "(la generación de ~3000 tokens tarda 40-90s; el default global de 30s es corto)"),
