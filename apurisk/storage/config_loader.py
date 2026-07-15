@@ -2396,20 +2396,53 @@ _REPORTE_TEMAS_B = [
 _REPORTE_DUMMY_TIPOS = {"reporte_a_automatico", "reporte_b_caso"}
 
 
+# fecha_generacion convive en DOS formatos: los reportes reales guardan
+# now_pe_iso() → '2026-07-15T10:36:32-05:00' (ISO con T y offset) y el seed dummy
+# usa '2026-07-02 09:15:00' (espacio, sin offset). Comparar el texto crudo rompe
+# el filtrado por fecha ('T'=0x54 > ' '=0x20 → filas del mismo día se excluyen).
+# Esta expresión normaliza ambos a 'YYYY-MM-DD HH:MM:SS' (ancho fijo, ordenable).
+_FECHA_NORM_SQL = "substr(replace(fecha_generacion,'T',' '),1,19)"
+
+
 def listar_reportes(db_path: str, limite: int = 50,
-                    tipo: str = None, estado: str = None) -> list:
-    """Reportes generados, recientes primero. Filtros opcionales por tipo/estado."""
+                    tipo: str = None, estado: str = None,
+                    desde: str = None, hasta: str = None,
+                    q: str = None) -> list:
+    """Reportes generados, recientes primero. Filtros opcionales.
+
+    tipo/estado: match exacto.
+    desde/hasta: 'YYYY-MM-DD' o 'YYYY-MM-DD HH:MM:SS' (hora Lima). Se comparan
+      sobre la fecha NORMALIZADA (ver _FECHA_NORM_SQL). `hasta` es inclusivo del
+      día si se pasa solo la fecha. Para la ventana rodante de 7 días, el llamador
+      pasa desde = (now_pe() - 7d).
+    q: texto libre (case-insensitive) sobre tema, caso, nota y nombre de archivo.
+    """
     try:
         with _conn(db_path) as c:
-            q = "SELECT * FROM reportes_generados WHERE 1=1"
+            sql = "SELECT * FROM reportes_generados WHERE 1=1"
             args = []
             if tipo:
-                q += " AND tipo=?"; args.append(tipo)
+                sql += " AND tipo=?"; args.append(tipo)
             if estado:
-                q += " AND estado=?"; args.append(estado)
-            q += " ORDER BY fecha_generacion DESC, id DESC LIMIT ?"
+                sql += " AND estado=?"; args.append(estado)
+            if desde:
+                sql += f" AND {_FECHA_NORM_SQL} >= ?"; args.append(str(desde)[:19])
+            if hasta:
+                h = str(hasta)[:19]
+                if len(h) == 10:          # solo fecha → incluir todo el día
+                    h += " 23:59:59"
+                sql += f" AND {_FECHA_NORM_SQL} <= ?"; args.append(h)
+            if q and q.strip():
+                like = f"%{q.strip().lower()}%"
+                sql += (" AND (lower(COALESCE(tema,'')) LIKE ?"
+                        " OR lower(COALESCE(caso,'')) LIKE ?"
+                        " OR lower(COALESCE(nota,'')) LIKE ?"
+                        " OR lower(COALESCE(ruta_archivo,'')) LIKE ?"
+                        " OR lower(tipo) LIKE ?)")
+                args += [like, like, like, like, like]
+            sql += " ORDER BY fecha_generacion DESC, id DESC LIMIT ?"
             args.append(int(limite))
-            rows = c.execute(q, args).fetchall()
+            rows = c.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
     except Exception as e:
         print(f"[config_loader] listar_reportes falló: {e}")

@@ -5900,7 +5900,7 @@ async def admin_demo_plantilla_pdf(request: Request):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GENERADOR DE REPORTES (Etapa 3, Fase 3-1) — interfaz + skeleton
+# GENERADOR DE REPORTES — solicitud + panel de últimos 7 días + historial
 # ══════════════════════════════════════════════════════════════════════════════
 
 _REPORTE_TIPO_LABEL = {
@@ -5908,9 +5908,13 @@ _REPORTE_TIPO_LABEL = {
     "reporte_a_manual": "Reporte A (OSINT manual)",
     "reporte_b_tema": "Reporte B (Tema)",
     "reporte_b_caso": "Reporte B (Caso)",
+    "analisis_politico_24h": "Reporte de Riesgo Político (24h)",
 }
 _REPORTE_ESTADO_DOT = {"completado": "🟢", "generando": "🟡", "error": "🔴"}
 _REPORTES_DIR = Path(OUTPUT_DIR) / "reportes"
+
+_MESES_CORTO = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
+                7: "jul", 8: "ago", 9: "set", 10: "oct", 11: "nov", 12: "dic"}
 
 
 def _reporte_tema_caso(r: dict) -> str:
@@ -5921,9 +5925,164 @@ def _reporte_tema_caso(r: dict) -> str:
     return '<span style="color:var(--muted)">Global</span>'
 
 
+def _fecha_reporte_pe(valor: str):
+    """Parsea fecha_generacion a datetime en hora Lima. Devuelve None si no puede.
+
+    fecha_generacion convive en dos formatos: ISO con offset ('...T10:36:32-05:00',
+    reportes reales) y naive con espacio ('2026-07-02 09:15:00', seed dummy).
+    NO se usa timezone_pe.parse_to_pe porque asume que un naive está en UTC; aquí
+    la columna es hora Lima por contrato, así que un naive se interpreta como Lima
+    (si no, el dummy se desplazaría 5 h y podría caer en otro bloque).
+    """
+    from ..utils.timezone_pe import PERU_TZ
+    if not valor:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(valor).strip())
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=PERU_TZ) if dt.tzinfo is None else dt.astimezone(PERU_TZ)
+
+
+def _fmt_fecha_corta(dt) -> str:
+    if dt is None:
+        return "—"
+    return f"{dt.day} {_MESES_CORTO.get(dt.month, '?')} · {dt.strftime('%H:%M')}"
+
+
+def _label_bloque_rodante(k: int, ahora) -> str:
+    """Etiqueta del bloque rodante k (0 = últimos 7 días): 'Del 9 al 15 jul 2026'.
+
+    Ventanas RODANTES desde ahora (no semana calendario): el bloque k cubre los
+    reportes con antigüedad en [7k, 7(k+1)) días.
+    """
+    fin = (ahora - timedelta(days=7 * k)).date()
+    ini = (ahora - timedelta(days=7 * (k + 1))).date() + timedelta(days=1)
+    m_i, m_f = _MESES_CORTO.get(ini.month, "?"), _MESES_CORTO.get(fin.month, "?")
+    if ini.year != fin.year:
+        return f"Del {ini.day} {m_i} {ini.year} al {fin.day} {m_f} {fin.year}"
+    if ini.month != fin.month:
+        return f"Del {ini.day} {m_i} al {fin.day} {m_f} {fin.year}"
+    return f"Del {ini.day} al {fin.day} {m_f} {fin.year}"
+
+
+def _agrupar_rodante(reportes: list, ahora) -> list:
+    """Agrupa reportes en bloques de 7 días rodantes hacia atrás desde `ahora`.
+
+    Solo presentación (no toca archivos ni carpetas): se calcula sobre
+    fecha_generacion. Devuelve [(label, [reportes...])] de más reciente a más
+    antiguo. Los de fecha ilegible caen en un bloque final 'Sin fecha'.
+    """
+    buckets, sin_fecha = {}, []
+    for r in reportes:
+        dt = _fecha_reporte_pe(r.get("fecha_generacion"))
+        if dt is None:
+            sin_fecha.append(r)
+            continue
+        dias = (ahora - dt).total_seconds() / 86400.0
+        k = max(0, int(dias // 7))
+        buckets.setdefault(k, []).append(r)
+    out = [(_label_bloque_rodante(k, ahora), buckets[k]) for k in sorted(buckets)]
+    if sin_fecha:
+        out.append(("Sin fecha", sin_fecha))
+    return out
+
+
+def _estado_pill(estado: str) -> str:
+    """Badge de estado con iconografía clara (verde/ámbar/rojo)."""
+    cfg = {"completado": ("#22c55e", "✓", "Completado"),
+           "generando":  ("#f59e0b", "◌", "Generando"),
+           "error":      ("#ef4444", "✕", "Error")}
+    color, ico, txt = cfg.get(estado, ("#94a3b8", "•", estado or "—"))
+    return (f'<span class="rep-pill" style="color:{color};border-color:{color}44;'
+            f'background:{color}14">{ico} {escape(txt)}</span>')
+
+
+def _reporte_card(r: dict) -> str:
+    """Tarjeta visual de un reporte (panel destacado de últimos 7 días)."""
+    dt = _fecha_reporte_pe(r.get("fecha_generacion"))
+    tipo = escape(_REPORTE_TIPO_LABEL.get(r["tipo"], r["tipo"]))
+    tam = f'{r["tamano_kb"]} KB' if r.get("tamano_kb") else "—"
+    rango = escape(r.get("rango_datos") or "—")
+    if r["estado"] == "completado":
+        accion = (f'<a class="rep-dl" href="/admin/reportes/{r["id"]}/descargar">'
+                  f'⬇ Descargar PDF</a>')
+    elif r["estado"] == "generando":
+        accion = '<span class="rep-wait">generando…</span>'
+    else:
+        accion = f'<span class="rep-err">{escape((r.get("nota") or "error")[:70])}</span>'
+    return f"""<div class="rep-card">
+  <div class="rep-card-h">{_estado_pill(r["estado"])}<span class="rep-fecha">{escape(_fmt_fecha_corta(dt))}</span></div>
+  <div class="rep-tipo">{tipo}</div>
+  <div class="rep-sub">{_reporte_tema_caso(r)} · <span class="rep-rango">{rango}</span> · {tam}</div>
+  <div class="rep-acc">{accion}</div>
+</div>"""
+
+
+def _reporte_fila(r: dict) -> str:
+    """Fila compacta del historial."""
+    dt = _fecha_reporte_pe(r.get("fecha_generacion"))
+    tam = f'{r["tamano_kb"]} KB' if r.get("tamano_kb") else "—"
+    if r["estado"] == "completado":
+        acc = f'<a class="rep-dl-sm" href="/admin/reportes/{r["id"]}/descargar">⬇ PDF</a>'
+    elif r["estado"] == "generando":
+        acc = '<span class="rep-wait">generando…</span>'
+    else:
+        acc = '<span class="rep-err">error</span>'
+    nota = f'<span class="rep-nota" title="{escape(r.get("nota") or "")}">ⓘ</span>' if r.get("nota") else ""
+    return f"""<tr>
+  <td class="c-f">{escape(_fmt_fecha_corta(dt))}</td>
+  <td>{escape(_REPORTE_TIPO_LABEL.get(r["tipo"], r["tipo"]))}</td>
+  <td>{_reporte_tema_caso(r)}</td>
+  <td class="c-c">{escape(r.get("rango_datos") or "—")}</td>
+  <td class="c-c">{_estado_pill(r["estado"])}</td>
+  <td class="c-c">{tam}</td>
+  <td class="c-c">{acc} {nota}</td>
+</tr>"""
+
+
+_REPORTES_CSS = """<style>
+.rep-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(268px,1fr));
+            gap:12px; }
+.rep-card { background:var(--bg-2); border:1px solid var(--bg-3); border-radius:8px;
+            padding:14px 15px; display:flex; flex-direction:column; gap:7px; }
+.rep-card-h { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.rep-pill { font-size:10.5px; font-weight:700; letter-spacing:.03em; padding:2px 8px;
+            border-radius:999px; border:1px solid; white-space:nowrap; }
+.rep-fecha { font-size:11px; color:var(--muted); white-space:nowrap; }
+.rep-tipo { font-size:14px; font-weight:600; color:var(--text); line-height:1.3; }
+.rep-sub { font-size:11.5px; color:var(--muted); }
+.rep-rango { color:var(--accent-2); }
+.rep-acc { margin-top:3px; }
+.rep-dl { display:inline-block; background:var(--accent); color:#00131f; font-weight:700;
+          font-size:12px; padding:6px 12px; border-radius:5px; text-decoration:none; }
+.rep-dl:hover { filter:brightness(1.1); }
+.rep-dl-sm { color:var(--accent); font-weight:600; font-size:12px; text-decoration:none; }
+.rep-wait { color:#f59e0b; font-size:11.5px; }
+.rep-err { color:#ef4444; font-size:11.5px; }
+.rep-nota { color:var(--muted); cursor:help; font-size:11px; }
+.rep-bloque { margin-top:16px; }
+.rep-bloque-h { display:flex; align-items:center; gap:10px; margin:0 0 8px;
+                font-size:12px; font-weight:700; color:var(--accent);
+                letter-spacing:.02em; text-transform:uppercase; }
+.rep-bloque-h::after { content:""; flex:1; height:1px; background:var(--bg-3); }
+.rep-bloque-n { font-size:11px; color:var(--muted); font-weight:500;
+                text-transform:none; letter-spacing:0; }
+.rep-filtros { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;
+               margin-bottom:6px; }
+.rep-filtros label { font-size:11px; color:var(--muted); display:block; margin-bottom:4px; }
+.rep-in { background:var(--bg-3); color:var(--text); border:1px solid #334155;
+          border-radius:5px; padding:6px 9px; font-size:12.5px; }
+.rep-vacio { color:var(--muted); font-size:12.5px; padding:14px 2px; }
+table.tbl td.c-c { text-align:center; }
+table.tbl td.c-f { white-space:nowrap; color:var(--muted); }
+table.tbl td { font-size:12px; }
+</style>"""
+
+
 @router.get("/reportes", response_class=HTMLResponse)
 async def admin_reportes(request: Request):
-    """Generador de reportes THALOS: tabla de generados + formulario de solicitud."""
+    """Reportes THALOS: solicitud + panel de últimos 7 días + historial con filtros."""
     sesion, err = _admin_guard(request)
     if err:
         return err
@@ -5931,6 +6090,7 @@ async def admin_reportes(request: Request):
         listar_reportes, autocompletar_reporte_dummy, _REPORTE_TEMAS_B,
         watchdog_reportes,
     )
+    from ..utils.timezone_pe import now_pe
     db = _get_db_path()
 
     # Watchdog anti-huérfanas: entries 'generando' con más de N minutos (config
@@ -5938,12 +6098,31 @@ async def admin_reportes(request: Request):
     # limpia también huérfanas previas (proceso muerto a mitad de generación).
     watchdog_reportes(db)
 
-    # Fase 3-1: dummy solo para tipos en lista blanca (sin generador real).
+    # Autocompletado dummy: SOLO para los tipos en lista blanca que aún no tienen
+    # generador real (el resto genera PDF de verdad en segundo plano).
     for r in listar_reportes(db, limite=50, estado="generando"):
         autocompletar_reporte_dummy(db, r["id"])
 
-    reportes = listar_reportes(db, limite=50)
-    hay_generando = any(r["estado"] == "generando" for r in reportes)
+    ahora = now_pe()
+
+    # ── Filtros del historial (GET) ──
+    f_tipo = (request.query_params.get("f_tipo") or "").strip()
+    f_q = (request.query_params.get("f_q") or "").strip()
+    f_desde = (request.query_params.get("f_desde") or "").strip()
+    f_hasta = (request.query_params.get("f_hasta") or "").strip()
+    hay_filtro = bool(f_tipo or f_q or f_desde or f_hasta)
+
+    # Panel destacado: ventana RODANTE de 7 días desde ahora (no semana calendario).
+    desde_7d = (ahora - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    recientes = listar_reportes(db, limite=60, desde=desde_7d)
+
+    # Historial: todos (o el subconjunto filtrado). El filtro va en SQL para no
+    # perder coincidencias por el LIMIT.
+    historial = listar_reportes(db, limite=400, tipo=f_tipo or None,
+                                q=f_q or None, desde=f_desde or None,
+                                hasta=f_hasta or None)
+
+    hay_generando = any(r["estado"] == "generando" for r in recientes)
 
     msg = request.query_params.get("msg", "")
     err_msg = request.query_params.get("err", "")
@@ -5952,33 +6131,47 @@ async def admin_reportes(request: Request):
     err_html = (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(err_msg)}</div>'
                 ) if err_msg else ""
 
-    filas = ""
-    for r in reportes:
-        estado = r["estado"]
-        dot = _REPORTE_ESTADO_DOT.get(estado, "⚪")
-        fecha = (r.get("fecha_generacion") or "")[:16].replace("T", " ")
-        rango = escape(r.get("rango_datos") or "—")
-        tam = f'{r["tamano_kb"]} KB' if r.get("tamano_kb") else "—"
-        if estado == "completado":
-            descarga = (f'<a href="/admin/reportes/{r["id"]}/descargar" '
-                        f'style="color:var(--accent);font-weight:600">⬇ PDF</a>')
-        elif estado == "generando":
-            descarga = '<span style="color:var(--muted);font-size:11px">generando…</span>'
-        else:
-            descarga = '<span style="color:#ef4444;font-size:11px">error</span>'
-        meta = (f'{fecha} · {tam} · {escape(estado)}'
-                + (f' · {escape(r["nota"])}' if r.get("nota") else ''))
-        filas += f"""<tr>
-  <td style="font-size:12px;white-space:nowrap">{escape(fecha)}</td>
-  <td style="font-size:12px">{escape(_REPORTE_TIPO_LABEL.get(r["tipo"], r["tipo"]))}</td>
-  <td style="font-size:12px">{_reporte_tema_caso(r)}</td>
-  <td style="text-align:center;font-size:12px">{rango}</td>
-  <td style="text-align:center">{dot} {descarga}</td>
-  <td><span title="{escape(meta)}" style="color:var(--muted);font-size:11px;cursor:help">Ver</span></td>
-</tr>\n"""
-    if not filas:
-        filas = ('<tr><td colspan="6" style="color:var(--muted);padding:16px;text-align:center">'
-                 'Aún no hay reportes. Solicita uno abajo.</td></tr>')
+    # ── Panel "Últimos 7 días" ──
+    if recientes:
+        cards = "".join(_reporte_card(r) for r in recientes)
+        panel_7d = f'<div class="rep-grid">{cards}</div>'
+    else:
+        panel_7d = ('<div class="rep-vacio">Sin reportes en los últimos 7 días. '
+                    'Solicita uno arriba.</div>')
+
+    # ── Historial: filtrado plano, o agrupado en bloques rodantes de 7 días ──
+    if not historial:
+        hist_html = ('<div class="rep-vacio">Ningún reporte coincide con el filtro.</div>'
+                     if hay_filtro else '<div class="rep-vacio">Aún no hay reportes.</div>')
+    elif hay_filtro:
+        filas = "".join(_reporte_fila(r) for r in historial)
+        hist_html = (f'<div style="font-size:11.5px;color:var(--muted);margin-bottom:6px">'
+                     f'{len(historial)} resultado(s)</div>'
+                     f'<div style="overflow-x:auto"><table class="tbl"><thead><tr>'
+                     f'<th>Fecha (Lima)</th><th>Tipo</th><th>Tema / Caso</th>'
+                     f'<th style="text-align:center">Rango</th>'
+                     f'<th style="text-align:center">Estado</th>'
+                     f'<th style="text-align:center">Tamaño</th>'
+                     f'<th style="text-align:center">Descarga</th>'
+                     f'</tr></thead><tbody>{filas}</tbody></table></div>')
+    else:
+        bloques = ""
+        for label, grupo in _agrupar_rodante(historial, ahora):
+            filas = "".join(_reporte_fila(r) for r in grupo)
+            bloques += (f'<div class="rep-bloque"><div class="rep-bloque-h">{escape(label)}'
+                        f'<span class="rep-bloque-n">{len(grupo)}</span></div>'
+                        f'<div style="overflow-x:auto"><table class="tbl"><thead><tr>'
+                        f'<th>Fecha (Lima)</th><th>Tipo</th><th>Tema / Caso</th>'
+                        f'<th style="text-align:center">Rango</th>'
+                        f'<th style="text-align:center">Estado</th>'
+                        f'<th style="text-align:center">Tamaño</th>'
+                        f'<th style="text-align:center">Descarga</th>'
+                        f'</tr></thead><tbody>{filas}</tbody></table></div></div>')
+        hist_html = bloques
+
+    tipo_opts = '<option value="">Todos los tipos</option>' + "".join(
+        f'<option value="{k}"{" selected" if f_tipo == k else ""}>{escape(v)}</option>'
+        for k, v in _REPORTE_TIPO_LABEL.items())
 
     # Selectores del formulario
     temas_opts = "".join(
@@ -5990,30 +6183,16 @@ async def admin_reportes(request: Request):
 
     contenido = f"""
 {poll}
+{_REPORTES_CSS}
 {msg_html}{err_html}
 <div style="font-size:13px;color:var(--muted);margin-bottom:14px">
   Genera y descarga reportes ejecutivos THALOS. Reporte A = foto global OSINT;
-  Reporte B = análisis profundo por tema o caso. (Fase 3-1: interfaz; el generador
-  de PDFs llega en la próxima fase.)
+  Reporte B = análisis por tema o caso; Reporte de Riesgo Político = los hechos
+  del día en contexto.
 </div>
 
 <div class="card">
-  <div class="card-title">Reportes disponibles ({len(reportes)})</div>
-  <div style="overflow-x:auto">
-    <table class="tbl">
-      <thead><tr>
-        <th>Fecha (Lima)</th><th>Tipo</th><th>Tema / Caso</th>
-        <th style="text-align:center">Rango</th>
-        <th style="text-align:center">Descarga</th><th>Metadatos</th>
-      </tr></thead>
-      <tbody>{filas}</tbody>
-    </table>
-  </div>
-  {'<p style="font-size:11px;color:#f59e0b;margin-top:8px">🟡 Hay reportes en generación — la página se actualiza sola cada 5s.</p>' if hay_generando else ''}
-</div>
-
-<div class="card">
-  <div class="card-title">Solicitar nuevo reporte</div>
+  <div class="card-title">Solicitar reporte</div>
   <form method="post" action="/admin/reportes" id="rep-form">
     <div style="margin-bottom:14px">
       <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Tipo de reporte</div>
@@ -6026,7 +6205,7 @@ async def admin_reportes(request: Request):
       <label style="display:block;margin-bottom:5px;font-size:13px">
         <input type="radio" name="tipo" value="reporte_b_caso" onchange="repToggle()"> Reporte B (Análisis por caso) — caso específico</label>
       <label style="display:block;margin-bottom:5px;font-size:13px">
-        <input type="radio" name="tipo" value="analisis_politico_24h" onchange="repToggle()"> Análisis Político (24h) — los hechos del día en contexto (narrativa)</label>
+        <input type="radio" name="tipo" value="analisis_politico_24h" onchange="repToggle()"> Reporte de Riesgo Político (24h) — los hechos del día en contexto (narrativa)</label>
     </div>
 
     <div id="rep-tema" style="display:none;margin-bottom:14px">
@@ -6062,12 +6241,49 @@ async def admin_reportes(request: Request):
   </form>
 </div>
 
+<div class="card">
+  <div class="card-title">Últimos 7 días ({len(recientes)})</div>
+  {panel_7d}
+  {'<p style="font-size:11px;color:#f59e0b;margin-top:10px">◌ Hay reportes en generación — la página se actualiza sola cada 5s.</p>' if hay_generando else ''}
+</div>
+
+<div class="card">
+  <div class="card-title">Historial y búsqueda</div>
+  <form method="get" action="/admin/reportes" class="rep-filtros">
+    <div>
+      <label>Tipo</label>
+      <select name="f_tipo" class="rep-in">{tipo_opts}</select>
+    </div>
+    <div>
+      <label>Tema / caso / texto</label>
+      <input type="text" name="f_q" value="{escape(f_q)}" placeholder="Ej. minería, Loreto…"
+             class="rep-in" style="min-width:190px">
+    </div>
+    <div>
+      <label>Desde</label>
+      <input type="date" name="f_desde" value="{escape(f_desde)}" class="rep-in">
+    </div>
+    <div>
+      <label>Hasta</label>
+      <input type="date" name="f_hasta" value="{escape(f_hasta)}" class="rep-in">
+    </div>
+    <div style="display:flex;gap:8px">
+      <button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Buscar</button>
+      {'<a href="/admin/reportes" style="color:var(--muted);font-size:12.5px;align-self:center">Limpiar</a>' if hay_filtro else ''}
+    </div>
+  </form>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:4px">
+    {'Resultados del filtro.' if hay_filtro else 'Sin filtro: agrupado en bloques de 7 días rodantes hacia atrás desde hoy.'}
+  </div>
+  {hist_html}
+</div>
+
 <script>
 function repToggle() {{
   var tipo = document.querySelector('input[name=tipo]:checked').value;
   document.getElementById('rep-tema').style.display = (tipo==='reporte_b_tema') ? 'block' : 'none';
   document.getElementById('rep-caso').style.display = (tipo==='reporte_b_caso') ? 'block' : 'none';
-  // El Análisis Político 24h no lleva ventana ni tema (siempre 24h global).
+  // El Reporte de Riesgo Político 24h no lleva ventana ni tema (siempre 24h global).
   document.getElementById('rep-rango').style.display = (tipo==='analisis_politico_24h') ? 'none' : 'block';
   document.getElementById('rep-auto-nota').style.display = (tipo==='reporte_a_automatico') ? 'block' : 'none';
 }}
@@ -6078,7 +6294,8 @@ document.addEventListener('DOMContentLoaded', repToggle);
 
 @router.post("/reportes")
 async def admin_reportes_post(request: Request):
-    """Registra una solicitud de reporte (estado 'generando'). No genera el PDF aún."""
+    """Registra la solicitud (estado 'generando') y lanza la generación real del
+    PDF en segundo plano (hilo daemon); el POST responde de inmediato."""
     sesion, err = _admin_guard(request)
     if err:
         return err
