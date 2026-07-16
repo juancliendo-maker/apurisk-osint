@@ -406,18 +406,21 @@ CREATE INDEX IF NOT EXISTS idx_analisis_log_usuario ON config_analisis_log(usuar
 -- ============================================================
 -- GENERADOR DE REPORTES (Etapa 3, Fase 3) — solicitudes y archivos
 -- ============================================================
--- Registro de reportes solicitados/generados. En Fase 3-1 solo se guarda la
--- solicitud (estado 'generando'); el PDF real lo produce Fase 3-2.
+-- Registro de reportes solicitados/generados (la solicitud y el PDF resultante).
 CREATE TABLE IF NOT EXISTS reportes_generados (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    fecha_generacion  TEXT NOT NULL DEFAULT (datetime('now')),
+    fecha_generacion  TEXT NOT NULL DEFAULT (datetime('now')),  -- instante de CREACIÓN (Lima)
     tipo              TEXT NOT NULL,   -- reporte_a_automatico | reporte_a_manual | reporte_b_tema | reporte_b_caso
     tema              TEXT,            -- si reporte_b_tema
     caso              TEXT,            -- si reporte_b_caso
     rango_datos       TEXT NOT NULL DEFAULT '7d',   -- 24h | 7d | 15d | 30d
     ruta_archivo      TEXT,            -- nombre de archivo PDF (relativo a reportes/)
     tamano_kb         INTEGER,
-    estado            TEXT NOT NULL DEFAULT 'generando',  -- generando | completado | error
+    -- generando | completado | error | esperando_revision
+    -- 'esperando_revision': flujo en DOS TIEMPOS (Reporte por Caso). El expediente
+    -- está armado y el caso espera la revisión del analista (puede tardar días);
+    -- al aprobar pasa a 'generando' y recién ahí se produce el PDF.
+    estado            TEXT NOT NULL DEFAULT 'generando',
     nota              TEXT,
     snapshot_id_datos INTEGER,
     usuario_solicito  TEXT NOT NULL
@@ -426,6 +429,58 @@ CREATE TABLE IF NOT EXISTS reportes_generados (
 CREATE INDEX IF NOT EXISTS idx_reportes_fecha ON reportes_generados(fecha_generacion DESC);
 CREATE INDEX IF NOT EXISTS idx_reportes_estado ON reportes_generados(estado);
 CREATE INDEX IF NOT EXISTS idx_reportes_tipo ON reportes_generados(tipo);
+
+-- ============================================================
+-- REPORTE POLÍTICO POR CASO — expediente (sub-fase 1: esqueleto de datos)
+-- ============================================================
+-- Flujo en DOS TIEMPOS: el analista abre el caso → el sistema arma el expediente
+-- → el caso queda 'esperando_revision' (días) → el analista aprueba → se genera
+-- el PDF. Estas tablas guardan SOLO datos; ni IA, ni UI, ni PDF.
+
+-- Metadatos del caso, 1:1 con la entry de reportes_generados.
+CREATE TABLE IF NOT EXISTS reporte_caso_meta (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporte_id            INTEGER NOT NULL UNIQUE
+                          REFERENCES reportes_generados(id) ON DELETE CASCADE,
+    pregunta              TEXT NOT NULL,   -- la hipótesis va SIEMPRE en modo pregunta
+    ventana_dias          INTEGER NOT NULL DEFAULT 7,   -- 7 | 15 | 30 (CASO_HORIZONTES)
+    terminos_busqueda     TEXT,   -- JSON: ["término", ...]
+    escenarios_candidatos TEXT,   -- JSON: ["escenario", ...]
+    indicaciones_detalle  TEXT,   -- indicaciones de detalle del analista (texto libre)
+    -- Proyección del analista POR HORIZONTE. JSON {"7":"...","15":"...","30":"..."}
+    -- (no columnas fijas: los horizontes son configurables vía CASO_HORIZONTES).
+    proyeccion_analista   TEXT,
+    creado_en             TEXT NOT NULL,   -- hora Lima (now_pe_iso)
+    actualizado_en        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_caso_meta_reporte ON reporte_caso_meta(reporte_id);
+
+-- Piezas del expediente, N:1 con el caso.
+CREATE TABLE IF NOT EXISTS reporte_caso_piezas (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporte_id        INTEGER NOT NULL
+                      REFERENCES reportes_generados(id) ON DELETE CASCADE,
+    -- PROCEDENCIA: requisito doctrinario, no adorno. La atribución en la prosa y
+    -- la verificabilidad ante el cliente dependen de ella → NOT NULL siempre.
+    procedencia       TEXT NOT NULL,   -- bd_osint | url_externa | documento_analista
+    ref_articulo_id   INTEGER,         -- si bd_osint → articulos.id (trazabilidad)
+    url               TEXT,            -- si url_externa
+    nombre_archivo    TEXT,            -- si documento_analista
+    titulo            TEXT,
+    fuente            TEXT,
+    fecha_pieza       TEXT,            -- fecha de la pieza (Lima) si se conoce
+    estado_extraccion TEXT NOT NULL DEFAULT 'pendiente',  -- pendiente|extrayendo|listo|fallo
+    texto_extraido    TEXT,
+    nota_error        TEXT,
+    incluido          INTEGER NOT NULL DEFAULT 1,   -- 1 = el analista lo incluye
+    creado_en         TEXT NOT NULL,   -- hora Lima
+    actualizado_en    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_caso_piezas_reporte ON reporte_caso_piezas(reporte_id);
+CREATE INDEX IF NOT EXISTS idx_caso_piezas_estado ON reporte_caso_piezas(estado_extraccion);
+CREATE INDEX IF NOT EXISTS idx_caso_piezas_proc ON reporte_caso_piezas(procedencia);
 """
 
 _DATOS_INICIALES = [
@@ -788,6 +843,13 @@ _MIGRACIONES = [
     # cualquier ajuste manual posterior del analista en calibración.
     "UPDATE config_parametros SET valor='15,30' "
     "WHERE clave='PROY_HORIZONTES' AND valor='15,30,60,90'",
+    # Instante en que el reporte EMPEZÓ A GENERARSE de verdad (hora Lima), distinto
+    # de fecha_generacion (que es la CREACIÓN de la solicitud). Lo necesita el flujo
+    # en dos tiempos del Reporte por Caso: un caso creado el lunes y aprobado el
+    # jueves entra a 'generando' el jueves; si el watchdog midiera desde
+    # fecha_generacion (lunes) lo mataría en el primer poll. NULL en las filas
+    # viejas → el watchdog cae a fecha_generacion (comportamiento actual intacto).
+    "ALTER TABLE reportes_generados ADD COLUMN generacion_iniciada_en TEXT",
 ]
 
 
@@ -942,7 +1004,17 @@ _AP24_PARAMS = [
      "(la generación de ~3000 tokens tarda 40-90s; el default global de 30s es corto)"),
     ("REPORTES_WATCHDOG_MIN", "10", "int",
      "Reportes: minutos tras los cuales una entry en 'generando' se marca 'error' "
-     "(anti-huérfanas: proceso muerto a mitad de generación)"),
+     "(anti-huérfanas: proceso muerto a mitad de generación). Se mide desde que la "
+     "generación EMPEZÓ (generacion_iniciada_en), no desde la creación"),
+    # ── Reporte por Caso (flujo en dos tiempos) ──
+    ("CASO_HORIZONTES", "7,15,30", "string",
+     "Reporte por Caso: horizontes (días) de la proyección del analista. "
+     "Independiente de PROY_HORIZONTES (global, usado por otros reportes)"),
+    ("CASO_MAX_PIEZAS", "60", "int",
+     "Reporte por Caso: tope de piezas del expediente por caso"),
+    ("CASO_MAX_TEXTO_PIEZA_CHARS", "40000", "int",
+     "Reporte por Caso: tope de caracteres del texto extraído por pieza "
+     "(se trunca al guardar; control de tamaño de BD y de coste)"),
     ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V4, "string",
      "Análisis Político 24h: system prompt maestro (doctrina THALOS, editable)"),
 ]
