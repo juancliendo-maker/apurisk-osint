@@ -11,6 +11,7 @@ lectura devuelven None / {} y el caller usa su fallback hardcodeado. Editar
 configuración nunca puede dejar el pipeline sin datos.
 """
 from __future__ import annotations
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -2594,6 +2595,17 @@ def watchdog_reportes(db_path: str, max_min: int = None) -> int:
     a 'error' con nota. Cubre muertes no capturables (deploy/restart/OOM a mitad
     de generación) — ninguna entry miente en 'generando' para siempre.
 
+    La antigüedad se mide desde que la generación EMPEZÓ
+    (COALESCE(generacion_iniciada_en, fecha_generacion)), NO desde la creación de
+    la solicitud. Lo exige el flujo en DOS TIEMPOS del Reporte por Caso: un caso
+    creado el lunes y aprobado el jueves entra a 'generando' el jueves; midiendo
+    desde fecha_generacion (lunes) el watchdog lo mataría en el primer poll.
+    Las filas viejas tienen generacion_iniciada_en NULL → el COALESCE cae a
+    fecha_generacion → comportamiento idéntico al anterior (sin regresión).
+
+    Solo toca 'generando': un caso en 'esperando_revision' (que puede esperar días
+    la revisión del analista) queda intacto.
+
     max_min: minutos de gracia; si None, lee REPORTES_WATCHDOG_MIN (default 10).
     Retroactivo: aplica a cualquier huérfana existente, no solo a las nuevas.
     Devuelve cuántas entries marcó.
@@ -2611,13 +2623,18 @@ def watchdog_reportes(db_path: str, max_min: int = None) -> int:
                 max_min = int(row["valor"])
         except Exception:
             pass
-    cutoff = (now_pe() - timedelta(minutes=max_min)).isoformat(timespec="seconds")
+    # Cutoff normalizado ('YYYY-MM-DD HH:MM:SS', hora Lima) para comparar contra la
+    # fecha normalizada: la columna convive en dos formatos (ISO con offset y naive
+    # con espacio) y el texto crudo compara mal ('T' > ' ') en el mismo día.
+    cutoff = (now_pe() - timedelta(minutes=max_min)).strftime("%Y-%m-%d %H:%M:%S")
+    inicio_norm = ("substr(replace(COALESCE(generacion_iniciada_en, fecha_generacion),"
+                   "'T',' '),1,19)")
     try:
         def _op(c: sqlite3.Connection):
             cur = c.execute(
                 "UPDATE reportes_generados SET estado='error', "
                 "nota='Generación interrumpida — vuelva a solicitar' "
-                "WHERE estado='generando' AND fecha_generacion < ?",
+                f"WHERE estado='generando' AND {inicio_norm} < ?",
                 (cutoff,),
             )
             return {"n": cur.rowcount}
@@ -2626,6 +2643,222 @@ def watchdog_reportes(db_path: str, max_min: int = None) -> int:
     except Exception as e:
         print(f"[config_loader] watchdog_reportes falló: {e}")
         return 0
+
+
+def marcar_generacion_iniciada(db_path: str, reporte_id: int) -> None:
+    """Sella el instante (Lima) en que el reporte EMPIEZA a generarse de verdad.
+
+    Lo consume watchdog_reportes: la gracia se cuenta desde aquí, no desde la
+    creación de la solicitud. Es el gancho del flujo en dos tiempos (al aprobar
+    un caso), pero sirve a cualquier generador que quiera medir bien su ventana.
+    """
+    from ..utils.timezone_pe import now_pe_iso
+    try:
+        with _conn(db_path) as c:
+            c.execute("UPDATE reportes_generados SET generacion_iniciada_en=? WHERE id=?",
+                      (now_pe_iso(), int(reporte_id)))
+            c.commit()
+    except Exception as e:
+        print(f"[config_loader] marcar_generacion_iniciada falló: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REPORTE POLÍTICO POR CASO — esqueleto de datos (sub-fase 1)
+# ═══════════════════════════════════════════════════════════════════════════
+# Flujo en DOS TIEMPOS: se abre el caso → se arma el expediente → queda en
+# 'esperando_revision' (días) → el analista aprueba → se genera el PDF.
+# Aquí SOLO viven los datos: metadatos del caso (1:1) y piezas (N:1).
+
+ESTADO_ESPERANDO_REVISION = "esperando_revision"
+PROCEDENCIAS_PIEZA = ("bd_osint", "url_externa", "documento_analista")
+ESTADOS_EXTRACCION = ("pendiente", "extrayendo", "listo", "fallo")
+
+_CASO_DEFAULTS = {"horizontes": [7, 15, 30], "max_piezas": 60,
+                  "max_texto_chars": 40000}
+
+
+def cargar_parametros_caso(db_path: str) -> dict:
+    """Parámetros del Reporte por Caso (config, nada hardcodeado).
+
+    CASO_HORIZONTES es propio del caso: NO se toca PROY_HORIZONTES (global,
+    usado por otros reportes). Devuelve {horizontes, max_piezas, max_texto_chars}
+    con defaults seguros si la config falta o es inválida.
+    """
+    out = dict(_CASO_DEFAULTS)
+    out["horizontes"] = list(_CASO_DEFAULTS["horizontes"])
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT clave, valor FROM config_parametros WHERE clave IN "
+                "('CASO_HORIZONTES','CASO_MAX_PIEZAS','CASO_MAX_TEXTO_PIEZA_CHARS')"
+            ).fetchall()
+        for r in rows:
+            v = (r["valor"] or "").strip()
+            if r["clave"] == "CASO_HORIZONTES":
+                hs = [int(x) for x in v.replace(" ", "").split(",") if x.isdigit()]
+                if hs:
+                    out["horizontes"] = hs
+            elif r["clave"] == "CASO_MAX_PIEZAS":
+                out["max_piezas"] = int(v)
+            elif r["clave"] == "CASO_MAX_TEXTO_PIEZA_CHARS":
+                out["max_texto_chars"] = int(v)
+    except Exception as e:
+        print(f"[config_loader] cargar_parametros_caso falló: {e}")
+    return out
+
+
+def guardar_caso_meta(db_path: str, reporte_id: int, pregunta: str,
+                      ventana_dias: int = 7, terminos_busqueda=None,
+                      escenarios_candidatos=None, indicaciones_detalle: str = None,
+                      proyeccion_analista=None) -> dict:
+    """Crea o actualiza (upsert 1:1) los metadatos del caso. Timestamps Lima.
+
+    terminos_busqueda / escenarios_candidatos: list[str] → se guardan como JSON.
+    proyeccion_analista: dict {horizonte_dias: texto} → JSON (los horizontes son
+      configurables vía CASO_HORIZONTES; por eso JSON y no columnas fijas).
+    Lanza ValueError si la pregunta viene vacía (la hipótesis va SIEMPRE en modo
+    pregunta) o si ventana_dias no está en CASO_HORIZONTES.
+    """
+    from ..utils.timezone_pe import now_pe_iso
+    preg = (pregunta or "").strip()
+    if not preg:
+        raise ValueError("La pregunta del caso es obligatoria (hipótesis en modo pregunta)")
+    par = cargar_parametros_caso(db_path)
+    if int(ventana_dias) not in par["horizontes"]:
+        raise ValueError(
+            f"ventana_dias {ventana_dias} no está en CASO_HORIZONTES {par['horizontes']}")
+    ahora = now_pe_iso()
+    t_json = json.dumps(terminos_busqueda or [], ensure_ascii=False)
+    e_json = json.dumps(escenarios_candidatos or [], ensure_ascii=False)
+    p_json = json.dumps({str(k): v for k, v in (proyeccion_analista or {}).items()},
+                        ensure_ascii=False)
+
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "INSERT INTO reporte_caso_meta (reporte_id, pregunta, ventana_dias, "
+            "terminos_busqueda, escenarios_candidatos, indicaciones_detalle, "
+            "proyeccion_analista, creado_en, actualizado_en) VALUES (?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(reporte_id) DO UPDATE SET pregunta=excluded.pregunta, "
+            "ventana_dias=excluded.ventana_dias, "
+            "terminos_busqueda=excluded.terminos_busqueda, "
+            "escenarios_candidatos=excluded.escenarios_candidatos, "
+            "indicaciones_detalle=excluded.indicaciones_detalle, "
+            "proyeccion_analista=excluded.proyeccion_analista, "
+            "actualizado_en=excluded.actualizado_en",
+            (int(reporte_id), preg, int(ventana_dias), t_json, e_json,
+             indicaciones_detalle, p_json, ahora, ahora))
+        return {"ok": True, "reporte_id": int(reporte_id)}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def obtener_caso_meta(db_path: str, reporte_id: int) -> dict | None:
+    """Metadatos del caso con los campos JSON ya deserializados. None si no existe."""
+    try:
+        with _conn(db_path) as c:
+            r = c.execute("SELECT * FROM reporte_caso_meta WHERE reporte_id=?",
+                          (int(reporte_id),)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        for campo, vacio in (("terminos_busqueda", []), ("escenarios_candidatos", []),
+                             ("proyeccion_analista", {})):
+            try:
+                d[campo] = json.loads(d[campo]) if d.get(campo) else vacio
+            except (ValueError, TypeError):
+                d[campo] = vacio
+        return d
+    except Exception as e:
+        print(f"[config_loader] obtener_caso_meta falló: {e}")
+        return None
+
+
+def agregar_pieza_caso(db_path: str, reporte_id: int, procedencia: str,
+                       titulo: str = None, fuente: str = None, url: str = None,
+                       ref_articulo_id: int = None, nombre_archivo: str = None,
+                       fecha_pieza: str = None, texto_extraido: str = None,
+                       estado_extraccion: str = "pendiente") -> dict:
+    """Agrega una pieza al expediente. Devuelve {ok, id} o {ok: False, error}.
+
+    procedencia es OBLIGATORIA y debe ser una de PROCEDENCIAS_PIEZA: la atribución
+    en la prosa y la verificabilidad ante el cliente dependen de ella.
+    Respeta los topes de config: CASO_MAX_PIEZAS (rechaza) y
+    CASO_MAX_TEXTO_PIEZA_CHARS (trunca el texto extraído).
+    """
+    from ..utils.timezone_pe import now_pe_iso
+    if procedencia not in PROCEDENCIAS_PIEZA:
+        return {"ok": False, "error":
+                f"procedencia inválida: {procedencia!r} (válidas: {', '.join(PROCEDENCIAS_PIEZA)})"}
+    if estado_extraccion not in ESTADOS_EXTRACCION:
+        return {"ok": False, "error": f"estado_extraccion inválido: {estado_extraccion!r}"}
+    par = cargar_parametros_caso(db_path)
+    if texto_extraido and len(texto_extraido) > par["max_texto_chars"]:
+        texto_extraido = texto_extraido[:par["max_texto_chars"]]
+    ahora = now_pe_iso()
+
+    def _op(c: sqlite3.Connection) -> dict:
+        n = c.execute("SELECT COUNT(*) FROM reporte_caso_piezas WHERE reporte_id=?",
+                      (int(reporte_id),)).fetchone()[0]
+        if n >= par["max_piezas"]:
+            return {"ok": False,
+                    "error": f"tope de piezas alcanzado ({par['max_piezas']}, CASO_MAX_PIEZAS)"}
+        cur = c.execute(
+            "INSERT INTO reporte_caso_piezas (reporte_id, procedencia, ref_articulo_id, "
+            "url, nombre_archivo, titulo, fuente, fecha_pieza, estado_extraccion, "
+            "texto_extraido, creado_en, actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (int(reporte_id), procedencia, ref_articulo_id, url, nombre_archivo,
+             titulo, fuente, fecha_pieza, estado_extraccion, texto_extraido,
+             ahora, ahora))
+        return {"ok": True, "id": cur.lastrowid}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def listar_piezas_caso(db_path: str, reporte_id: int,
+                       solo_incluidas: bool = False) -> list:
+    """Piezas del expediente de un caso, más antiguas primero (orden de armado)."""
+    try:
+        with _conn(db_path) as c:
+            sql = "SELECT * FROM reporte_caso_piezas WHERE reporte_id=?"
+            args = [int(reporte_id)]
+            if solo_incluidas:
+                sql += " AND incluido=1"
+            sql += " ORDER BY id ASC"
+            rows = c.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] listar_piezas_caso falló: {e}")
+        return []
+
+
+def actualizar_pieza_caso(db_path: str, pieza_id: int, estado_extraccion: str = None,
+                          texto_extraido: str = None, nota_error: str = None,
+                          incluido: bool = None) -> dict:
+    """Actualiza una pieza: estado de extracción, texto, error y/o inclusión.
+
+    Solo toca lo que se pasa (None = no cambiar). Trunca el texto al tope de
+    config. Devuelve {ok} o {ok: False, error}.
+    """
+    from ..utils.timezone_pe import now_pe_iso
+    if estado_extraccion is not None and estado_extraccion not in ESTADOS_EXTRACCION:
+        return {"ok": False, "error": f"estado_extraccion inválido: {estado_extraccion!r}"}
+    sets, args = [], []
+    if estado_extraccion is not None:
+        sets.append("estado_extraccion=?"); args.append(estado_extraccion)
+    if texto_extraido is not None:
+        par = cargar_parametros_caso(db_path)
+        sets.append("texto_extraido=?"); args.append(texto_extraido[:par["max_texto_chars"]])
+    if nota_error is not None:
+        sets.append("nota_error=?"); args.append(nota_error)
+    if incluido is not None:
+        sets.append("incluido=?"); args.append(1 if incluido else 0)
+    if not sets:
+        return {"ok": True, "sin_cambios": True}
+    sets.append("actualizado_en=?"); args.append(now_pe_iso())
+    args.append(int(pieza_id))
+
+    def _op(c: sqlite3.Connection) -> dict:
+        cur = c.execute(f"UPDATE reporte_caso_piezas SET {', '.join(sets)} WHERE id=?", args)
+        return {"ok": cur.rowcount > 0}
+    return _ejecutar_con_reintentos(db_path, _op)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
