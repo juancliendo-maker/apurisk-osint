@@ -2861,6 +2861,118 @@ def actualizar_pieza_caso(db_path: str, pieza_id: int, estado_extraccion: str = 
     return _ejecutar_con_reintentos(db_path, _op)
 
 
+# ── Solicitud, búsqueda y aprobación del caso (sub-fase 2) ────────────────────
+def crear_solicitud_caso(db_path: str, pregunta: str, ventana_dias: int,
+                         usuario: str) -> dict:
+    """Crea la entry del Reporte por Caso en estado 'esperando_revision' (flujo en
+    dos tiempos: NO genera PDF). Devuelve {ok, id} o {ok: False, error}.
+
+    La pregunta (hipótesis SIEMPRE en modo pregunta) es obligatoria; ventana_dias
+    se valida contra CASO_HORIZONTES. La pregunta se copia a la columna `caso`
+    (truncada) para que el panel/historial la muestren sin tocar su render.
+    """
+    from ..utils.timezone_pe import now_pe_iso
+    preg = (pregunta or "").strip()
+    if not preg:
+        return {"ok": False, "error": "La pregunta del caso es obligatoria (en modo pregunta)"}
+    try:
+        vd = int(ventana_dias)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Ventana inválida"}
+    par = cargar_parametros_caso(db_path)
+    if vd not in par["horizontes"]:
+        return {"ok": False, "error": f"Ventana {vd} no está en CASO_HORIZONTES {par['horizontes']}"}
+    fecha = now_pe_iso()
+    rango = f"{vd}d"
+
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute(
+            "INSERT INTO reportes_generados (fecha_generacion, tipo, caso, rango_datos, "
+            "estado, usuario_solicito) VALUES (?, 'reporte_b_caso', ?, ?, "
+            f"'{ESTADO_ESPERANDO_REVISION}', ?)",
+            (fecha, preg[:200], rango, usuario))
+        return {"ok": True, "id": c.execute("SELECT last_insert_rowid()").fetchone()[0]}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def buscar_articulos_caso(db_path: str, terminos: list, ventana_dias: int,
+                          limite: int = 300) -> list:
+    """Artículos que hacen match (LIKE en title/summary) con alguno de los términos,
+    dentro de la ventana (ventana_dias, hora Lima). Recientes primero.
+
+    Ventana con el mismo criterio que el resto del sistema: capturado_en o
+    published dentro del corte. Sin términos → []."""
+    from datetime import timedelta
+    from ..utils.timezone_pe import now_pe
+    terms = [t.strip() for t in (terminos or []) if t and t.strip()]
+    if not terms:
+        return []
+    cutoff = (now_pe() - timedelta(days=int(ventana_dias))).isoformat(timespec="seconds")
+    like_block = " OR ".join(["(lower(title) LIKE ? OR lower(summary) LIKE ?)"] * len(terms))
+    args = []
+    for t in terms:
+        lk = f"%{t.lower()}%"; args += [lk, lk]
+    args += [cutoff, cutoff, int(limite)]
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, title, summary, url, source_name, capturado_en, published "
+                f"FROM articulos WHERE ({like_block}) "
+                "AND (capturado_en >= ? OR published >= ?) "
+                "ORDER BY capturado_en DESC LIMIT ?", args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] buscar_articulos_caso falló: {e}")
+        return []
+
+
+def sincronizar_piezas_bd_osint(db_path: str, reporte_id: int, articulos: list) -> dict:
+    """Reemplaza SOLO las piezas de procedencia 'bd_osint' del caso con las de
+    `articulos` (deja intactas url_externa/documento_analista). Respeta el cupo
+    restante de CASO_MAX_PIEZAS. estado_extraccion='listo' (el texto ya está en
+    BD: el resumen). Devuelve {ok, n}."""
+    from ..utils.timezone_pe import now_pe_iso
+    par = cargar_parametros_caso(db_path)
+    ahora = now_pe_iso()
+
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute("DELETE FROM reporte_caso_piezas WHERE reporte_id=? AND procedencia='bd_osint'",
+                  (int(reporte_id),))
+        usadas = c.execute("SELECT COUNT(*) FROM reporte_caso_piezas WHERE reporte_id=?",
+                           (int(reporte_id),)).fetchone()[0]
+        cupo = max(0, par["max_piezas"] - usadas)
+        ins = 0
+        for a in articulos[:cupo]:
+            txt = (a.get("summary") or "")[:par["max_texto_chars"]]
+            c.execute(
+                "INSERT INTO reporte_caso_piezas (reporte_id, procedencia, ref_articulo_id, "
+                "url, titulo, fuente, fecha_pieza, estado_extraccion, texto_extraido, "
+                "incluido, creado_en, actualizado_en) VALUES (?, 'bd_osint', ?,?,?,?,?, "
+                "'listo', ?, 1, ?, ?)",
+                (int(reporte_id), a.get("id"), a.get("url"), a.get("title"),
+                 a.get("source_name"), (a.get("capturado_en") or a.get("published")),
+                 txt, ahora, ahora))
+            ins += 1
+        return {"ok": True, "n": ins}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def aprobar_caso(db_path: str, reporte_id: int) -> dict:
+    """Aprueba el caso: sella el inicio de generación (para el watchdog) y pasa de
+    'esperando_revision' a 'generando'. Solo actúa si está en 'esperando_revision'.
+    El PDF real es sub-fase 5; por ahora cae al dummy como cualquier reporte_b_caso.
+    """
+    from ..utils.timezone_pe import now_pe_iso
+
+    def _op(c: sqlite3.Connection) -> dict:
+        cur = c.execute(
+            "UPDATE reportes_generados SET estado='generando', generacion_iniciada_en=? "
+            f"WHERE id=? AND estado='{ESTADO_ESPERANDO_REVISION}'",
+            (now_pe_iso(), int(reporte_id)))
+        return {"ok": cur.rowcount > 0}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # MOTOR POR VENTANA DE TIEMPO (Fase 3-3a) — foto analítica (crudo) + trayectoria
 # Aditivo: el default reproduce el comportamiento de 7 días de producción.

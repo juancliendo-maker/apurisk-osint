@@ -18,6 +18,7 @@ Rutas:
 """
 from __future__ import annotations
 import os
+import re
 import secrets
 import json
 import sqlite3
@@ -5910,7 +5911,8 @@ _REPORTE_TIPO_LABEL = {
     "reporte_b_caso": "Reporte B (Caso)",
     "analisis_politico_24h": "Reporte de Riesgo Político (24h)",
 }
-_REPORTE_ESTADO_DOT = {"completado": "🟢", "generando": "🟡", "error": "🔴"}
+_REPORTE_ESTADO_DOT = {"completado": "🟢", "generando": "🟡", "error": "🔴",
+                       "esperando_revision": "🔵"}
 _REPORTES_DIR = Path(OUTPUT_DIR) / "reportes"
 
 _MESES_CORTO = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
@@ -5989,13 +5991,32 @@ def _agrupar_rodante(reportes: list, ahora) -> list:
 
 
 def _estado_pill(estado: str) -> str:
-    """Badge de estado con iconografía clara (verde/ámbar/rojo)."""
-    cfg = {"completado": ("#22c55e", "✓", "Completado"),
-           "generando":  ("#f59e0b", "◌", "Generando"),
-           "error":      ("#ef4444", "✕", "Error")}
+    """Badge de estado con iconografía clara (verde/ámbar/rojo/azul)."""
+    cfg = {"completado":         ("#22c55e", "✓", "Completado"),
+           "generando":          ("#f59e0b", "◌", "Generando"),
+           "error":              ("#ef4444", "✕", "Error"),
+           "esperando_revision": ("#38bdf8", "◒", "En revisión")}
     color, ico, txt = cfg.get(estado, ("#94a3b8", "•", estado or "—"))
     return (f'<span class="rep-pill" style="color:{color};border-color:{color}44;'
             f'background:{color}14">{ico} {escape(txt)}</span>')
+
+
+def _reporte_accion(r: dict, small: bool = False) -> str:
+    """Acción según estado: descargar (completado) · Revisar (esperando_revision,
+    → mesa) · generando… · error. Un caso en revisión NO tiene PDF: su acción es
+    revisarlo en la mesa, no descargar."""
+    est = r["estado"]
+    if est == "completado":
+        cls = "rep-dl-sm" if small else "rep-dl"
+        return f'<a class="{cls}" href="/admin/reportes/{r["id"]}/descargar">⬇ PDF</a>'
+    if est == "esperando_revision":
+        cls = "rep-dl-sm" if small else "rep-dl"
+        return f'<a class="{cls}" href="/admin/reportes/{r["id"]}/mesa">🔍 Revisar</a>'
+    if est == "generando":
+        return '<span class="rep-wait">generando…</span>'
+    if small:
+        return '<span class="rep-err">error</span>'
+    return f'<span class="rep-err">{escape((r.get("nota") or "error")[:70])}</span>'
 
 
 def _reporte_card(r: dict) -> str:
@@ -6004,18 +6025,11 @@ def _reporte_card(r: dict) -> str:
     tipo = escape(_REPORTE_TIPO_LABEL.get(r["tipo"], r["tipo"]))
     tam = f'{r["tamano_kb"]} KB' if r.get("tamano_kb") else "—"
     rango = escape(r.get("rango_datos") or "—")
-    if r["estado"] == "completado":
-        accion = (f'<a class="rep-dl" href="/admin/reportes/{r["id"]}/descargar">'
-                  f'⬇ Descargar PDF</a>')
-    elif r["estado"] == "generando":
-        accion = '<span class="rep-wait">generando…</span>'
-    else:
-        accion = f'<span class="rep-err">{escape((r.get("nota") or "error")[:70])}</span>'
     return f"""<div class="rep-card">
   <div class="rep-card-h">{_estado_pill(r["estado"])}<span class="rep-fecha">{escape(_fmt_fecha_corta(dt))}</span></div>
   <div class="rep-tipo">{tipo}</div>
   <div class="rep-sub">{_reporte_tema_caso(r)} · <span class="rep-rango">{rango}</span> · {tam}</div>
-  <div class="rep-acc">{accion}</div>
+  <div class="rep-acc">{_reporte_accion(r)}</div>
 </div>"""
 
 
@@ -6023,12 +6037,7 @@ def _reporte_fila(r: dict) -> str:
     """Fila compacta del historial."""
     dt = _fecha_reporte_pe(r.get("fecha_generacion"))
     tam = f'{r["tamano_kb"]} KB' if r.get("tamano_kb") else "—"
-    if r["estado"] == "completado":
-        acc = f'<a class="rep-dl-sm" href="/admin/reportes/{r["id"]}/descargar">⬇ PDF</a>'
-    elif r["estado"] == "generando":
-        acc = '<span class="rep-wait">generando…</span>'
-    else:
-        acc = '<span class="rep-err">error</span>'
+    acc = _reporte_accion(r, small=True)
     nota = f'<span class="rep-nota" title="{escape(r.get("nota") or "")}">ⓘ</span>' if r.get("nota") else ""
     return f"""<tr>
   <td class="c-f">{escape(_fmt_fecha_corta(dt))}</td>
@@ -6216,9 +6225,14 @@ async def admin_reportes(request: Request):
     </div>
 
     <div id="rep-caso" style="display:none;margin-bottom:14px">
-      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Caso específico</div>
-      <input type="text" name="caso" maxlength="200" placeholder="Ej. Minería ilegal en Loreto"
-             style="width:100%;max-width:440px;background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:13px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Pregunta del caso</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px">La hipótesis va SIEMPRE en modo pregunta. Al abrir el caso se deriva (ciego al material) términos y escenarios, y queda esperando tu revisión en la mesa.</div>
+      <textarea name="pregunta" maxlength="500" rows="2" placeholder="Ej. ¿Se consolidará el paro en el corredor sur en las próximas semanas?"
+             style="width:100%;max-width:560px;background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:13px"></textarea>
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin:10px 0 6px">Ventana</div>
+      <label style="margin-right:14px;font-size:13px"><input type="radio" name="ventana_dias" value="7" checked> 7 días</label>
+      <label style="margin-right:14px;font-size:13px"><input type="radio" name="ventana_dias" value="15"> 15 días</label>
+      <label style="font-size:13px"><input type="radio" name="ventana_dias" value="30"> 30 días</label>
     </div>
 
     <div id="rep-rango" style="margin-bottom:16px">
@@ -6283,8 +6297,10 @@ function repToggle() {{
   var tipo = document.querySelector('input[name=tipo]:checked').value;
   document.getElementById('rep-tema').style.display = (tipo==='reporte_b_tema') ? 'block' : 'none';
   document.getElementById('rep-caso').style.display = (tipo==='reporte_b_caso') ? 'block' : 'none';
-  // El Reporte de Riesgo Político 24h no lleva ventana ni tema (siempre 24h global).
-  document.getElementById('rep-rango').style.display = (tipo==='analisis_politico_24h') ? 'none' : 'block';
+  // El Reporte por Caso usa su propia ventana; el 24h es siempre global 24h.
+  // Ambos ocultan el rango genérico.
+  var sinRango = (tipo==='analisis_politico_24h' || tipo==='reporte_b_caso');
+  document.getElementById('rep-rango').style.display = sinRango ? 'none' : 'block';
   document.getElementById('rep-auto-nota').style.display = (tipo==='reporte_a_automatico') ? 'block' : 'none';
 }}
 document.addEventListener('DOMContentLoaded', repToggle);
@@ -6301,8 +6317,35 @@ async def admin_reportes_post(request: Request):
         return err
     from ..storage.config_loader import crear_solicitud_reporte, LockTimeoutError
     form = await request.form()
+    tipo = form.get("tipo", "")
+
+    # ── Reporte por Caso: flujo en dos tiempos (solicitud → mesa de revisión) ──
+    # Crea la entry en 'esperando_revision' + su meta, deriva términos/escenarios
+    # CIEGO al corpus y arma el expediente en segundo plano. NO genera PDF.
+    if tipo == "reporte_b_caso":
+        from ..storage.config_loader import crear_solicitud_caso, guardar_caso_meta
+        pregunta = (form.get("pregunta") or "").strip()
+        try:
+            ventana = int(form.get("ventana_dias") or 7)
+        except (TypeError, ValueError):
+            ventana = 7
+        try:
+            r = crear_solicitud_caso(_get_db_path(), pregunta, ventana, sesion["username"])
+            if not r.get("ok"):
+                return RedirectResponse(
+                    f"/admin/reportes?err={escape(r.get('error', 'Solicitud inválida'))}",
+                    status_code=303)
+            guardar_caso_meta(_get_db_path(), r["id"], pregunta=pregunta, ventana_dias=ventana)
+            _lanzar_bg_caso(_construir_expediente_caso, _get_db_path(), r["id"])
+            return RedirectResponse(f"/admin/reportes/{r['id']}/mesa?msg="
+                                    "Caso+abierto+·+armando+el+expediente…", status_code=303)
+        except LockTimeoutError:
+            return RedirectResponse("/admin/reportes?err=BD+ocupada.+Reintenta.", status_code=303)
+        except Exception as e:
+            return RedirectResponse(f"/admin/reportes?err={escape(str(e))}", status_code=303)
+
     datos = {
-        "tipo": form.get("tipo", ""),
+        "tipo": tipo,
         "tema": form.get("tema", ""),
         "caso": form.get("caso", ""),
         "rango_datos": form.get("rango_datos", "7d"),
@@ -6340,6 +6383,282 @@ async def admin_reportes_post(request: Request):
         return RedirectResponse(f"/admin/reportes?err={escape(str(e))}", status_code=303)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MESA DE TRABAJO DEL CASO — revisión del expediente antes de aprobar
+# ══════════════════════════════════════════════════════════════════════════════
+_PROC_LABEL = {"bd_osint": "BD OSINT", "url_externa": "URL externa",
+               "documento_analista": "Documento"}
+
+
+def _mesa_url(reporte_id: int, msg: str = "", err: str = "") -> str:
+    base = f"/admin/reportes/{reporte_id}/mesa"
+    if msg:
+        return f"{base}?msg={msg}"
+    if err:
+        return f"{base}?err={err}"
+    return base
+
+
+@router.get("/reportes/{reporte_id:int}/mesa", response_class=HTMLResponse)
+async def admin_caso_mesa(request: Request, reporte_id: int):
+    """Mesa de trabajo del Reporte por Caso: pregunta, términos, escenarios,
+    indicaciones y material (incluir/excluir), con 'Aprobar y generar'."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import (
+        obtener_reporte, obtener_caso_meta, listar_piezas_caso,
+    )
+    db = _get_db_path()
+    r = obtener_reporte(db, reporte_id)
+    if not r or r.get("tipo") != "reporte_b_caso":
+        return HTMLResponse(_page("Reportes",
+            '<div class="alert-box alert-alto">Caso no encontrado.</div>',
+            "reportes", sesion["username"]), status_code=404)
+    meta = obtener_caso_meta(db, reporte_id) or {}
+    piezas = listar_piezas_caso(db, reporte_id)
+    en_revision = r.get("estado") == "esperando_revision"
+
+    msg = request.query_params.get("msg", "")
+    errq = request.query_params.get("err", "")
+    banner = (f'<div class="alert-box alert-info" style="margin-bottom:12px">✓ {escape(msg)}</div>' if msg else '')
+    banner += (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(errq)}</div>' if errq else '')
+
+    terminos = meta.get("terminos_busqueda") or []
+    escenarios = meta.get("escenarios_candidatos") or []
+    pregunta = meta.get("pregunta") or r.get("caso") or ""
+    ventana = meta.get("ventana_dias") or 7
+    ro = "" if en_revision else "disabled"   # solo editable en revisión
+
+    # Filas de material (piezas)
+    if piezas:
+        piezas_html = ""
+        for p in piezas:
+            chk = "checked" if p.get("incluido") else ""
+            proc = _PROC_LABEL.get(p.get("procedencia"), p.get("procedencia") or "—")
+            fecha = escape((p.get("fecha_pieza") or "")[:16].replace("T", " "))
+            piezas_html += f"""<tr>
+  <td class="c-c"><form method="post" action="/admin/reportes/{reporte_id}/mesa/pieza" style="margin:0">
+      <input type="hidden" name="pieza_id" value="{p['id']}">
+      <input type="checkbox" name="incluido" onchange="this.form.submit()" {chk} {ro}></form></td>
+  <td>{escape((p.get('titulo') or '—')[:110])}</td>
+  <td class="c-c" style="font-size:11px;color:var(--muted)">{escape(proc)}</td>
+  <td>{escape((p.get('fuente') or '—')[:26])}</td>
+  <td class="c-f">{fecha}</td>
+</tr>"""
+        material_html = (f'<div style="overflow-x:auto"><table class="tbl"><thead><tr>'
+                         f'<th style="text-align:center">Incluir</th><th>Título</th>'
+                         f'<th style="text-align:center">Procedencia</th><th>Fuente</th>'
+                         f'<th>Fecha</th></tr></thead><tbody>{piezas_html}</tbody></table></div>')
+    else:
+        material_html = ('<div class="rep-vacio">Sin material aún. Ajusta los términos y '
+                         'usa «Volver a buscar» (o recarga si el expediente se está armando).</div>')
+
+    esc_items = "".join(
+        f'<div style="display:flex;gap:6px;margin-bottom:5px">'
+        f'<input type="text" name="escenario" value="{escape(e)}" class="rep-in" style="flex:1" {ro}></div>'
+        for e in escenarios)
+    esc_items += (f'<div style="display:flex;gap:6px;margin-bottom:5px">'
+                  f'<input type="text" name="escenario" value="" placeholder="+ nuevo escenario" '
+                  f'class="rep-in" style="flex:1" {ro}></div>') if en_revision else ''
+
+    aviso_estado = "" if en_revision else (
+        f'<div class="alert-box alert-info" style="margin-bottom:12px">Este caso ya no está '
+        f'en revisión (estado: {escape(r.get("estado") or "—")}). La mesa es de solo lectura.</div>')
+
+    contenido = f"""
+{_REPORTES_CSS}
+{banner}{aviso_estado}
+<div style="margin-bottom:12px"><a href="/admin/reportes" style="color:var(--muted);font-size:12.5px">← Volver a reportes</a></div>
+
+<div class="card">
+  <div class="card-title">Pregunta del caso · ventana {escape(str(ventana))} días · {_estado_pill(r["estado"])}</div>
+  <form method="post" action="/admin/reportes/{reporte_id}/mesa/pregunta">
+    <textarea name="pregunta" rows="2" maxlength="500" class="rep-in" style="width:100%;box-sizing:border-box" {ro}>{escape(pregunta)}</textarea>
+    <div style="margin-top:8px">
+      <label style="margin-right:14px;font-size:13px"><input type="radio" name="ventana_dias" value="7" {'checked' if int(ventana)==7 else ''} {ro}> 7 días</label>
+      <label style="margin-right:14px;font-size:13px"><input type="radio" name="ventana_dias" value="15" {'checked' if int(ventana)==15 else ''} {ro}> 15 días</label>
+      <label style="font-size:13px"><input type="radio" name="ventana_dias" value="30" {'checked' if int(ventana)==30 else ''} {ro}> 30 días</label>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin:6px 0 8px">Guardar la pregunta la re-deriva CIEGA (términos + escenarios) y re-arma el expediente.</div>
+    {'<button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Guardar y re-derivar</button>' if en_revision else ''}
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">Términos de búsqueda</div>
+  <form method="post" action="/admin/reportes/{reporte_id}/mesa/buscar">
+    <textarea name="terminos" rows="2" class="rep-in" style="width:100%;box-sizing:border-box" placeholder="un término por línea o separados por coma" {ro}>{escape(chr(10).join(terminos))}</textarea>
+    <div style="font-size:11px;color:var(--muted);margin:6px 0 8px">«Volver a buscar» re-corre la búsqueda en BD y recarga SOLO las piezas de BD OSINT (no toca URLs ni documentos).</div>
+    {'<button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Volver a buscar</button>' if en_revision else ''}
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">Escenarios candidatos e indicaciones</div>
+  <form method="post" action="/admin/reportes/{reporte_id}/mesa/escenarios">
+    {esc_items}
+    <div style="font-size:12px;font-weight:600;color:var(--accent);margin:10px 0 6px">Indicaciones de detalle</div>
+    <textarea name="indicaciones_detalle" rows="2" class="rep-in" style="width:100%;box-sizing:border-box" {ro}>{escape(meta.get('indicaciones_detalle') or '')}</textarea>
+    {'<div style="margin-top:8px"><button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Guardar escenarios e indicaciones</button></div>' if en_revision else ''}
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">Material encontrado ({len(piezas)})</div>
+  {material_html}
+</div>
+
+{f'''<div class="card">
+  <div class="card-title">Aprobar</div>
+  <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Al aprobar, el caso pasa a generación y produce el PDF. (El generador real llega en una sub-fase posterior; por ahora produce el PDF placeholder.)</div>
+  <form method="post" action="/admin/reportes/{reporte_id}/mesa/aprobar">
+    <button type="submit" style="background:#22c55e;color:#00131f;border:none;border-radius:6px;padding:9px 22px;font-size:14px;font-weight:700;cursor:pointer">✓ Aprobar y generar</button>
+  </form>
+</div>''' if en_revision else ''}
+"""
+    return HTMLResponse(_page("Mesa del caso", contenido, "reportes", sesion["username"]))
+
+
+def _guard_caso_revision(db: str, reporte_id: int):
+    """Devuelve (reporte, None) si es un caso en 'esperando_revision'; si no,
+    (None, RedirectResponse) a la mesa. Las mutaciones solo valen en revisión."""
+    from ..storage.config_loader import obtener_reporte
+    r = obtener_reporte(db, reporte_id)
+    if not r or r.get("tipo") != "reporte_b_caso":
+        return None, RedirectResponse("/admin/reportes?err=Caso+no+encontrado", status_code=303)
+    if r.get("estado") != "esperando_revision":
+        return None, RedirectResponse(_mesa_url(reporte_id, err="El+caso+ya+no+está+en+revisión"),
+                                      status_code=303)
+    return r, None
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/pregunta")
+async def admin_caso_pregunta(request: Request, reporte_id: int):
+    """Actualiza pregunta+ventana y RE-DERIVA (ciego) + re-arma el expediente."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import guardar_caso_meta, obtener_caso_meta
+    form = await request.form()
+    pregunta = (form.get("pregunta") or "").strip()
+    try:
+        ventana = int(form.get("ventana_dias") or 7)
+    except (TypeError, ValueError):
+        ventana = 7
+    if not pregunta:
+        return RedirectResponse(_mesa_url(reporte_id, err="La+pregunta+es+obligatoria"), status_code=303)
+    meta = obtener_caso_meta(db, reporte_id) or {}
+    try:
+        guardar_caso_meta(db, reporte_id, pregunta=pregunta, ventana_dias=ventana,
+                          escenarios_candidatos=meta.get("escenarios_candidatos"),
+                          indicaciones_detalle=meta.get("indicaciones_detalle"),
+                          proyeccion_analista=meta.get("proyeccion_analista"))
+    except ValueError as e:
+        return RedirectResponse(_mesa_url(reporte_id, err=escape(str(e))), status_code=303)
+    _lanzar_bg_caso(_construir_expediente_caso, db, reporte_id)
+    return RedirectResponse(_mesa_url(reporte_id, msg="Pregunta+guardada+·+re-derivando…"),
+                            status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/buscar")
+async def admin_caso_buscar(request: Request, reporte_id: int):
+    """Guarda los términos editados y RE-CORRE la búsqueda (síncrona; SQL puro).
+    Recarga solo las piezas bd_osint."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import (
+        guardar_caso_meta, obtener_caso_meta, buscar_articulos_caso,
+        sincronizar_piezas_bd_osint,
+    )
+    form = await request.form()
+    crudo = form.get("terminos") or ""
+    terminos = [t.strip() for t in re.split(r"[\n,]", crudo) if t.strip()]
+    meta = obtener_caso_meta(db, reporte_id) or {}
+    guardar_caso_meta(db, reporte_id, pregunta=meta.get("pregunta") or r.get("caso") or "—",
+                      ventana_dias=meta.get("ventana_dias") or 7,
+                      terminos_busqueda=terminos,
+                      escenarios_candidatos=meta.get("escenarios_candidatos"),
+                      indicaciones_detalle=meta.get("indicaciones_detalle"),
+                      proyeccion_analista=meta.get("proyeccion_analista"))
+    arts = buscar_articulos_caso(db, terminos, meta.get("ventana_dias") or 7)
+    res = sincronizar_piezas_bd_osint(db, reporte_id, arts)
+    return RedirectResponse(_mesa_url(reporte_id, msg=f"Búsqueda+actualizada+·+{res.get('n',0)}+piezas"),
+                            status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/escenarios")
+async def admin_caso_escenarios(request: Request, reporte_id: int):
+    """Guarda escenarios (lista) e indicaciones de detalle."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import guardar_caso_meta, obtener_caso_meta
+    form = await request.form()
+    escenarios = [e.strip() for e in form.getlist("escenario") if e.strip()]
+    indicaciones = (form.get("indicaciones_detalle") or "").strip() or None
+    meta = obtener_caso_meta(db, reporte_id) or {}
+    guardar_caso_meta(db, reporte_id, pregunta=meta.get("pregunta") or r.get("caso") or "—",
+                      ventana_dias=meta.get("ventana_dias") or 7,
+                      terminos_busqueda=meta.get("terminos_busqueda"),
+                      escenarios_candidatos=escenarios, indicaciones_detalle=indicaciones,
+                      proyeccion_analista=meta.get("proyeccion_analista"))
+    return RedirectResponse(_mesa_url(reporte_id, msg="Escenarios+e+indicaciones+guardados"),
+                            status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/pieza")
+async def admin_caso_pieza(request: Request, reporte_id: int):
+    """Incluir/excluir una pieza del expediente (checkbox → piezas.incluido)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import actualizar_pieza_caso
+    form = await request.form()
+    try:
+        pieza_id = int(form.get("pieza_id"))
+    except (TypeError, ValueError):
+        return RedirectResponse(_mesa_url(reporte_id, err="Pieza+inválida"), status_code=303)
+    incluido = form.get("incluido") is not None   # checkbox presente = marcado
+    actualizar_pieza_caso(db, pieza_id, incluido=incluido)
+    return RedirectResponse(_mesa_url(reporte_id), status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/aprobar")
+async def admin_caso_aprobar(request: Request, reporte_id: int):
+    """Aprueba el caso: pasa a 'generando' (sella el inicio) y cae al flujo de
+    generación (dummy por ahora; PDF real en sub-fase 5)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import aprobar_caso
+    res = aprobar_caso(db, reporte_id)
+    if not res.get("ok"):
+        return RedirectResponse(_mesa_url(reporte_id, err="No+se+pudo+aprobar"), status_code=303)
+    return RedirectResponse("/admin/reportes?msg=Caso+aprobado+·+generando", status_code=303)
+
+
 def _lanzar_generacion_bg(fn, db: str, reporte_id: int) -> None:
     """Lanza la generación de un reporte en un hilo daemon, fuera del request.
 
@@ -6362,6 +6681,85 @@ def _lanzar_generacion_bg(fn, db: str, reporte_id: int) -> None:
                 pass
 
     threading.Thread(target=_run, daemon=True, name=f"reporte-{reporte_id}").start()
+
+
+# ── Reporte por Caso: derivación CIEGA + armado del expediente ────────────────
+_CASO_DERIVA_SYSTEM = (
+    "Eres analista de inteligencia política del Perú. Desde UNA pregunta de "
+    "investigación —y SIN ver ningún material ni noticia— deriva dos cosas:\n"
+    "1) terminos: 6 a 12 términos de búsqueda concretos (nombres propios, "
+    "instituciones, cargos, lugares, acciones) para rastrear el tema en una base "
+    "de noticias.\n"
+    "2) escenarios: 3 a 6 escenarios candidatos (respuestas posibles a la "
+    "pregunta), cada uno una frase breve.\n"
+    "Responde SOLO con JSON válido, sin texto alrededor ni ```:\n"
+    '{"terminos": ["...", "..."], "escenarios": ["...", "..."]}')
+
+
+def _derivar_ciega_caso(pregunta: str):
+    """Deriva (terminos, escenarios) desde la pregunta SOLA — ciega al corpus.
+
+    Doctrina: se llama ANTES de tocar `articulos`; si los escenarios naciesen
+    viendo el material, el hallazgo de silencio sería imposible. Sin API key o
+    ante cualquier fallo → ([], []) y la mesa abre con campos vacíos editables.
+    """
+    from ..utils import llm_client
+    texto, _err = llm_client.redactar_con_sistema(
+        _CASO_DERIVA_SYSTEM, f"Pregunta: {pregunta.strip()}",
+        max_tokens=700, model=llm_client.MODEL_DEFAULT, reintentos=1)
+    if not texto:
+        return [], []
+    m = re.search(r"\{.*\}", texto, re.DOTALL)
+    if not m:
+        return [], []
+    try:
+        data = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return [], []
+
+    def _lista(v):
+        if not isinstance(v, list):
+            return []
+        return [str(x).strip() for x in v if str(x).strip()][:20]
+    return _lista(data.get("terminos")), _lista(data.get("escenarios"))
+
+
+def _construir_expediente_caso(db: str, reporte_id: int) -> None:
+    """Deriva términos/escenarios (ciego) y arma el expediente bd_osint.
+
+    Guarda ambos JSON en reporte_caso_meta y sincroniza las piezas bd_osint desde
+    la búsqueda. No marca 'error' si la IA falla: la mesa debe abrir igual.
+    """
+    from ..storage.config_loader import (
+        obtener_caso_meta, guardar_caso_meta, buscar_articulos_caso,
+        sincronizar_piezas_bd_osint,
+    )
+    meta = obtener_caso_meta(db, reporte_id)
+    if not meta:
+        return
+    terminos, escenarios = _derivar_ciega_caso(meta.get("pregunta") or "")
+    guardar_caso_meta(
+        db, reporte_id, pregunta=meta["pregunta"], ventana_dias=meta["ventana_dias"],
+        terminos_busqueda=terminos, escenarios_candidatos=escenarios,
+        indicaciones_detalle=meta.get("indicaciones_detalle"),
+        proyeccion_analista=meta.get("proyeccion_analista"))
+    arts = buscar_articulos_caso(db, terminos, meta["ventana_dias"])
+    sincronizar_piezas_bd_osint(db, reporte_id, arts)
+
+
+def _lanzar_bg_caso(fn, db: str, reporte_id: int) -> None:
+    """Lanza el armado del expediente en un hilo daemon. A diferencia del launcher
+    de generación, NO marca 'error' si algo falla (el caso sigue en revisión y la
+    mesa abre con lo que haya)."""
+    import threading
+
+    def _run():
+        try:
+            fn(db, reporte_id)
+        except Exception as e:
+            print(f"[caso] armado de expediente falló (rid={reporte_id}): {e}")
+
+    threading.Thread(target=_run, daemon=True, name=f"caso-{reporte_id}").start()
 
 
 def _conteos_articulos_bd(db: str) -> dict:
@@ -6534,6 +6932,16 @@ async def admin_reportes_descargar(request: Request, reporte_id: int):
     if not r:
         return HTMLResponse(_page("Reportes",
             '<div class="alert-box alert-alto">Reporte no encontrado</div>',
+            "reportes", sesion["username"]))
+    # Gate por estado: solo un reporte 'completado' tiene PDF. Un caso en
+    # 'esperando_revision' (o 'generando'/'error') no se descarga.
+    if r.get("estado") != "completado":
+        destino = (f'/admin/reportes/{reporte_id}/mesa'
+                   if r.get("estado") == "esperando_revision" else '/admin/reportes')
+        return HTMLResponse(_page("Reportes",
+            f'<div class="alert-box alert-alto">Este reporte no está disponible para '
+            f'descarga (estado: {escape(r.get("estado") or "—")}). '
+            f'<a href="{destino}" style="color:var(--accent)">Volver</a>.</div>',
             "reportes", sesion["username"]))
     from ..storage.config_loader import _REPORTE_DUMMY_TIPOS
     nombre = r.get("ruta_archivo") or f"reporte_{reporte_id}.pdf"
