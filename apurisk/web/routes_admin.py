@@ -6505,6 +6505,21 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
     peso = peso_expediente_caso(db, reporte_id)
     material_bloque = _render_material_bloque(reporte_id, piezas, peso, en_revision)
 
+    # Estado del análisis descriptivo (sub-fase 4a), si ya se generó.
+    from ..storage.config_loader import obtener_analisis_caso
+    _an = obtener_analisis_caso(db, reporte_id)
+    if not _an:
+        analisis_estado = "Aún no generado."
+    elif _an.get("estado") == "ok":
+        _sil = len(_an.get("silencios") or [])
+        analisis_estado = (
+            f'<span style="color:#22c55e">Generado {escape(str(_an.get("generado_en") or "")[:16])}'
+            f'</span> · {len(_an.get("hechos_citados") or [])} piezas citadas · '
+            f'{_sil} silencio(s)')
+    else:
+        analisis_estado = (f'<span style="color:#ef4444">No generado: '
+                           f'{escape(str(_an.get("nota") or "")[:120])}</span>')
+
     esc_items = "".join(
         f'<div style="display:flex;gap:6px;margin-bottom:5px">'
         f'<input type="text" name="escenario" value="{escape(e)}" class="rep-in" style="flex:1" {ro}></div>'
@@ -6575,6 +6590,19 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
 <div class="card">
   <div class="card-title">Material del expediente</div>
   <div id="rep-material">{material_bloque}</div>
+</div>
+
+<div class="card">
+  <div class="card-title">Análisis descriptivo (secciones I-IV)</div>
+  <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
+    Genera las secciones descriptivas con grounding estricto: el modelo solo puede citar
+    las piezas del expediente por su ID, y la atribución la escribe el sistema según la
+    procedencia de cada pieza. {analisis_estado}
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    {'<form method="post" action="/admin/reportes/' + str(reporte_id) + '/mesa/analizar" style="margin:0"><button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Generar análisis descriptivo</button></form>' if en_revision else ''}
+    <a href="/admin/reportes/{reporte_id}/mesa/analisis" style="color:var(--accent);font-size:12.5px;font-weight:600">Ver análisis (texto plano) →</a>
+  </div>
 </div>
 
 {f'''<div class="card">
@@ -6746,6 +6774,58 @@ async def admin_caso_aprobar(request: Request, reporte_id: int):
     if not res.get("ok"):
         return RedirectResponse(_mesa_url(reporte_id, err="No+se+pudo+aprobar"), status_code=303)
     return RedirectResponse("/admin/reportes?msg=Caso+aprobado+·+generando", status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/analizar")
+async def admin_caso_analizar(request: Request, reporte_id: int):
+    """Lanza el motor descriptivo (secciones I-IV) en segundo plano.
+
+    El análisis se persiste en la meta del caso; el dump legible queda en
+    /admin/reportes/{id}/mesa/analisis para validarlo sin PDF."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+
+    def _run():
+        from ..reports.caso_motor import generar_analisis_caso
+        res = generar_analisis_caso(db, reporte_id)
+        if res.get("estado") != "ok":
+            print(f"[caso] análisis rid={reporte_id} → {res.get('nota')}")
+
+    _lanzar_bg_caso(lambda _db, _rid: _run(), db, reporte_id)
+    return RedirectResponse(
+        _mesa_url(reporte_id, msg="Analizando+el+expediente…+revisa+el+análisis+en+unos+segundos"),
+        status_code=303)
+
+
+@router.get("/reportes/{reporte_id:int}/mesa/analisis", response_class=HTMLResponse)
+async def admin_caso_analisis_dump(request: Request, reporte_id: int):
+    """Dump legible del análisis descriptivo (texto plano, sin diseño THALOS).
+
+    Permite validar las 4 secciones, cada atribución y los silencios antes de
+    que exista el PDF (sub-fases 4b/5)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import obtener_reporte, obtener_analisis_caso
+    from ..reports.caso_motor import dump_legible
+    db = _get_db_path()
+    r = obtener_reporte(db, reporte_id)
+    if not r or r.get("tipo") != "reporte_b_caso":
+        return HTMLResponse("Caso no encontrado", status_code=404)
+    analisis = obtener_analisis_caso(db, reporte_id)
+    txt = dump_legible(analisis) if analisis else (
+        "(aún no se ha generado el análisis descriptivo de este caso)")
+    cuerpo = (f'<div style="margin-bottom:12px"><a href="/admin/reportes/{reporte_id}/mesa" '
+              f'style="color:var(--muted);font-size:12.5px">← Volver a la mesa</a></div>'
+              f'<div class="card"><div class="card-title">Análisis descriptivo · dump legible</div>'
+              f'<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;'
+              f'line-height:1.5;color:var(--text);margin:0">{escape(txt)}</pre></div>')
+    return HTMLResponse(_page("Análisis del caso", cuerpo, "reportes", sesion["username"]))
 
 
 # ── Ingesta de material del analista (URLs y documentos) + extracción async ───
