@@ -2674,37 +2674,91 @@ PROCEDENCIAS_PIEZA = ("bd_osint", "url_externa", "documento_analista")
 ESTADOS_EXTRACCION = ("pendiente", "extrayendo", "listo", "fallo")
 
 _CASO_DEFAULTS = {"horizontes": [7, 15, 30], "max_piezas": 60,
-                  "max_texto_chars": 40000}
+                  "max_texto_chars": 40000,
+                  # motor descriptivo (sub-fase 4a)
+                  "modelo": "claude-sonnet-4-6", "max_tokens": 4000,
+                  "timeout_s": 180, "max_chars_pieza_envio": 6000,
+                  "max_chars_material": 220000, "prompt_maestro": ""}
+
+_CASO_MAPA_INT = {"CASO_MAX_PIEZAS": "max_piezas",
+                  "CASO_MAX_TEXTO_PIEZA_CHARS": "max_texto_chars",
+                  "CASO_MAX_TOKENS": "max_tokens",
+                  "CASO_TIMEOUT_S": "timeout_s",
+                  "CASO_MAX_CHARS_PIEZA_ENVIO": "max_chars_pieza_envio",
+                  "CASO_MAX_CHARS_MATERIAL": "max_chars_material"}
+_CASO_MAPA_STR = {"CASO_MODELO": "modelo", "CASO_PROMPT_MAESTRO": "prompt_maestro"}
 
 
 def cargar_parametros_caso(db_path: str) -> dict:
     """Parámetros del Reporte por Caso (config, nada hardcodeado).
 
     CASO_HORIZONTES es propio del caso: NO se toca PROY_HORIZONTES (global,
-    usado por otros reportes). Devuelve {horizontes, max_piezas, max_texto_chars}
-    con defaults seguros si la config falta o es inválida.
+    usado por otros reportes). Incluye los del motor descriptivo (modelo,
+    tokens, timeout y los topes de material enviado al modelo). Defaults
+    seguros si la config falta o es inválida.
     """
     out = dict(_CASO_DEFAULTS)
     out["horizontes"] = list(_CASO_DEFAULTS["horizontes"])
+    claves = (["CASO_HORIZONTES"] + list(_CASO_MAPA_INT.keys())
+              + list(_CASO_MAPA_STR.keys()))
+    marcas = ",".join("?" for _ in claves)
     try:
         with _conn(db_path) as c:
             rows = c.execute(
-                "SELECT clave, valor FROM config_parametros WHERE clave IN "
-                "('CASO_HORIZONTES','CASO_MAX_PIEZAS','CASO_MAX_TEXTO_PIEZA_CHARS')"
-            ).fetchall()
+                f"SELECT clave, valor FROM config_parametros WHERE clave IN ({marcas})",
+                claves).fetchall()
         for r in rows:
             v = (r["valor"] or "").strip()
-            if r["clave"] == "CASO_HORIZONTES":
+            clave = r["clave"]
+            if clave == "CASO_HORIZONTES":
                 hs = [int(x) for x in v.replace(" ", "").split(",") if x.isdigit()]
                 if hs:
                     out["horizontes"] = hs
-            elif r["clave"] == "CASO_MAX_PIEZAS":
-                out["max_piezas"] = int(v)
-            elif r["clave"] == "CASO_MAX_TEXTO_PIEZA_CHARS":
-                out["max_texto_chars"] = int(v)
+            elif clave in _CASO_MAPA_INT:
+                try:
+                    out[_CASO_MAPA_INT[clave]] = int(v)
+                except (TypeError, ValueError):
+                    pass
+            elif clave in _CASO_MAPA_STR:
+                out[_CASO_MAPA_STR[clave]] = v
     except Exception as e:
         print(f"[config_loader] cargar_parametros_caso falló: {e}")
     return out
+
+
+def guardar_analisis_caso(db_path: str, reporte_id: int, analisis: dict) -> dict:
+    """Persiste el objeto de análisis descriptivo (secciones I-IV + hechos
+    resueltos + silencios) como JSON en la meta del caso. Sello en hora Lima.
+
+    Se guarda para que el render (sub-fases 4b/5) no vuelva a llamar al modelo.
+    """
+    from ..utils.timezone_pe import now_pe_iso
+    ahora = now_pe_iso()
+    blob = json.dumps(analisis or {}, ensure_ascii=False)
+
+    def _op(c: sqlite3.Connection) -> dict:
+        cur = c.execute(
+            "UPDATE reporte_caso_meta SET analisis_json=?, analisis_generado_en=? "
+            "WHERE reporte_id=?", (blob, ahora, int(reporte_id)))
+        return {"ok": cur.rowcount > 0, "generado_en": ahora}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def obtener_analisis_caso(db_path: str, reporte_id: int) -> dict | None:
+    """Análisis descriptivo persistido (deserializado). None si aún no se generó."""
+    try:
+        with _conn(db_path) as c:
+            r = c.execute(
+                "SELECT analisis_json, analisis_generado_en FROM reporte_caso_meta "
+                "WHERE reporte_id=?", (int(reporte_id),)).fetchone()
+        if not r or not r["analisis_json"]:
+            return None
+        data = json.loads(r["analisis_json"])
+        data["generado_en"] = r["analisis_generado_en"]
+        return data
+    except Exception as e:
+        print(f"[config_loader] obtener_analisis_caso falló: {e}")
+        return None
 
 
 def guardar_caso_meta(db_path: str, reporte_id: int, pregunta: str,

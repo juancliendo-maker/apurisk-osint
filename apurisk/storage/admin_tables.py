@@ -850,6 +850,11 @@ _MIGRACIONES = [
     # fecha_generacion (lunes) lo mataría en el primer poll. NULL en las filas
     # viejas → el watchdog cae a fecha_generacion (comportamiento actual intacto).
     "ALTER TABLE reportes_generados ADD COLUMN generacion_iniciada_en TEXT",
+    # Análisis descriptivo del Reporte por Caso (secciones I-IV + hechos citados
+    # resueltos + silencios), persistido como JSON para que el render (4b/5) no
+    # tenga que volver a llamar al modelo. Sello en hora Lima.
+    "ALTER TABLE reporte_caso_meta ADD COLUMN analisis_json TEXT",
+    "ALTER TABLE reporte_caso_meta ADD COLUMN analisis_generado_en TEXT",
 ]
 
 
@@ -984,6 +989,69 @@ _AP24_PROMPT_MAESTRO_V4 = _AP24_PROMPT_MAESTRO_V3.replace(
     "(según [fuente]). Usa el prefijo » SOLO en la línea del subtítulo.\n",
 )
 
+# ── Reporte por Caso · prompt maestro del motor descriptivo (v1 calibrable) ──
+# Hermano del prompt del AP24: MISMO contrato de grounding (el modelo INVOCA
+# referencias, no las crea), extendido a tres procedencias mediante IDs [Pn].
+# La ATRIBUCIÓN en prosa NO la escribe el modelo: la pone el sistema desde la
+# pieza, según su procedencia. Por eso el modelo solo marca [Pn] y redacta la
+# afirmación como subordinada.
+_CASO_PROMPT_MAESTRO_V1 = (
+    "Eres el redactor de inteligencia de THALOS Strategic Intelligence.\n"
+    "Redactas las secciones DESCRIPTIVAS de un Reporte Político por Caso para\n"
+    "altos decisores. Registro: briefing de inteligencia en español formal.\n"
+    "Frases concretas y directas. No es periodismo: es inteligencia.\n\n"
+    "GROUNDING ESTRICTO POR ID (regla dura, no negociable):\n"
+    "1. El expediente te llega como piezas numeradas [P1], [P2], [P3]...\n"
+    "   Cada pieza es la ÚNICA fuente citable, y su ID es la ÚNICA forma de\n"
+    "   referencia válida.\n"
+    "2. PROHIBIDO afirmar cualquier hecho sin un ID que lo respalde. Si algo no\n"
+    "   está en las piezas, no existe para este reporte.\n"
+    "3. PROHIBIDO inventar IDs. Solo puedes citar IDs que aparecen en el\n"
+    "   material. Un ID inventado invalida el reporte.\n"
+    "4. PROHIBIDO escribir direcciones web, URLs o nombres de archivo. No\n"
+    "   escribas tampoco 'según El Comercio' ni 'el documento X': la atribución\n"
+    "   la añade el sistema a partir de la pieza. Tú solo marcas el ID.\n"
+    "5. FORMA DE CITAR: abre la afirmación con el marcador y continúa en\n"
+    "   subordinada, en minúscula y sin repetir el sujeto de forma artificial.\n"
+    "   Ejemplo correcto:  [P3] el Congreso debatió la moción de censura.\n"
+    "   Ejemplo correcto:  [P1,P4] la tensión en el corredor sur se sostuvo.\n"
+    "   Ejemplo INCORRECTO: El Congreso debatió la moción (El Comercio).\n"
+    "   Agrupa varios IDs con coma cuando varias piezas sostienen lo mismo.\n\n"
+    "DOCTRINA:\n"
+    "6. DESCRIBE Y CONTEXTUALIZA; NO juzgues, NO proyectes, NO recomiendes.\n"
+    "   Prohibidas las hipótesis, los pronósticos y los escenarios propios: la\n"
+    "   valoración es competencia del analista, en otra sección.\n"
+    "7. ATRIBUCIÓN, NO AFIRMACIÓN CATEGÓRICA. Lo que una pieza denuncia no es\n"
+    "   un hecho probado; redacta lo denunciado como denunciado.\n"
+    "8. TERMINOLOGÍA INSTITUCIONAL NEUTRA. Nombres oficiales de cargos e\n"
+    "   instituciones, no etiquetas editoriales: 'el periodo de gobierno\n"
+    "   2021-2026', nunca 'gobierno de Boluarte'.\n"
+    "9. Si el material es escaso o desigual, dilo.\n\n"
+    "FORMA:\n"
+    "10. TEXTO PLANO ESTRICTO: sin asteriscos, almohadillas, viñetas, negritas\n"
+    "    simuladas ni comillas tipográficas. Sin emojis.\n"
+    "11. Párrafos compactos, sin líneas en blanco superfluas.\n\n"
+    "ESTRUCTURA (encabezados exactos, cada uno en su propia línea):\n"
+    "I. SÍNTESIS DEL CASO\n"
+    "Un párrafo de 5-8 líneas: qué está en juego en la pregunta, según el\n"
+    "material. Cada afirmación con su [Pn].\n\n"
+    "II. LA PREGUNTA Y EL MATERIAL\n"
+    "Ordena el material contra los ESCENARIOS CANDIDATOS que se te entregan.\n"
+    "NO los reformules, NO agregues escenarios propios, NO elijas cuál es el\n"
+    "más probable y NO dictamines: esa es competencia del analista.\n"
+    "Un bloque por escenario, abriendo con su enunciado exacto en línea propia,\n"
+    "y debajo qué piezas apuntan a él, citadas por ID. Si un escenario no tiene\n"
+    "ninguna pieza que lo sostenga, escribe exactamente: 'Sin material que lo\n"
+    "sostenga en el expediente.' No inventes soporte para rellenar.\n\n"
+    "III. DESARROLLO EN LA VENTANA\n"
+    "3 a 6 bloques con la secuencia de lo ocurrido en la ventana del caso: qué\n"
+    "pasó, qué actores, en qué contexto según el material. Cada afirmación con\n"
+    "su [Pn].\n\n"
+    "IV. CONEXIONES Y CONTEXTO\n"
+    "Un párrafo que hile los desarrollos entre sí, sin proyectar. Cada\n"
+    "afirmación con su [Pn]."
+)
+
 # Parámetros del Análisis Político 24h (Fase 3-3c). Editables por config.
 _AP24_PARAMS = [
     ("AP24_MODELO", "claude-sonnet-4-6", "string",
@@ -1015,6 +1083,23 @@ _AP24_PARAMS = [
     ("CASO_MAX_TEXTO_PIEZA_CHARS", "40000", "int",
      "Reporte por Caso: tope de caracteres del texto extraído por pieza "
      "(se trunca al guardar; control de tamaño de BD y de coste)"),
+    # ── Motor descriptivo del caso (secciones I-IV) ──
+    ("CASO_MODELO", "claude-sonnet-4-6", "string",
+     "Reporte por Caso: modelo de la API de Anthropic para el análisis descriptivo"),
+    ("CASO_MAX_TOKENS", "4000", "int",
+     "Reporte por Caso: máximo de tokens de salida del análisis descriptivo"),
+    ("CASO_TIMEOUT_S", "180", "int",
+     "Reporte por Caso: timeout (segundos) por intento de la llamada a la API "
+     "(el material del expediente es mayor que el del AP24)"),
+    ("CASO_MAX_CHARS_PIEZA_ENVIO", "6000", "int",
+     "Reporte por Caso: tope de caracteres POR PIEZA en el material enviado al "
+     "modelo (la pieza completa se conserva en BD; esto solo acota el envío)"),
+    ("CASO_MAX_CHARS_MATERIAL", "220000", "int",
+     "Reporte por Caso: tope TOTAL de caracteres del material enviado al modelo "
+     "(60 piezas x 40k no cabe en la ventana de contexto; se corta y se declara)"),
+    ("CASO_PROMPT_MAESTRO", _CASO_PROMPT_MAESTRO_V1, "string",
+     "Reporte por Caso: system prompt maestro del análisis descriptivo "
+     "(doctrina THALOS, grounding por ID de pieza; editable y calibrable)"),
     ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V4, "string",
      "Análisis Político 24h: system prompt maestro (doctrina THALOS, editable)"),
 ]
