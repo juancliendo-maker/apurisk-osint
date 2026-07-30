@@ -6388,6 +6388,10 @@ async def admin_reportes_post(request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 _PROC_LABEL = {"bd_osint": "BD OSINT", "url_externa": "URL externa",
                "documento_analista": "Documento"}
+_PIEZA_EST = {"pendiente": ("#94a3b8", "pendiente"),
+              "extrayendo": ("#f59e0b", "extrayendo…"),
+              "listo": ("#22c55e", "listo"),
+              "fallo": ("#ef4444", "fallo")}
 
 
 def _mesa_url(reporte_id: int, msg: str = "", err: str = "") -> str:
@@ -6397,6 +6401,73 @@ def _mesa_url(reporte_id: int, msg: str = "", err: str = "") -> str:
     if err:
         return f"{base}?err={err}"
     return base
+
+
+def _pieza_estado_html(p: dict) -> str:
+    color, txt = _PIEZA_EST.get(p.get("estado_extraccion"),
+                                ("#94a3b8", p.get("estado_extraccion") or "—"))
+    h = f'<span style="color:{color};font-weight:600;font-size:11px">{escape(txt)}</span>'
+    if p.get("estado_extraccion") == "fallo" and p.get("nota_error"):
+        h += (f'<div style="color:#ef4444;font-size:10px;margin-top:2px;max-width:220px">'
+              f'{escape(p["nota_error"][:120])}</div>')
+    return h
+
+
+def _peso_expediente_html(peso: dict) -> str:
+    """Indicador vivo del costo del expediente (honesto: marca pendiente/fallo)."""
+    partes = " · ".join(f"{_PROC_LABEL.get(k, k)}: {v}"
+                        for k, v in sorted(peso.get("por_procedencia", {}).items())) or "—"
+    chars = peso.get("caracteres", 0)
+    aprox_tok = chars // 4  # estimación grosera de tokens (≈4 chars/token)
+    alertas = []
+    if peso.get("pendientes"):
+        alertas.append(f'{peso["pendientes"]} pendiente(s)')
+    if peso.get("extrayendo"):
+        alertas.append(f'{peso["extrayendo"]} extrayendo')
+    if peso.get("fallidas"):
+        alertas.append(f'{peso["fallidas"]} con fallo')
+    aviso = ('<div style="color:#f59e0b;font-size:11px;margin-top:6px">⚠ '
+             + " · ".join(alertas) + ' (su texto NO cuenta en el total).</div>') if alertas else ''
+    return (f'<div style="font-size:12.5px;color:var(--text)">'
+            f'<b>{peso.get("incluidas", 0)}</b> piezas incluidas — {escape(partes)}</div>'
+            f'<div style="font-size:12px;color:var(--muted);margin-top:3px">'
+            f'Texto incluido: <b>{chars:,}</b> caracteres (~{aprox_tok:,} tokens aprox.)</div>'
+            f'{aviso}')
+
+
+def _render_material_bloque(reporte_id: int, piezas: list, peso: dict,
+                            en_revision: bool) -> str:
+    """Bloque material + peso (lo que se refresca por polling). Se sirve tanto en
+    la mesa como en el endpoint /mesa/estado; incluye un marcador data-pend."""
+    ro = "" if en_revision else "disabled"
+    if piezas:
+        filas = ""
+        for p in piezas:
+            chk = "checked" if p.get("incluido") else ""
+            proc = _PROC_LABEL.get(p.get("procedencia"), p.get("procedencia") or "—")
+            titulo = escape((p.get("titulo") or p.get("url") or p.get("nombre_archivo") or "—")[:110])
+            filas += f"""<tr>
+  <td class="c-c"><form method="post" action="/admin/reportes/{reporte_id}/mesa/pieza" style="margin:0">
+      <input type="hidden" name="pieza_id" value="{p['id']}">
+      <input type="checkbox" name="incluido" onchange="this.form.submit()" {chk} {ro}></form></td>
+  <td>{titulo}</td>
+  <td class="c-c" style="font-size:11px;color:var(--muted)">{escape(proc)}</td>
+  <td>{escape((p.get('fuente') or '—')[:26])}</td>
+  <td class="c-c">{_pieza_estado_html(p)}</td>
+</tr>"""
+        tabla = (f'<div style="overflow-x:auto"><table class="tbl"><thead><tr>'
+                 f'<th style="text-align:center">Incluir</th><th>Título</th>'
+                 f'<th style="text-align:center">Procedencia</th><th>Fuente</th>'
+                 f'<th style="text-align:center">Estado</th></tr></thead>'
+                 f'<tbody>{filas}</tbody></table></div>')
+    else:
+        tabla = ('<div class="rep-vacio">Sin material aún. Busca en BD, añade URLs o '
+                 'sube documentos.</div>')
+    pend = peso.get("pendientes", 0) + peso.get("extrayendo", 0)
+    return (f'<span id="rep-pend" data-pend="{pend}" hidden></span>'
+            f'<div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-2);'
+            f'border:1px solid var(--bg-3);border-radius:6px">{_peso_expediente_html(peso)}</div>'
+            f'{tabla}')
 
 
 @router.get("/reportes/{reporte_id:int}/mesa", response_class=HTMLResponse)
@@ -6424,35 +6495,15 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
     banner = (f'<div class="alert-box alert-info" style="margin-bottom:12px">✓ {escape(msg)}</div>' if msg else '')
     banner += (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(errq)}</div>' if errq else '')
 
+    from ..storage.config_loader import peso_expediente_caso
     terminos = meta.get("terminos_busqueda") or []
     escenarios = meta.get("escenarios_candidatos") or []
     pregunta = meta.get("pregunta") or r.get("caso") or ""
     ventana = meta.get("ventana_dias") or 7
     ro = "" if en_revision else "disabled"   # solo editable en revisión
 
-    # Filas de material (piezas)
-    if piezas:
-        piezas_html = ""
-        for p in piezas:
-            chk = "checked" if p.get("incluido") else ""
-            proc = _PROC_LABEL.get(p.get("procedencia"), p.get("procedencia") or "—")
-            fecha = escape((p.get("fecha_pieza") or "")[:16].replace("T", " "))
-            piezas_html += f"""<tr>
-  <td class="c-c"><form method="post" action="/admin/reportes/{reporte_id}/mesa/pieza" style="margin:0">
-      <input type="hidden" name="pieza_id" value="{p['id']}">
-      <input type="checkbox" name="incluido" onchange="this.form.submit()" {chk} {ro}></form></td>
-  <td>{escape((p.get('titulo') or '—')[:110])}</td>
-  <td class="c-c" style="font-size:11px;color:var(--muted)">{escape(proc)}</td>
-  <td>{escape((p.get('fuente') or '—')[:26])}</td>
-  <td class="c-f">{fecha}</td>
-</tr>"""
-        material_html = (f'<div style="overflow-x:auto"><table class="tbl"><thead><tr>'
-                         f'<th style="text-align:center">Incluir</th><th>Título</th>'
-                         f'<th style="text-align:center">Procedencia</th><th>Fuente</th>'
-                         f'<th>Fecha</th></tr></thead><tbody>{piezas_html}</tbody></table></div>')
-    else:
-        material_html = ('<div class="rep-vacio">Sin material aún. Ajusta los términos y '
-                         'usa «Volver a buscar» (o recarga si el expediente se está armando).</div>')
+    peso = peso_expediente_caso(db, reporte_id)
+    material_bloque = _render_material_bloque(reporte_id, piezas, peso, en_revision)
 
     esc_items = "".join(
         f'<div style="display:flex;gap:6px;margin-bottom:5px">'
@@ -6504,9 +6555,26 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
   </form>
 </div>
 
+{f'''<div class="card">
+  <div class="card-title">Añadir material del analista</div>
+  <div style="display:flex;flex-wrap:wrap;gap:18px">
+    <form method="post" action="/admin/reportes/{reporte_id}/mesa/url" style="flex:1;min-width:280px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">URLs externas</div>
+      <textarea name="urls" rows="3" class="rep-in" style="width:100%;box-sizing:border-box" placeholder="una URL por línea"></textarea>
+      <div style="margin-top:8px"><button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Añadir URLs</button></div>
+    </form>
+    <form method="post" action="/admin/reportes/{reporte_id}/mesa/archivo" enctype="multipart/form-data" style="flex:1;min-width:280px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Documentos (PDF · DOCX · TXT · MD)</div>
+      <input type="file" name="archivo" multiple accept=".pdf,.docx,.txt,.md" class="rep-in" style="width:100%;box-sizing:border-box">
+      <div style="font-size:11px;color:var(--muted);margin:6px 0 0">Se extrae el texto; el binario no se conserva.</div>
+      <div style="margin-top:8px"><button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Subir y extraer</button></div>
+    </form>
+  </div>
+</div>''' if en_revision else ''}
+
 <div class="card">
-  <div class="card-title">Material encontrado ({len(piezas)})</div>
-  {material_html}
+  <div class="card-title">Material del expediente</div>
+  <div id="rep-material">{material_bloque}</div>
 </div>
 
 {f'''<div class="card">
@@ -6516,6 +6584,24 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
     <button type="submit" style="background:#22c55e;color:#00131f;border:none;border-radius:6px;padding:9px 22px;font-size:14px;font-weight:700;cursor:pointer">✓ Aprobar y generar</button>
   </form>
 </div>''' if en_revision else ''}
+
+<script>
+(function() {{
+  var box = document.getElementById('rep-material');
+  function pend() {{
+    var m = box.querySelector('#rep-pend');
+    return m ? parseInt(m.getAttribute('data-pend') || '0', 10) : 0;
+  }}
+  function tick() {{
+    if (pend() <= 0) return;
+    fetch('/admin/reportes/{reporte_id}/mesa/estado')
+      .then(function(r) {{ return r.text(); }})
+      .then(function(html) {{ box.innerHTML = html; setTimeout(tick, pend() > 0 ? 3000 : 0); }})
+      .catch(function() {{ setTimeout(tick, 5000); }});
+  }}
+  if (pend() > 0) setTimeout(tick, 3000);
+}})();
+</script>
 """
     return HTMLResponse(_page("Mesa del caso", contenido, "reportes", sesion["username"]))
 
@@ -6592,8 +6678,11 @@ async def admin_caso_buscar(request: Request, reporte_id: int):
                       proyeccion_analista=meta.get("proyeccion_analista"))
     arts = buscar_articulos_caso(db, terminos, meta.get("ventana_dias") or 7)
     res = sincronizar_piezas_bd_osint(db, reporte_id, arts)
-    return RedirectResponse(_mesa_url(reporte_id, msg=f"Búsqueda+actualizada+·+{res.get('n',0)}+piezas"),
-                            status_code=303)
+    msg = f"Búsqueda+actualizada+·+{res.get('n',0)}+piezas+BD+OSINT"
+    desc = res.get("descartadas", 0)
+    if desc:
+        msg += f"+·+{desc}+no+añadidas+(tope+de+{res.get('tope','?')}+piezas+alcanzado)"
+    return RedirectResponse(_mesa_url(reporte_id, msg=msg), status_code=303)
 
 
 @router.post("/reportes/{reporte_id:int}/mesa/escenarios")
@@ -6657,6 +6746,145 @@ async def admin_caso_aprobar(request: Request, reporte_id: int):
     if not res.get("ok"):
         return RedirectResponse(_mesa_url(reporte_id, err="No+se+pudo+aprobar"), status_code=303)
     return RedirectResponse("/admin/reportes?msg=Caso+aprobado+·+generando", status_code=303)
+
+
+# ── Ingesta de material del analista (URLs y documentos) + extracción async ───
+def _lanzar_bg_extraccion(fn) -> None:
+    """Corre la extracción de UNA pieza en un hilo daemon. Un fallo NO tumba el
+    caso: queda registrado en la pieza (estado 'fallo' + nota_error)."""
+    import threading
+
+    def _run():
+        try:
+            fn()
+        except Exception as e:
+            print(f"[caso] extracción de pieza falló: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _extraer_pieza_url(db: str, pieza_id: int, url: str) -> None:
+    """url_externa: descarga con _fetch_url_segura (anti-SSRF, 10s, 3MB)."""
+    from ..storage.config_loader import actualizar_pieza_caso
+    from .core import _fetch_url_segura
+    actualizar_pieza_caso(db, pieza_id, estado_extraccion="extrayendo")
+    texto = _fetch_url_segura(url)
+    if texto and texto.strip():
+        actualizar_pieza_caso(db, pieza_id, estado_extraccion="listo", texto_extraido=texto)
+    else:
+        actualizar_pieza_caso(
+            db, pieza_id, estado_extraccion="fallo",
+            nota_error="No se pudo obtener la URL (bloqueada por seguridad, timeout, "
+                       ">3MB, redirección insegura o sin contenido).")
+
+
+def _extraer_pieza_doc(db: str, pieza_id: int, filename: str,
+                       content_type: str, data: bytes) -> None:
+    """documento_analista: extract_document (PDF/DOCX/TXT/MD, tope 20MB, sin OCR)."""
+    from ..storage.config_loader import actualizar_pieza_caso
+    from ..utils.document_extractor import extract_document
+    actualizar_pieza_caso(db, pieza_id, estado_extraccion="extrayendo")
+    res = extract_document(filename, content_type, data)
+    if res.get("error"):
+        actualizar_pieza_caso(db, pieza_id, estado_extraccion="fallo",
+                              nota_error=(res.get("error") or "Error de extracción")[:200])
+    elif not (res.get("texto_extraido") or "").strip():
+        actualizar_pieza_caso(db, pieza_id, estado_extraccion="fallo",
+                              nota_error="Documento sin texto extraíble (¿escaneado o protegido?).")
+    else:
+        actualizar_pieza_caso(db, pieza_id, estado_extraccion="listo",
+                              texto_extraido=res["texto_extraido"])
+
+
+@router.get("/reportes/{reporte_id:int}/mesa/estado", response_class=HTMLResponse)
+async def admin_caso_mesa_estado(request: Request, reporte_id: int):
+    """Fragmento HTML del bloque de material + peso (para el polling ligero de la
+    mesa). Devuelve el mismo bloque que la mesa, ya renderizado por el servidor."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import (
+        obtener_reporte, listar_piezas_caso, peso_expediente_caso,
+    )
+    db = _get_db_path()
+    r = obtener_reporte(db, reporte_id)
+    if not r or r.get("tipo") != "reporte_b_caso":
+        return HTMLResponse("", status_code=404)
+    piezas = listar_piezas_caso(db, reporte_id)
+    peso = peso_expediente_caso(db, reporte_id)
+    en_revision = r.get("estado") == "esperando_revision"
+    return HTMLResponse(_render_material_bloque(reporte_id, piezas, peso, en_revision))
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/url")
+async def admin_caso_url(request: Request, reporte_id: int):
+    """Añade una o varias URLs como piezas 'url_externa' y dispara su extracción."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import agregar_pieza_caso
+    form = await request.form()
+    crudo = form.get("urls") or ""
+    urls = [u.strip() for u in re.split(r"\s+", crudo) if u.strip().lower().startswith("http")]
+    if not urls:
+        return RedirectResponse(_mesa_url(reporte_id, err="No+hay+URLs+válidas+(deben+empezar+con+http)"),
+                                status_code=303)
+    add, rej = 0, 0
+    for u in urls[:100]:
+        res = agregar_pieza_caso(db, reporte_id, procedencia="url_externa", url=u,
+                                 titulo=u[:110], estado_extraccion="pendiente")
+        if res.get("ok"):
+            add += 1
+            _lanzar_bg_extraccion(lambda pid=res["id"], url=u: _extraer_pieza_url(db, pid, url))
+        else:
+            rej += 1
+    msg = f"{add}+URL(s)+en+extracción"
+    if rej:
+        msg += f"+·+{rej}+no+añadidas+(tope+de+piezas+alcanzado)"
+    return RedirectResponse(_mesa_url(reporte_id, msg=msg), status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/mesa/archivo")
+async def admin_caso_archivo(request: Request, reporte_id: int):
+    """Sube uno o varios documentos como piezas 'documento_analista' y dispara su
+    extracción async. El binario NO se conserva tras extraer el texto."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import agregar_pieza_caso
+    form = await request.form()
+    files = form.getlist("archivo")
+    add, rej = 0, 0
+    for f in files:
+        fname = getattr(f, "filename", None)
+        if not fname:
+            continue
+        data = await f.read()
+        ct = getattr(f, "content_type", "") or ""
+        res = agregar_pieza_caso(db, reporte_id, procedencia="documento_analista",
+                                 nombre_archivo=fname, titulo=fname[:110],
+                                 estado_extraccion="pendiente")
+        if res.get("ok"):
+            add += 1
+            _lanzar_bg_extraccion(
+                lambda pid=res["id"], fn=fname, c=ct, b=data: _extraer_pieza_doc(db, pid, fn, c, b))
+        else:
+            rej += 1
+    if add == 0 and rej == 0:
+        return RedirectResponse(_mesa_url(reporte_id, err="No+se+seleccionaron+archivos"),
+                                status_code=303)
+    msg = f"{add}+documento(s)+en+extracción"
+    if rej:
+        msg += f"+·+{rej}+no+añadidos+(tope+de+piezas+alcanzado)"
+    return RedirectResponse(_mesa_url(reporte_id, msg=msg), status_code=303)
 
 
 def _lanzar_generacion_bg(fn, db: str, reporte_id: int) -> None:
