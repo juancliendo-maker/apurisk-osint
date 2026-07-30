@@ -2953,8 +2953,45 @@ def sincronizar_piezas_bd_osint(db_path: str, reporte_id: int, articulos: list) 
                  a.get("source_name"), (a.get("capturado_en") or a.get("published")),
                  txt, ahora, ahora))
             ins += 1
-        return {"ok": True, "n": ins}
+        # descartadas: matches que no entraron por falta de cupo (para avisar en la mesa)
+        descartadas = max(0, len(articulos) - ins)
+        return {"ok": True, "n": ins, "descartadas": descartadas, "tope": par["max_piezas"]}
     return _ejecutar_con_reintentos(db_path, _op)
+
+
+def peso_expediente_caso(db_path: str, reporte_id: int) -> dict:
+    """Costo acumulado del expediente (indicador vivo, ANTES de aprobar).
+
+    Devuelve: piezas INCLUIDAS por procedencia, total de caracteres de texto
+    incluido Y en estado 'listo' (honestidad: pendiente/extrayendo/fallo NO
+    cuentan su texto), y conteos de esos estados para avisarlo.
+    """
+    out = {"por_procedencia": {}, "incluidas": 0, "caracteres": 0,
+           "pendientes": 0, "extrayendo": 0, "fallidas": 0, "total": 0}
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT procedencia, estado_extraccion, incluido, "
+                "LENGTH(COALESCE(texto_extraido,'')) AS n "
+                "FROM reporte_caso_piezas WHERE reporte_id=?", (int(reporte_id),)).fetchall()
+        for r in rows:
+            out["total"] += 1
+            est = r["estado_extraccion"]
+            if est == "pendiente":
+                out["pendientes"] += 1
+            elif est == "extrayendo":
+                out["extrayendo"] += 1
+            elif est == "fallo":
+                out["fallidas"] += 1
+            if r["incluido"]:
+                out["incluidas"] += 1
+                pr = r["procedencia"]
+                out["por_procedencia"][pr] = out["por_procedencia"].get(pr, 0) + 1
+                if est == "listo":
+                    out["caracteres"] += (r["n"] or 0)
+    except Exception as e:
+        print(f"[config_loader] peso_expediente_caso falló: {e}")
+    return out
 
 
 def aprobar_caso(db_path: str, reporte_id: int) -> dict:
