@@ -1097,6 +1097,14 @@ _AP24_PARAMS = [
     ("CASO_MAX_CHARS_MATERIAL", "220000", "int",
      "Reporte por Caso: tope TOTAL de caracteres del material enviado al modelo "
      "(60 piezas x 40k no cabe en la ventana de contexto; se corta y se declara)"),
+    # Vocabulario controlado de Sherman Kent para la proyección del analista
+    # (sección V). Términos estimativos separados por '|', calibrable: el
+    # analista elige uno por horizonte. La IA NO escribe esta sección.
+    ("CASO_KENT_VOCAB",
+     "Casi con certeza|Muy probable|Probable|Posibilidades equilibradas|"
+     "Improbable|Muy improbable|Casi con certeza que no", "string",
+     "Reporte por Caso: vocabulario estimativo de Kent para la proyección del "
+     "analista (opciones separadas por '|', editable)"),
     ("CASO_PROMPT_MAESTRO", _CASO_PROMPT_MAESTRO_V1, "string",
      "Reporte por Caso: system prompt maestro del análisis descriptivo "
      "(doctrina THALOS, grounding por ID de pieza; editable y calibrable)"),

@@ -506,6 +506,122 @@ def generar_analisis_caso(db_path: str, reporte_id: int) -> dict:
     return analisis
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ENSAMBLADO I-VII (sub-fase 4b) — voz del analista + clases probatorias
+# ══════════════════════════════════════════════════════════════════════════════
+SECCION_V = "V. PROYECCIÓN (VOZ DEL ANALISTA)"
+SECCION_VI = "VI. HECHOS CITADOS"
+SECCION_VII = "VII. NOTA DE MATERIAL"
+
+CONVENCION = ("Las secciones I-IV describen el material del expediente; la V es "
+              "juicio del analista.")
+
+
+def _seccion_v(proyeccion: dict, horizontes: list) -> dict:
+    """Sección V desde proyeccion_analista. La IA NO escribe esta sección.
+
+    proyeccion: {horizonte: {"kent": término, "prosa": texto}} (o texto suelto,
+    tolerado por compatibilidad con lo guardado antes).
+    """
+    filas = []
+    for h in horizontes:
+        v = (proyeccion or {}).get(str(h)) or (proyeccion or {}).get(h) or {}
+        if isinstance(v, str):
+            v = {"kent": "", "prosa": v}
+        kent = (v.get("kent") or "").strip()
+        prosa = (v.get("prosa") or "").strip()
+        if kent or prosa:
+            filas.append({"horizonte_dias": int(h), "kent": kent, "prosa": prosa})
+    return {"nombre": SECCION_V, "voz": "analista", "horizontes": filas}
+
+
+def _clases_probatorias(hechos: list) -> dict:
+    """Sección VI en DOS CLASES PROBATORIAS.
+
+    · FUENTE ABIERTA VERIFICABLE: piezas con URL pública (el lector puede
+      comprobarlas): bd_osint y url_externa.
+    · MATERIAL DEL EXPEDIENTE: documento_analista, sin URL — no verificable por
+      el lector; se declara como tal, no se mezcla con lo verificable.
+    Una clase vacía no aparece.
+    """
+    verificable, expediente = [], []
+    for h in hechos or []:
+        if h.get("procedencia") == "documento_analista" or not (h.get("url") or "").strip():
+            expediente.append(h)
+        else:
+            verificable.append(h)
+    out = {"nombre": SECCION_VI, "clases": []}
+    if verificable:
+        out["clases"].append({"clase": "FUENTE ABIERTA VERIFICABLE", "hechos": verificable})
+    if expediente:
+        out["clases"].append({"clase": "MATERIAL DEL EXPEDIENTE", "hechos": expediente})
+    return out
+
+
+def _seccion_vii(piezas: list, hechos: list) -> dict:
+    """Nota de material: composición del expediente, fallos, exclusiones y la
+    convención declarada una sola vez."""
+    total = len(piezas or [])
+    incluidas = [p for p in piezas if p.get("incluido")]
+    fallidas = [p for p in piezas if p.get("estado_extraccion") == "fallo"]
+    excluidas = [p for p in piezas if not p.get("incluido")]
+    verif = sum(1 for h in (hechos or [])
+                if h.get("procedencia") != "documento_analista" and (h.get("url") or "").strip())
+    exped = len(hechos or []) - verif
+    return {
+        "nombre": SECCION_VII,
+        "total_piezas": total,
+        "incluidas": len(incluidas),
+        "citadas": len(hechos or []),
+        "citadas_verificables": verif,
+        "citadas_expediente": exped,
+        "fallidas": [{"titulo": _titulo_pieza(p), "procedencia": p.get("procedencia"),
+                      "nota_error": (p.get("nota_error") or "")[:160]} for p in fallidas],
+        "excluidas": [{"titulo": _titulo_pieza(p), "procedencia": p.get("procedencia")}
+                      for p in excluidas],
+        "convencion": CONVENCION,
+    }
+
+
+def ensamblar_reporte_completo(db_path: str, reporte_id: int,
+                               insumo_motor: dict = None) -> dict:
+    """Ensambla el reporte COMPLETO I-VII y lo persiste.
+
+    Parte del análisis descriptivo I-IV ya generado y persistido por la sub-fase
+    4a (no vuelve a llamar al modelo) y le añade la voz del analista (V), las dos
+    clases probatorias (VI) y la nota de material (VII).
+
+    insumo_motor: lo calcula el web layer (necesita el snapshot del motor) y se
+    guarda con el reporte para dejar constancia de qué se le mostró al analista
+    cuando proyectó.
+    """
+    from ..storage.config_loader import (
+        obtener_analisis_caso, obtener_caso_meta, listar_piezas_caso,
+        cargar_parametros_caso, guardar_analisis_caso,
+    )
+    from ..utils.timezone_pe import now_pe_iso
+
+    base = obtener_analisis_caso(db_path, reporte_id)
+    if not base or base.get("estado") != "ok":
+        return {"estado": "error",
+                "nota": "No hay análisis descriptivo (I-IV) generado para este caso"}
+    meta = obtener_caso_meta(db_path, reporte_id) or {}
+    par = cargar_parametros_caso(db_path)
+    piezas = listar_piezas_caso(db_path, reporte_id)
+    hechos = base.get("hechos_citados") or []
+
+    completo = dict(base)
+    completo["seccion_v"] = _seccion_v(meta.get("proyeccion_analista") or {},
+                                       par.get("horizontes") or [7, 15, 30])
+    completo["seccion_vi"] = _clases_probatorias(hechos)
+    completo["seccion_vii"] = _seccion_vii(piezas, hechos)
+    completo["insumo_motor"] = insumo_motor or base.get("insumo_motor")
+    completo["completo"] = True
+    completo["ensamblado_en"] = now_pe_iso()
+    guardar_analisis_caso(db_path, reporte_id, completo)
+    return completo
+
+
 # ── Dump legible (validación sin PDF) ─────────────────────────────────────────
 def dump_legible(analisis: dict) -> str:
     """Vuelca el análisis como texto plano legible, para que el Coronel valide
@@ -540,16 +656,81 @@ def dump_legible(analisis: dict) -> str:
     L += [f"  · {s}" for s in sil] if sil else ["  (ninguno: todos los escenarios "
                                                 "tienen material que los sostiene)"]
     L.append("")
+    # ── V. PROYECCIÓN (voz del analista) ──
+    sv = analisis.get("seccion_v")
+    if sv:
+        L.append("=" * 74)
+        L.append(f"{sv['nombre']}   ← juicio del analista, NO lo escribe la IA")
+        L.append("=" * 74)
+        if sv.get("horizontes"):
+            for f in sv["horizontes"]:
+                kent = f.get("kent") or "(sin término estimativo)"
+                L.append(f"  · {f['horizonte_dias']} días — {kent}")
+                if f.get("prosa"):
+                    L.append(f"      {f['prosa']}")
+        else:
+            L.append("  (el analista aún no registró su proyección)")
+        L.append("")
+
+    # ── Insumo del motor (aproximación por tema) ──
+    ins = analisis.get("insumo_motor")
+    if ins:
+        L.append("=" * 74)
+        L.append("INSUMO DEL MOTOR (proyección por TEMA, no del caso)")
+        L.append("=" * 74)
+        L.append(f"  {ins.get('etiqueta', '')}")
+        for t in ins.get("temas", []):
+            fila = f"  · {t['tema']} ({t['n_articulos']} art. del caso)"
+            for h, v in (t.get("proyeccion") or {}).items():
+                fila += f" · {h}d: {v}"
+            L.append(fila)
+        if not ins.get("temas"):
+            L.append("  (sin temas detectados en la prensa del caso)")
+        L.append("")
+
+    # ── VI. HECHOS CITADOS en dos clases probatorias ──
+    svi = analisis.get("seccion_vi")
     L.append("=" * 74)
-    L.append("HECHOS CITADOS (resueltos por ID, con su atribución del sistema)")
+    L.append((svi or {}).get("nombre") or "HECHOS CITADOS")
     L.append("=" * 74)
-    for h in analisis.get("hechos_citados", []):
-        ref = h.get("url") or h.get("nombre_archivo") or "—"
-        L.append(f"[{h['id_cita']}] ({h['procedencia']}) {h['titulo']}")
-        L.append(f"      atribución: \"{h['atribucion']}...\"")
-        L.append(f"      referencia: {ref}")
-    if not analisis.get("hechos_citados"):
-        L.append("  (ninguno)")
+    if svi and svi.get("clases"):
+        for cl in svi["clases"]:
+            L.append(f"— {cl['clase']} —")
+            for h in cl["hechos"]:
+                ref = h.get("url") or h.get("nombre_archivo") or "—"
+                L.append(f"[{h['id_cita']}] ({h['procedencia']}) {h['titulo']}")
+                L.append(f"      atribución: \"{h['atribucion']}...\"")
+                L.append(f"      referencia: {ref}")
+            L.append("")
+    else:
+        for h in analisis.get("hechos_citados", []):
+            ref = h.get("url") or h.get("nombre_archivo") or "—"
+            L.append(f"[{h['id_cita']}] ({h['procedencia']}) {h['titulo']}")
+            L.append(f"      atribución: \"{h['atribucion']}...\"")
+            L.append(f"      referencia: {ref}")
+        if not analisis.get("hechos_citados"):
+            L.append("  (ninguno)")
+
+    # ── VII. NOTA DE MATERIAL ──
+    svii = analisis.get("seccion_vii")
+    if svii:
+        L.append("=" * 74)
+        L.append(svii["nombre"])
+        L.append("=" * 74)
+        L.append(f"  Expediente: {svii['total_piezas']} piezas · "
+                 f"{svii['incluidas']} incluidas · {svii['citadas']} citadas "
+                 f"({svii['citadas_verificables']} de fuente abierta verificable, "
+                 f"{svii['citadas_expediente']} material del analista).")
+        if svii.get("fallidas"):
+            L.append(f"  Piezas con extracción fallida ({len(svii['fallidas'])}), "
+                     f"no citables:")
+            for f in svii["fallidas"]:
+                L.append(f"    · [{f['procedencia']}] {f['titulo']} — {f['nota_error']}")
+        if svii.get("excluidas"):
+            L.append(f"  Excluidas por el analista ({len(svii['excluidas'])}):")
+            for e in svii["excluidas"]:
+                L.append(f"    · [{e['procedencia']}] {e['titulo']}")
+        L.append(f"  Convención: {svii['convencion']}")
     inval = analisis.get("ids_invalidos") or []
     desc = analisis.get("afirmaciones_descartadas") or []
     if inval or desc:
