@@ -5995,7 +5995,8 @@ def _estado_pill(estado: str) -> str:
     cfg = {"completado":         ("#22c55e", "✓", "Completado"),
            "generando":          ("#f59e0b", "◌", "Generando"),
            "error":              ("#ef4444", "✕", "Error"),
-           "esperando_revision": ("#38bdf8", "◒", "En revisión")}
+           "esperando_revision": ("#38bdf8", "◒", "En revisión"),
+           "esperando_proyeccion": ("#a78bfa", "◔", "Esperando proyección")}
     color, ico, txt = cfg.get(estado, ("#94a3b8", "•", estado or "—"))
     return (f'<span class="rep-pill" style="color:{color};border-color:{color}44;'
             f'background:{color}14">{ico} {escape(txt)}</span>')
@@ -6012,6 +6013,12 @@ def _reporte_accion(r: dict, small: bool = False) -> str:
     if est == "esperando_revision":
         cls = "rep-dl-sm" if small else "rep-dl"
         return f'<a class="{cls}" href="/admin/reportes/{r["id"]}/mesa">🔍 Revisar</a>'
+    if est == "esperando_proyeccion":
+        # El expediente ya está cerrado y las secciones I-IV descritas: falta la
+        # voz del analista (sección V). Su acción es proyectar, no descargar.
+        cls = "rep-dl-sm" if small else "rep-dl"
+        return (f'<a class="{cls}" href="/admin/reportes/{r["id"]}/proyeccion">'
+                f'🧭 Proyectar</a>')
     if est == "generando":
         return '<span class="rep-wait">generando…</span>'
     if small:
@@ -6773,7 +6780,21 @@ async def admin_caso_aprobar(request: Request, reporte_id: int):
     res = aprobar_caso(db, reporte_id)
     if not res.get("ok"):
         return RedirectResponse(_mesa_url(reporte_id, err="No+se+pudo+aprobar"), status_code=303)
-    return RedirectResponse("/admin/reportes?msg=Caso+aprobado+·+generando", status_code=303)
+
+    # Flujo B: aprobar CIERRA el expediente y corre el motor descriptivo (I-IV);
+    # el caso queda 'esperando_proyeccion' para que el analista proyecte DESPUÉS
+    # de leer lo descrito. NO pasa a 'generando' aquí.
+    def _run():
+        from ..reports.caso_motor import generar_analisis_caso
+        r2 = generar_analisis_caso(db, reporte_id)
+        if r2.get("estado") != "ok":
+            print(f"[caso] análisis al aprobar rid={reporte_id} → {r2.get('nota')}")
+
+    _lanzar_bg_caso(lambda _db, _rid: _run(), db, reporte_id)
+    return RedirectResponse(
+        f"/admin/reportes/{reporte_id}/proyeccion?msg="
+        "Expediente+cerrado+·+analizando+I-IV+·+ahora+registra+tu+proyección",
+        status_code=303)
 
 
 @router.post("/reportes/{reporte_id:int}/mesa/analizar")
@@ -6800,6 +6821,273 @@ async def admin_caso_analizar(request: Request, reporte_id: int):
     return RedirectResponse(
         _mesa_url(reporte_id, msg="Analizando+el+expediente…+revisa+el+análisis+en+unos+segundos"),
         status_code=303)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PANTALLA DE PROYECCIÓN (Flujo B) — la voz del analista, sección V
+# ══════════════════════════════════════════════════════════════════════════════
+def _insumo_motor_caso(db: str, reporte_id: int) -> dict:
+    """Insumo del motor para la proyección: el motor proyecta TEMAS, no casos.
+
+    Mapea el caso a temas por la PRENSA que cita (piezas bd_osint incluidas →
+    artículo → detectar_temas, la función canónica del pipeline) y devuelve la
+    proyección del motor (calcular_proyecciones) para esos temas.
+
+    ETIQUETA HONESTA: es una aproximación POR TEMA, no una proyección del caso.
+    Las piezas url_externa y documento_analista no votan tema.
+    """
+    from ..storage.config_loader import temas_de_prensa_del_caso, calcular_proyecciones
+    base = temas_de_prensa_del_caso(db, reporte_id)
+    out = {
+        "etiqueta": ("Insumo del motor — proyección de los temas que toca la prensa "
+                     "del caso; aproximación por tema, no del caso."),
+        "temas": [], "piezas_bd": base.get("piezas_bd", 0),
+        "sin_articulo": base.get("sin_articulo", 0),
+    }
+    conteos = base.get("temas") or {}
+    if not conteos:
+        return out
+    try:
+        snap = _ultimo_snapshot() or {}
+        osint = snap.get("osint_motor")
+        globos = []
+        if osint:
+            md = _construir_datos_semaforo(osint, db, dias=30)
+            globos = md.get("globos_b", []) or []
+        datos = [{"tema": g.get("tema"), "actividad": g.get("x", 0),
+                  "velocidad": g.get("velocidad", 0), "gravedad": g.get("y", 0)}
+                 for g in globos if g.get("tema") in conteos]
+        proy = calcular_proyecciones(db, datos, dias=30) if datos else {}
+        horiz = proy.get("horizontes") or []
+        por_tema = {f["tema"]: f for f in (proy.get("proyeccion_b") or [])}
+        for tema, n in sorted(conteos.items(), key=lambda kv: kv[1], reverse=True):
+            fila = por_tema.get(tema) or {}
+            out["temas"].append({
+                "tema": tema.replace("_", " "),
+                "n_articulos": n,
+                "base": fila.get("base"),
+                "proyeccion": {str(h): fila.get(f"h{h}") for h in horiz
+                               if fila.get(f"h{h}") is not None},
+            })
+    except Exception as e:
+        print(f"[caso] insumo del motor falló (rid={reporte_id}): {e}")
+    return out
+
+
+def _guard_caso_proyeccion(db: str, reporte_id: int):
+    """(reporte, None) si el caso está en 'esperando_proyeccion'; si no, redirect."""
+    from ..storage.config_loader import obtener_reporte, ESTADO_ESPERANDO_PROYECCION
+    r = obtener_reporte(db, reporte_id)
+    if not r or r.get("tipo") != "reporte_b_caso":
+        return None, RedirectResponse("/admin/reportes?err=Caso+no+encontrado", status_code=303)
+    if r.get("estado") != ESTADO_ESPERANDO_PROYECCION:
+        return None, RedirectResponse(
+            f"/admin/reportes/{reporte_id}/proyeccion?err=El+caso+no+está+esperando+proyección",
+            status_code=303)
+    return r, None
+
+
+@router.get("/reportes/{reporte_id:int}/proyeccion", response_class=HTMLResponse)
+async def admin_caso_proyeccion(request: Request, reporte_id: int):
+    """Pantalla de proyección: I-IV en solo lectura + insumo del motor por tema +
+    formulario de la voz del analista (Kent + prosa por horizonte)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    from ..storage.config_loader import (
+        obtener_reporte, obtener_caso_meta, obtener_analisis_caso,
+        cargar_parametros_caso, cargar_vocabulario_kent, ESTADO_ESPERANDO_PROYECCION,
+    )
+    db = _get_db_path()
+    r = obtener_reporte(db, reporte_id)
+    if not r or r.get("tipo") != "reporte_b_caso":
+        return HTMLResponse(_page("Reportes",
+            '<div class="alert-box alert-alto">Caso no encontrado.</div>',
+            "reportes", sesion["username"]), status_code=404)
+    meta = obtener_caso_meta(db, reporte_id) or {}
+    analisis = obtener_analisis_caso(db, reporte_id)
+    par = cargar_parametros_caso(db)
+    kent = cargar_vocabulario_kent(db)
+    en_proyeccion = r.get("estado") == ESTADO_ESPERANDO_PROYECCION
+
+    msg = request.query_params.get("msg", "")
+    errq = request.query_params.get("err", "")
+    banner = (f'<div class="alert-box alert-info" style="margin-bottom:12px">✓ {escape(msg)}</div>' if msg else '')
+    banner += (f'<div class="alert-box alert-alto" style="margin-bottom:12px">⚠ {escape(errq)}</div>' if errq else '')
+
+    # ── I-IV en solo lectura (lo que describió la máquina) ──
+    if analisis and analisis.get("estado") == "ok":
+        secs = ""
+        for s in analisis.get("secciones", []):
+            cuerpo = escape(s.get("cuerpo") or "(vacío)").replace("\n", "<br>")
+            secs += (f'<div style="margin-bottom:14px"><div style="font-size:12px;'
+                     f'font-weight:700;color:var(--accent);margin-bottom:4px">'
+                     f'{escape(s["nombre"])}</div>'
+                     f'<div style="font-size:12.5px;line-height:1.55;color:var(--text)">'
+                     f'{cuerpo}</div></div>')
+        sil = analisis.get("silencios") or []
+        if sil:
+            secs += ('<div style="margin-top:10px;padding:10px 12px;background:#f59e0b14;'
+                     'border:1px solid #f59e0b44;border-radius:6px">'
+                     '<div style="font-size:12px;font-weight:700;color:#f59e0b;'
+                     'margin-bottom:4px">SILENCIOS — escenarios sin material que los sostenga</div>'
+                     + "".join(f'<div style="font-size:12.5px;color:var(--text)">· {escape(x)}</div>'
+                               for x in sil)
+                     + '<div style="font-size:11px;color:var(--muted);margin-top:5px">'
+                       'Un silencio es un hallazgo: debería informar tu proyección.</div></div>')
+        descriptivas = secs
+    elif analisis:
+        descriptivas = (f'<div class="rep-vacio">El análisis descriptivo no se pudo generar: '
+                        f'{escape(str(analisis.get("nota") or ""))}</div>')
+    else:
+        descriptivas = ('<div class="rep-vacio">El análisis descriptivo se está generando. '
+                        'Recarga en unos segundos.</div>')
+
+    # ── Insumo del motor (aproximación por tema) ──
+    insumo = _insumo_motor_caso(db, reporte_id)
+    if insumo.get("temas"):
+        filas = ""
+        for t in insumo["temas"]:
+            proj = " · ".join(f"{h}d: <b>{v}</b>" for h, v in (t.get("proyeccion") or {}).items())
+            filas += (f'<tr><td>{escape(t["tema"].title())}</td>'
+                      f'<td class="c-c">{t["n_articulos"]}</td>'
+                      f'<td class="c-c">{t.get("base") if t.get("base") is not None else "—"}</td>'
+                      f'<td>{proj or "—"}</td></tr>')
+        insumo_html = (f'<div style="overflow-x:auto"><table class="tbl"><thead><tr>'
+                       f'<th>Tema (de la prensa del caso)</th>'
+                       f'<th style="text-align:center">Artículos</th>'
+                       f'<th style="text-align:center">Hoy</th>'
+                       f'<th>Proyección del motor</th></tr></thead>'
+                       f'<tbody>{filas}</tbody></table></div>')
+    else:
+        insumo_html = ('<div class="rep-vacio">Sin temas detectados en la prensa del caso '
+                       '(o sin snapshot del motor disponible).</div>')
+
+    # ── Formulario: la voz del analista ──
+    proy_actual = meta.get("proyeccion_analista") or {}
+    ro = "" if en_proyeccion else "disabled"
+    bloques = ""
+    for h in (par.get("horizontes") or [7, 15, 30]):
+        v = proy_actual.get(str(h)) or proy_actual.get(h) or {}
+        if isinstance(v, str):
+            v = {"kent": "", "prosa": v}
+        opts = '<option value="">— término estimativo —</option>' + "".join(
+            f'<option value="{escape(k)}"{" selected" if (v.get("kent") or "") == k else ""}>'
+            f'{escape(k)}</option>' for k in kent)
+        bloques += (f'<div style="margin-bottom:12px">'
+                    f'<div style="font-size:12px;font-weight:600;color:var(--accent);'
+                    f'margin-bottom:5px">Horizonte {h} días</div>'
+                    f'<select name="kent_{h}" class="rep-in" style="min-width:230px" {ro}>{opts}</select>'
+                    f'<textarea name="prosa_{h}" rows="2" class="rep-in" placeholder="Juicio del '
+                    f'analista para {h} días" style="width:100%;box-sizing:border-box;margin-top:6px" '
+                    f'{ro}>{escape(v.get("prosa") or "")}</textarea></div>')
+
+    contenido = f"""
+{_REPORTES_CSS}
+{banner}
+<div style="margin-bottom:12px"><a href="/admin/reportes" style="color:var(--muted);font-size:12.5px">← Volver a reportes</a></div>
+
+<div class="card">
+  <div class="card-title">Caso · {_estado_pill(r["estado"])}</div>
+  <div style="font-size:13px;color:var(--text)">{escape(meta.get('pregunta') or r.get('caso') or '')}</div>
+  <div style="font-size:11.5px;color:var(--muted);margin-top:4px">Ventana: {escape(str(meta.get('ventana_dias') or '—'))} días</div>
+</div>
+
+<div class="card">
+  <div class="card-title">Lo que describe el material (secciones I-IV · solo lectura)</div>
+  {descriptivas}
+  <div style="margin-top:10px"><a href="/admin/reportes/{reporte_id}/mesa/analisis" style="color:var(--accent);font-size:12px">Ver dump completo →</a></div>
+</div>
+
+<div class="card">
+  <div class="card-title">Insumo del motor</div>
+  <div style="font-size:11.5px;color:var(--muted);margin-bottom:8px">{escape(insumo.get('etiqueta') or '')}</div>
+  {insumo_html}
+</div>
+
+<div class="card">
+  <div class="card-title">Tu proyección (sección V · voz del analista)</div>
+  <div style="font-size:11.5px;color:var(--muted);margin-bottom:10px">
+    Juicio del analista con vocabulario estimativo controlado (Kent). La IA no escribe esta sección.
+  </div>
+  <form method="post" action="/admin/reportes/{reporte_id}/proyeccion">
+    {bloques}
+    {'<button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Guardar proyección</button>' if en_proyeccion else ''}
+  </form>
+</div>
+
+{f'''<div class="card">
+  <div class="card-title">Finalizar</div>
+  <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Ensambla el reporte completo (I-VII) y lo manda a generar. El PDF con diseño THALOS llega en la sub-fase 5.</div>
+  <form method="post" action="/admin/reportes/{reporte_id}/proyeccion/finalizar">
+    <button type="submit" style="background:#22c55e;color:#00131f;border:none;border-radius:6px;padding:9px 22px;font-size:14px;font-weight:700;cursor:pointer">✓ Finalizar reporte</button>
+  </form>
+</div>''' if en_proyeccion else ''}
+"""
+    return HTMLResponse(_page("Proyección del caso", contenido, "reportes", sesion["username"]))
+
+
+@router.post("/reportes/{reporte_id:int}/proyeccion")
+async def admin_caso_proyeccion_post(request: Request, reporte_id: int):
+    """Guarda la proyección del analista (Kent + prosa por horizonte)."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_proyeccion(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import (
+        guardar_caso_meta, obtener_caso_meta, cargar_parametros_caso,
+        cargar_vocabulario_kent,
+    )
+    form = await request.form()
+    par = cargar_parametros_caso(db)
+    kent_ok = set(cargar_vocabulario_kent(db))
+    proy = {}
+    for h in (par.get("horizontes") or [7, 15, 30]):
+        k = (form.get(f"kent_{h}") or "").strip()
+        p = (form.get(f"prosa_{h}") or "").strip()
+        if k and k not in kent_ok:      # vocabulario controlado: no se acepta libre
+            k = ""
+        if k or p:
+            proy[str(h)] = {"kent": k, "prosa": p}
+    meta = obtener_caso_meta(db, reporte_id) or {}
+    guardar_caso_meta(db, reporte_id, pregunta=meta.get("pregunta") or r.get("caso") or "—",
+                      ventana_dias=meta.get("ventana_dias") or 7,
+                      terminos_busqueda=meta.get("terminos_busqueda"),
+                      escenarios_candidatos=meta.get("escenarios_candidatos"),
+                      indicaciones_detalle=meta.get("indicaciones_detalle"),
+                      proyeccion_analista=proy)
+    return RedirectResponse(f"/admin/reportes/{reporte_id}/proyeccion?msg=Proyección+guardada",
+                            status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/proyeccion/finalizar")
+async def admin_caso_finalizar(request: Request, reporte_id: int):
+    """Ensambla el reporte completo (I-VII) y lo manda a generar."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_proyeccion(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import finalizar_caso
+    from ..reports.caso_motor import ensamblar_reporte_completo
+    # El insumo del motor se guarda con el reporte: deja constancia de qué se le
+    # mostró al analista cuando proyectó.
+    res = ensamblar_reporte_completo(db, reporte_id,
+                                     insumo_motor=_insumo_motor_caso(db, reporte_id))
+    if res.get("estado") != "ok":
+        return RedirectResponse(
+            f"/admin/reportes/{reporte_id}/proyeccion?err={escape(str(res.get('nota') or 'No se pudo ensamblar'))}",
+            status_code=303)
+    fin = finalizar_caso(db, reporte_id)
+    if not fin.get("ok"):
+        return RedirectResponse(
+            f"/admin/reportes/{reporte_id}/proyeccion?err=No+se+pudo+finalizar", status_code=303)
+    return RedirectResponse("/admin/reportes?msg=Reporte+ensamblado+·+generando", status_code=303)
 
 
 @router.get("/reportes/{reporte_id:int}/mesa/analisis", response_class=HTMLResponse)

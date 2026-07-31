@@ -2670,6 +2670,10 @@ def marcar_generacion_iniciada(db_path: str, reporte_id: int) -> None:
 # Aquí SOLO viven los datos: metadatos del caso (1:1) y piezas (N:1).
 
 ESTADO_ESPERANDO_REVISION = "esperando_revision"
+# Flujo B: tras aprobar el expediente y correr el motor descriptivo (I-IV), el
+# caso espera la PROYECCIÓN del analista (sección V). Como 'esperando_revision',
+# está EXENTO del watchdog: puede esperar días sin que nadie lo mate.
+ESTADO_ESPERANDO_PROYECCION = "esperando_proyeccion"
 PROCEDENCIAS_PIEZA = ("bd_osint", "url_externa", "documento_analista")
 ESTADOS_EXTRACCION = ("pendiente", "extrayendo", "listo", "fallo")
 
@@ -2678,7 +2682,8 @@ _CASO_DEFAULTS = {"horizontes": [7, 15, 30], "max_piezas": 60,
                   # motor descriptivo (sub-fase 4a)
                   "modelo": "claude-sonnet-4-6", "max_tokens": 4000,
                   "timeout_s": 180, "max_chars_pieza_envio": 6000,
-                  "max_chars_material": 220000, "prompt_maestro": ""}
+                  "max_chars_material": 220000, "prompt_maestro": "",
+                  "kent_vocab_raw": ""}
 
 _CASO_MAPA_INT = {"CASO_MAX_PIEZAS": "max_piezas",
                   "CASO_MAX_TEXTO_PIEZA_CHARS": "max_texto_chars",
@@ -2686,7 +2691,24 @@ _CASO_MAPA_INT = {"CASO_MAX_PIEZAS": "max_piezas",
                   "CASO_TIMEOUT_S": "timeout_s",
                   "CASO_MAX_CHARS_PIEZA_ENVIO": "max_chars_pieza_envio",
                   "CASO_MAX_CHARS_MATERIAL": "max_chars_material"}
-_CASO_MAPA_STR = {"CASO_MODELO": "modelo", "CASO_PROMPT_MAESTRO": "prompt_maestro"}
+_CASO_MAPA_STR = {"CASO_MODELO": "modelo", "CASO_PROMPT_MAESTRO": "prompt_maestro",
+                  "CASO_KENT_VOCAB": "kent_vocab_raw"}
+
+_KENT_DEFAULT = ["Casi con certeza", "Muy probable", "Probable",
+                 "Posibilidades equilibradas", "Improbable", "Muy improbable",
+                 "Casi con certeza que no"]
+
+
+def cargar_vocabulario_kent(db_path: str) -> list:
+    """Términos estimativos de Kent (config CASO_KENT_VOCAB, separados por '|').
+
+    Vocabulario controlado para la proyección del analista: acota el juicio a
+    términos comparables entre reportes. Editable/calibrable; defaults seguros.
+    """
+    par = cargar_parametros_caso(db_path)
+    crudo = (par.get("kent_vocab_raw") or "").strip()
+    items = [t.strip() for t in crudo.split("|") if t.strip()]
+    return items or list(_KENT_DEFAULT)
 
 
 def cargar_parametros_caso(db_path: str) -> dict:
@@ -3049,16 +3071,91 @@ def peso_expediente_caso(db_path: str, reporte_id: int) -> dict:
 
 
 def aprobar_caso(db_path: str, reporte_id: int) -> dict:
-    """Aprueba el caso: sella el inicio de generación (para el watchdog) y pasa de
-    'esperando_revision' a 'generando'. Solo actúa si está en 'esperando_revision'.
-    El PDF real es sub-fase 5; por ahora cae al dummy como cualquier reporte_b_caso.
+    """Cierra el expediente y pasa a 'esperando_proyeccion' (Flujo B).
+
+    El analista proyecta DESPUÉS de leer las secciones descriptivas I-IV, no
+    antes: por eso aprobar NO va directo a 'generando'. El llamador corre el
+    motor descriptivo (sub-fase 4a) y luego el analista escribe su proyección
+    (sección V) en la pantalla de proyección.
+
+    NO se sella generacion_iniciada_en aquí: la generación real empieza al
+    finalizar. 'esperando_proyeccion' queda EXENTO del watchdog (que solo mira
+    'generando'), porque el analista puede tardar días en proyectar.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        cur = c.execute(
+            f"UPDATE reportes_generados SET estado='{ESTADO_ESPERANDO_PROYECCION}' "
+            f"WHERE id=? AND estado='{ESTADO_ESPERANDO_REVISION}'",
+            (int(reporte_id),))
+        return {"ok": cur.rowcount > 0}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def temas_de_prensa_del_caso(db_path: str, reporte_id: int) -> dict:
+    """Temas del motor que toca la PRENSA del caso (para el insumo de proyección).
+
+    El motor proyecta TEMAS, no casos: hay que mapear. La pieza no guarda el
+    tema, y articulos.category NO sirve (vale 'medios': es la categoría del
+    colector RSS, no el tema político). Se recuperan los artículos por
+    ref_articulo_id y se derivan sus temas con analyzers.topics.detectar_temas
+    — la MISMA función canónica del pipeline, no una aproximación aparte.
+
+    Solo votan tema las piezas bd_osint incluidas: url_externa y
+    documento_analista no tienen artículo detrás.
+
+    Devuelve {temas: {tema: n_articulos}, piezas_bd: int, sin_articulo: int}.
+    """
+    out = {"temas": {}, "piezas_bd": 0, "sin_articulo": 0}
+    try:
+        with _conn(db_path) as c:
+            filas = c.execute(
+                "SELECT p.ref_articulo_id AS aid, a.title AS title, a.summary AS summary "
+                "FROM reporte_caso_piezas p "
+                "LEFT JOIN articulos a ON a.id = p.ref_articulo_id "
+                "WHERE p.reporte_id=? AND p.procedencia='bd_osint' AND p.incluido=1",
+                (int(reporte_id),)).fetchall()
+    except Exception as e:
+        print(f"[config_loader] temas_de_prensa_del_caso falló: {e}")
+        return out
+    from types import SimpleNamespace
+    arts = []
+    for f in filas:
+        out["piezas_bd"] += 1
+        if f["aid"] is None or (f["title"] is None and f["summary"] is None):
+            out["sin_articulo"] += 1
+            continue
+        arts.append(SimpleNamespace(title=f["title"] or "", summary=f["summary"] or ""))
+    if not arts:
+        return out
+    try:
+        try:
+            from ..analyzers.topics import detectar_temas
+        except ImportError:
+            from apurisk.analyzers.topics import detectar_temas
+        res = detectar_temas(arts)
+        conteos = res.get("conteos") if isinstance(res, dict) else None
+        if conteos is None and isinstance(res, dict):
+            # tolerar variantes de clave del retorno
+            conteos = res.get("counts") or {}
+        out["temas"] = {k: v for k, v in (conteos or {}).items() if v}
+    except Exception as e:
+        print(f"[config_loader] detectar_temas en caso falló: {e}")
+    return out
+
+
+def finalizar_caso(db_path: str, reporte_id: int) -> dict:
+    """Cierra la proyección del analista y lanza la generación del reporte.
+
+    Sella generacion_iniciada_en (el watchdog cuenta desde AQUÍ, no desde la
+    creación: el caso pudo pasar días en revisión y proyección) y pasa de
+    'esperando_proyeccion' a 'generando'.
     """
     from ..utils.timezone_pe import now_pe_iso
 
     def _op(c: sqlite3.Connection) -> dict:
         cur = c.execute(
             "UPDATE reportes_generados SET estado='generando', generacion_iniciada_en=? "
-            f"WHERE id=? AND estado='{ESTADO_ESPERANDO_REVISION}'",
+            f"WHERE id=? AND estado='{ESTADO_ESPERANDO_PROYECCION}'",
             (now_pe_iso(), int(reporte_id)))
         return {"ok": cur.rowcount > 0}
     return _ejecutar_con_reintentos(db_path, _op)
