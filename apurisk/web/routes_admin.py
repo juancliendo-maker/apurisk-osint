@@ -7087,7 +7087,11 @@ async def admin_caso_finalizar(request: Request, reporte_id: int):
     if not fin.get("ok"):
         return RedirectResponse(
             f"/admin/reportes/{reporte_id}/proyeccion?err=No+se+pudo+finalizar", status_code=303)
-    return RedirectResponse("/admin/reportes?msg=Reporte+ensamblado+·+generando", status_code=303)
+    # Render REAL del PDF THALOS en segundo plano (sub-fase 5). El caso ya no cae
+    # al placeholder: salió de la lista blanca del dummy.
+    _lanzar_generacion_bg(_generar_caso_ahora, db, reporte_id)
+    return RedirectResponse("/admin/reportes?msg=Reporte+ensamblado+·+generando+el+PDF",
+                            status_code=303)
 
 
 @router.get("/reportes/{reporte_id:int}/mesa/analisis", response_class=HTMLResponse)
@@ -7424,6 +7428,34 @@ async def admin_ap24_test_api(request: Request):
         return JSONResponse({"ok": True, "modelo": par.get("modelo"),
                              "respuesta": texto[:40]})
     return JSONResponse({"ok": False, "modelo": par.get("modelo"), "detalle": e})
+
+
+def _generar_caso_ahora(db: str, reporte_id: int) -> None:
+    """Renderiza el PDF THALOS del Reporte por Caso (sub-fase 5).
+
+    RENDER PURO: dibuja el objeto I-VII ya ensamblado y persistido; no llama al
+    modelo. Mismo patrón que los demás generadores: bytes → archivo → completado.
+    """
+    from ..storage.config_loader import (
+        obtener_reporte, marcar_reporte_completado, marcar_reporte_error,
+    )
+    from ..reports.caso_pdf import generar_reporte_caso_pdf
+    rep = obtener_reporte(db, reporte_id)
+    if not rep:
+        return
+    try:
+        res = generar_reporte_caso_pdf(db, reporte_id)
+        if res.get("estado") == "error" or not res.get("pdf"):
+            marcar_reporte_error(db, reporte_id, res.get("nota", "Error"))
+            return
+        fecha_iso = rep.get("fecha_generacion", "")
+        ts = fecha_iso.replace("-", "").replace(":", "")[:13].replace("T", "_")
+        nombre = f"{ts}_ReporteCaso.pdf"
+        _REPORTES_DIR.mkdir(parents=True, exist_ok=True)
+        (_REPORTES_DIR / nombre).write_bytes(res["pdf"])
+        marcar_reporte_completado(db, reporte_id, nombre, max(1, len(res["pdf"]) // 1024))
+    except Exception as e:
+        marcar_reporte_error(db, reporte_id, f"Error generando el PDF del caso: {e}")
 
 
 def _generar_ap24_ahora(db: str, reporte_id: int) -> None:
