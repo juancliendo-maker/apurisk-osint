@@ -2394,7 +2394,7 @@ _REPORTE_TEMAS_B = [
 # real (reporte_a_manual, reporte_b_tema, analisis_politico_24h) NUNCA los toca el
 # dummy — así una generación real lenta/en curso no queda secuestrada por el
 # placeholder. Al agregar el generador real de un tipo, quítalo de esta lista.
-_REPORTE_DUMMY_TIPOS = {"reporte_a_automatico", "reporte_b_caso"}
+_REPORTE_DUMMY_TIPOS = {"reporte_a_automatico"}
 
 
 # fecha_generacion convive en DOS formatos: los reportes reales guardan
