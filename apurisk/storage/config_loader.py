@@ -2786,7 +2786,7 @@ def obtener_analisis_caso(db_path: str, reporte_id: int) -> dict | None:
 def guardar_caso_meta(db_path: str, reporte_id: int, pregunta: str,
                       ventana_dias: int = 7, terminos_busqueda=None,
                       escenarios_candidatos=None, indicaciones_detalle: str = None,
-                      proyeccion_analista=None) -> dict:
+                      proyeccion_analista=None, titulo_reporte: str = None) -> dict:
     """Crea o actualiza (upsert 1:1) los metadatos del caso. Timestamps Lima.
 
     terminos_busqueda / escenarios_candidatos: list[str] → se guardan como JSON.
@@ -2813,8 +2813,10 @@ def guardar_caso_meta(db_path: str, reporte_id: int, pregunta: str,
         c.execute(
             "INSERT INTO reporte_caso_meta (reporte_id, pregunta, ventana_dias, "
             "terminos_busqueda, escenarios_candidatos, indicaciones_detalle, "
-            "proyeccion_analista, creado_en, actualizado_en) VALUES (?,?,?,?,?,?,?,?,?) "
+            "proyeccion_analista, titulo_reporte, creado_en, actualizado_en) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(reporte_id) DO UPDATE SET pregunta=excluded.pregunta, "
+            "titulo_reporte=excluded.titulo_reporte, "
             "ventana_dias=excluded.ventana_dias, "
             "terminos_busqueda=excluded.terminos_busqueda, "
             "escenarios_candidatos=excluded.escenarios_candidatos, "
@@ -2822,7 +2824,8 @@ def guardar_caso_meta(db_path: str, reporte_id: int, pregunta: str,
             "proyeccion_analista=excluded.proyeccion_analista, "
             "actualizado_en=excluded.actualizado_en",
             (int(reporte_id), preg, int(ventana_dias), t_json, e_json,
-             indicaciones_detalle, p_json, ahora, ahora))
+             indicaciones_detalle, p_json, (titulo_reporte or "").strip() or None,
+             ahora, ahora))
         return {"ok": True, "reporte_id": int(reporte_id)}
     return _ejecutar_con_reintentos(db_path, _op)
 

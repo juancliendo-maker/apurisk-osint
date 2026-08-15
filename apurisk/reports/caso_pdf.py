@@ -31,6 +31,8 @@ from . import thalos_base as T
 from .reporte_a import escape_txt
 
 FIRMA_ANALISTA = "Cnel. (r) Juan Carlos Liendo O'Connor"
+TITULO_FIJO = "Reporte de Riesgo Político"
+SELLO_ANALISTA = "ELEMENTOS DE JUICIO"
 
 # Títulos de las secciones descriptivas tal como los emite el motor (4a).
 _ORDEN_DESCRIPTIVAS = [
@@ -39,6 +41,33 @@ _ORDEN_DESCRIPTIVAS = [
     "III. DESARROLLO EN LA VENTANA",
     "IV. CONEXIONES Y CONTEXTO",
 ]
+
+# RÓTULOS DE RENDER: cómo se IMPRIME cada sección. Se resuelven aquí (no en el
+# análisis persistido), así que el cambio de rótulo aplica a TODO reporte —
+# también a los ya analizados— en cuanto se re-renderiza.
+_ROTULO_SECCION = {
+    "I. SÍNTESIS DEL CASO":         "I. CONTEXTO",
+    "II. LA PREGUNTA Y EL MATERIAL": "II. SITUACIÓN EN DESARROLLO",
+    "III. DESARROLLO EN LA VENTANA": "III. ESCENARIOS EN CURSO",
+    "IV. CONEXIONES Y CONTEXTO":     "IV. ENTORNO POLÍTICO Y CONEXIONES",
+}
+
+# El peso bold de la fuente de CUERPO (OpenSans-Bold) NO está embebido en el
+# repo: reportlab resolvería <b> a la misma regular y la negrita no se vería.
+# Se usa el bold ya embebido del sistema THALOS (Montserrat-Bold, FONT_TITLE),
+# que es además el que el AP24 emplea para sus subtítulos de bloque.
+FONT_SUBTITULO = T.FONT_TITLE
+
+# Fórmula de escenario sin soporte: la vigente y la anterior (los análisis ya
+# persistidos llevan la vieja). Se normaliza AL RENDERIZAR para que el cambio de
+# rótulo alcance también a los reportes generados antes.
+_SIN_SOPORTE_NUEVO = "escenario en evaluación"
+_SIN_SOPORTE_VIEJO = "Sin material que lo sostenga en el expediente."
+
+_RE_MARCA_SUBTITULO = re.compile(r"^\s*[»›▸]+\s*(.+)$")
+_RE_BLOQUE_ORDINAL = re.compile(
+    r"^\s*(primer|segundo|tercer|cuarto|quinto|sexto|séptimo|septimo|octavo)\b",
+    re.IGNORECASE)
 
 
 # ── Piezas visuales ───────────────────────────────────────────────────────────
@@ -55,11 +84,73 @@ def _bloque(header, contenido: list) -> list:
     return [KeepTogether(cab)]
 
 
-def _parrafos(cuerpo: str, st: dict) -> list:
+def _estilo_subtitulo(st: dict) -> ParagraphStyle:
+    """Encabezados dentro de una sección (escenarios en II, bloques en III):
+    algo mayores que el cuerpo y en el bold embebido del sistema."""
+    return ParagraphStyle("sub_sec", fontName=FONT_SUBTITULO, fontSize=11,
+                          leading=14, textColor=T.NAVY,
+                          spaceBefore=7, spaceAfter=2)
+
+
+def _normalizar_sin_soporte(linea: str) -> str:
+    """Unifica la fórmula de escenario sin soporte (vigente y anterior) para que
+    todo reporte, nuevo o ya analizado, imprima la misma."""
+    if _SIN_SOPORTE_VIEJO.lower() in linea.lower():
+        return re.sub(re.escape(_SIN_SOPORTE_VIEJO), _SIN_SOPORTE_NUEVO,
+                      linea, flags=re.IGNORECASE)
+    return linea
+
+
+def _es_encabezado_escenario(linea: str, escenarios: list) -> bool:
+    """Una línea es encabezado de escenario si coincide con alguno de los
+    escenarios candidatos declarados por el analista."""
+    l = " ".join(linea.split()).strip().rstrip(":").lower()
+    for e in (escenarios or []):
+        if l and l == " ".join(str(e).split()).strip().rstrip(":").lower():
+            return True
+    return False
+
+
+def _es_encabezado_bloque(linea: str) -> bool:
+    """Encabezado de bloque en la sección de escenarios en curso.
+
+    Determinista para los reportes nuevos (el prompt v2 los prefija con »); para
+    los ya generados se aceptan también los ordinales ('Primer bloque…') y las
+    líneas cortas sin punto final, que es como se comporta un subtítulo."""
+    l = linea.strip()
+    if _RE_MARCA_SUBTITULO.match(l):
+        return True
+    if _RE_BLOQUE_ORDINAL.match(l):
+        return True
+    return bool(l) and len(l) <= 90 and not l.endswith((".", ":", ";", "…"))
+
+
+def _parrafos(cuerpo: str, st: dict, escenarios: list = None,
+              bloques_bold: bool = False) -> list:
     """Prosa del análisis. El texto ya viene resuelto por el arnés (sin marcadores
-    [Pn] ni URLs crudas): aquí solo se maqueta."""
-    return [Paragraph(escape_txt(p.strip()), st["body"])
-            for p in (cuerpo or "").split("\n") if p.strip()]
+    [Pn] ni URLs crudas): aquí solo se maqueta.
+
+    escenarios: si se pasan, las líneas que coincidan con un escenario candidato
+      se imprimen como encabezado en negrita (sección de situación en desarrollo).
+    bloques_bold: destaca los subtítulos de bloque (sección de escenarios en
+      curso), consumiendo el marcador » si viene del prompt.
+    """
+    out = []
+    st_sub = _estilo_subtitulo(st)
+    for linea in (cuerpo or "").split("\n"):
+        l = linea.strip()
+        if not l:
+            continue
+        l = _normalizar_sin_soporte(l)
+        if escenarios and _es_encabezado_escenario(l, escenarios):
+            out.append(Paragraph(escape_txt(l.rstrip(":")), st_sub))
+            continue
+        if bloques_bold and _es_encabezado_bloque(l):
+            m = _RE_MARCA_SUBTITULO.match(l)
+            out.append(Paragraph(escape_txt((m.group(1) if m else l).strip()), st_sub))
+            continue
+        out.append(Paragraph(escape_txt(l), st["body"]))
+    return out
 
 
 def _recuadro_silencios(silencios: list, st: dict) -> Table:
@@ -67,7 +158,8 @@ def _recuadro_silencios(silencios: list, st: dict) -> Table:
     sostenga), no un vacío que ocultar: se muestran destacados."""
     cuerpo = "<br/>".join(f"· {escape_txt(s)}" for s in silencios)
     inner = [
-        Paragraph("SILENCIOS DEL EXPEDIENTE", ParagraphStyle(
+        Paragraph(("ESCENARIO EN DESARROLLO" if len(silencios) == 1
+                   else "ESCENARIOS EN DESARROLLO"), ParagraphStyle(
             "sil_t", fontName=T.FONT_TITLE, fontSize=11, leading=14,
             textColor=T.AMBAR_ALTO, spaceAfter=4)),
         Paragraph(cuerpo, ParagraphStyle(
@@ -134,7 +226,7 @@ def _bloque_voz_analista(seccion_v: dict, vocabulario: list, st: dict) -> list:
     encabezado en versalitas, acento púrpura y firma del analista al pie."""
     interior = []
     interior.append(Paragraph(
-        "J U I C I O &nbsp; D E L &nbsp; A N A L I S T A",
+        "&nbsp;".join(SELLO_ANALISTA),      # versalitas espaciadas
         ParagraphStyle("v_t", fontName=T.FONT_TITLE, fontSize=12, leading=15,
                        textColor=T.PURPURA_ANALISIS, spaceAfter=2)))
     interior.append(Paragraph(
@@ -200,18 +292,29 @@ def _tabla_clase(hechos: list, con_enlace: bool) -> Table:
     for h in hechos:
         titulo = escape_txt((h.get("titulo") or "—")[:150])
         url = (h.get("url") or "").strip()
-        if con_enlace and url:
-            celda = Paragraph(f'<link href="{escape_txt(url)}">{titulo}</link>', st_l)
-        else:
-            celda = Paragraph(titulo, st_t)
         # En la clase de expediente el nombre del archivo ya es el título: repetirlo
         # en «Fuente» no informa. Se declara su naturaleza probatoria.
         if h.get("procedencia") == "documento_analista":
             fuente = "Documento del analista"
         else:
             fuente = h.get("fuente") or h.get("nombre_archivo") or "—"
-        data.append([Paragraph(escape_txt(h.get("id_cita") or "—"), st_n), celda,
-                     Paragraph(escape_txt(str(fuente)[:28]), st_f)])
+        id_txt = escape_txt(h.get("id_cita") or "—")
+        f_txt = escape_txt(str(fuente)[:28])
+        if con_enlace and url:
+            # TODA la fila es clicable: la anotación de enlace se embebe en las
+            # tres celdas, de modo que el cursor muestra la URL y el clic abre la
+            # fuente desde cualquier punto de la fila. Sin URL no se enlaza nada
+            # (no se inventa destino).
+            href = escape_txt(url)
+            celdas = [
+                Paragraph(f'<link href="{href}">{id_txt}</link>', st_n),
+                Paragraph(f'<link href="{href}">{titulo}</link>', st_l),
+                Paragraph(f'<link href="{href}">{f_txt}</link>', st_f),
+            ]
+        else:
+            celdas = [Paragraph(id_txt, st_n), Paragraph(titulo, st_t),
+                      Paragraph(f_txt, st_f)]
+        data.append(celdas)
     t = Table(data, colWidths=[0.45 * inch, 4.25 * inch, 1.4 * inch], repeatRows=1)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), T.GRIS_CLARO),
@@ -268,7 +371,9 @@ def _contenido_nota(seccion_vii: dict, st: dict) -> list:
                       + "; ".join(str(e.get("titulo")) for e in s["excluidas"][:6]) + ".")
     if s.get("convencion"):
         partes.append(s["convencion"])
-    return [T.recuadro_ejecutivo("NOTA DE MATERIAL",
+    # El encabezado del recuadro no repite el título de la sección (VII. NOTAS):
+    # nombra lo que el recuadro realmente contiene.
+    return [T.recuadro_ejecutivo("COMPOSICIÓN DEL EXPEDIENTE",
                                  "<br/><br/>".join(escape_txt(p) for p in partes), st)]
 
 
@@ -303,6 +408,10 @@ def generar_reporte_caso_pdf(db_path: str, reporte_id: int) -> dict:
         vocab = []
     pregunta = an.get("pregunta") or meta.get("pregunta") or "—"
     ventana = an.get("ventana_dias") or meta.get("ventana_dias") or "—"
+    escenarios = an.get("escenarios") or meta.get("escenarios_candidatos") or []
+    # Título editorial del analista. Si no lo escribió, se degrada con una
+    # etiqueta honesta en vez de dejar la portada muda.
+    titulo_reporte = (meta.get("titulo_reporte") or "").strip() or "(sin título asignado)"
     ahora = now_pe_iso()
 
     T.registrar_fuentes_thalos()
@@ -311,12 +420,14 @@ def generar_reporte_caso_pdf(db_path: str, reporte_id: int) -> dict:
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=T.MARGEN_LAT, rightMargin=T.MARGEN_LAT,
                             topMargin=T.MARGEN_SUP, bottomMargin=T.MARGEN_INF,
-                            title="Reporte Político por Caso · THALOS")
+                            title=f"{TITULO_FIJO} · THALOS")
     doc._fecha_footer = ahora[:10]
-    doc._header_meta = "REPORTE POLÍTICO POR CASO · THALOS"
+    doc._header_meta = "REPORTE DE RIESGO POLÍTICO · THALOS"
     doc._portada = {
-        "titulo": "Reporte Político por Caso",
-        "subtitulo": pregunta,
+        # Título fijo del producto; debajo, el título editorial del analista.
+        # La pregunta-hipótesis NO va en portada: abre el cuerpo.
+        "titulo": TITULO_FIJO,
+        "subtitulo": titulo_reporte,
         "tema_rango": f"Ventana: {ventana} días  ·  Corte: {ahora[:16].replace('T', ' ')} (Lima)",
         "metadata": [
             ("Tipo", "Análisis por caso · THALOS"),
@@ -328,9 +439,12 @@ def generar_reporte_caso_pdf(db_path: str, reporte_id: int) -> dict:
 
     S = [PageBreak()]
 
-    # La pregunta, en cabecera del cuerpo: es el eje del reporte.
+    # El cuerpo abre con el título del reporte y, debajo, la pregunta en su
+    # recuadro (sin encabezado: la pregunta se explica sola).
+    S.append(Paragraph(escape_txt(titulo_reporte), st["h1"]))
+    S.append(Spacer(1, 8))
     S.append(T.recuadro_ejecutivo(
-        "LA PREGUNTA DEL CASO",
+        "",
         escape_txt(pregunta) +
         f"<br/><br/>Ventana de análisis: {escape_txt(str(ventana))} días.", st))
     S.append(Spacer(1, 14))
@@ -340,9 +454,15 @@ def generar_reporte_caso_pdf(db_path: str, reporte_id: int) -> dict:
     for nombre in _ORDEN_DESCRIPTIVAS:
         if nombre not in secciones:
             continue
-        S += _bloque(_encabezado(nombre, st), _parrafos(secciones[nombre], st))
+        rotulo = _ROTULO_SECCION.get(nombre, nombre)
+        S += _bloque(
+            _encabezado(rotulo, st),
+            _parrafos(secciones[nombre], st,
+                      escenarios=(escenarios if nombre == "II. LA PREGUNTA Y EL MATERIAL" else None),
+                      bloques_bold=(nombre == "III. DESARROLLO EN LA VENTANA")))
         S.append(Spacer(1, 8))
-        # los silencios cuelgan de la sección II (es donde se ordenan escenarios)
+        # los escenarios sin soporte cuelgan de la sección de situación en
+        # desarrollo (es donde se ordena el material contra los escenarios)
         if nombre == "II. LA PREGUNTA Y EL MATERIAL" and an.get("silencios"):
             S.append(_recuadro_silencios(an["silencios"], st))
             S.append(Spacer(1, 10))
@@ -365,7 +485,7 @@ def generar_reporte_caso_pdf(db_path: str, reporte_id: int) -> dict:
     S.append(Spacer(1, 14))
 
     # ── VII: nota de material ──
-    S += _bloque(_encabezado("VII. NOTA DE MATERIAL", st),
+    S += _bloque(_encabezado("VII. NOTAS", st),
                  _contenido_nota(an.get("seccion_vii") or {}, st))
 
     doc.build(S, onFirstPage=T.dibujar_portada, onLaterPages=T.header_footer)
