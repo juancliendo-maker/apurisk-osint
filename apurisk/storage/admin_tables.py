@@ -855,6 +855,10 @@ _MIGRACIONES = [
     # tenga que volver a llamar al modelo. Sello en hora Lima.
     "ALTER TABLE reporte_caso_meta ADD COLUMN analisis_json TEXT",
     "ALTER TABLE reporte_caso_meta ADD COLUMN analisis_generado_en TEXT",
+    # Título editorial del reporte (lo escribe el analista al solicitar el caso y
+    # puede editarlo en la mesa). Va en la portada bajo el título fijo y abre el
+    # cuerpo; NO sustituye a la pregunta-hipótesis, que es otro campo.
+    "ALTER TABLE reporte_caso_meta ADD COLUMN titulo_reporte TEXT",
 ]
 
 
@@ -1052,6 +1056,29 @@ _CASO_PROMPT_MAESTRO_V1 = (
     "afirmación con su [Pn]."
 )
 
+# v2 — Ajustes de rotulación (revisión del Coronel). Solo cambian el TEXTO que
+# produce el modelo: la fórmula de escenario sin soporte pasa a "escenario en
+# evaluación", y cada bloque de la sección III abre con un subtítulo marcado con
+# «» » para que el render pueda destacarlo (mismo mecanismo que el AP24). El
+# resto de la doctrina v1 se mantiene intacto.
+_CASO_PROMPT_MAESTRO_V2 = _CASO_PROMPT_MAESTRO_V1.replace(
+    "ninguna pieza que lo sostenga, escribe exactamente: 'Sin material que lo\n"
+    "sostenga en el expediente.' No inventes soporte para rellenar.\n",
+    "ninguna pieza que lo sostenga, escribe exactamente: 'escenario en\n"
+    "evaluación'. No inventes soporte para rellenar.\n",
+).replace(
+    "III. DESARROLLO EN LA VENTANA\n"
+    "3 a 6 bloques con la secuencia de lo ocurrido en la ventana del caso: qué\n"
+    "pasó, qué actores, en qué contexto según el material. Cada afirmación con\n"
+    "su [Pn].\n",
+    "III. DESARROLLO EN LA VENTANA\n"
+    "3 a 6 bloques con la secuencia de lo ocurrido en la ventana del caso. Cada\n"
+    "bloque ABRE con su subtítulo temático en línea propia, prefijado con «» »\n"
+    "(ejemplo: » Bloqueo de la vía y respuesta policial). Debajo: qué pasó, qué\n"
+    "actores, en qué contexto según el material. Cada afirmación con su [Pn].\n"
+    "Usa el prefijo » SOLO en la línea del subtítulo.\n",
+)
+
 # Parámetros del Análisis Político 24h (Fase 3-3c). Editables por config.
 _AP24_PARAMS = [
     ("AP24_MODELO", "claude-sonnet-4-6", "string",
@@ -1105,7 +1132,7 @@ _AP24_PARAMS = [
      "Improbable|Muy improbable|Casi con certeza que no", "string",
      "Reporte por Caso: vocabulario estimativo de Kent para la proyección del "
      "analista (opciones separadas por '|', editable)"),
-    ("CASO_PROMPT_MAESTRO", _CASO_PROMPT_MAESTRO_V1, "string",
+    ("CASO_PROMPT_MAESTRO", _CASO_PROMPT_MAESTRO_V2, "string",
      "Reporte por Caso: system prompt maestro del análisis descriptivo "
      "(doctrina THALOS, grounding por ID de pieza; editable y calibrable)"),
     ("AP24_PROMPT_MAESTRO", _AP24_PROMPT_MAESTRO_V4, "string",
@@ -1180,6 +1207,14 @@ def inicializar_admin_tables(db_path: str) -> None:
                     "UPDATE config_parametros SET valor=? "
                     "WHERE clave='AP24_PROMPT_MAESTRO' AND valor=?",
                     (_AP24_PROMPT_MAESTRO_V4, _AP24_PROMPT_MAESTRO_V3),
+                )
+                # CASO v2: rotulación revisada (escenario en evaluación, bloques
+                # marcados). Guardado en el texto v1 exacto → respeta ediciones
+                # del analista; una vez en v2 deja de coincidir (no-op).
+                conn.execute(
+                    "UPDATE config_parametros SET valor=? "
+                    "WHERE clave='CASO_PROMPT_MAESTRO' AND valor=?",
+                    (_CASO_PROMPT_MAESTRO_V2, _CASO_PROMPT_MAESTRO_V1),
                 )
                 # TOP_N: subir el default vivo 120 → 150 (para ≥10 hechos). Solo
                 # si sigue en el default original (respeta ajuste del analista).

@@ -6232,6 +6232,9 @@ async def admin_reportes(request: Request):
     </div>
 
     <div id="rep-caso" style="display:none;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Título del reporte</div>
+      <input type="text" name="titulo_reporte" maxlength="160" placeholder="Ej. Conflictividad en el corredor minero sur"
+             style="width:100%;max-width:560px;background:var(--bg-3);color:var(--text);border:1px solid #334155;border-radius:4px;padding:7px 10px;font-size:13px;margin-bottom:12px">
       <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Pregunta del caso</div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px">La hipótesis va SIEMPRE en modo pregunta. Al abrir el caso se deriva (ciego al material) términos y escenarios, y queda esperando tu revisión en la mesa.</div>
       <textarea name="pregunta" maxlength="500" rows="2" placeholder="Ej. ¿Se consolidará el paro en el corredor sur en las próximas semanas?"
@@ -6332,6 +6335,7 @@ async def admin_reportes_post(request: Request):
     if tipo == "reporte_b_caso":
         from ..storage.config_loader import crear_solicitud_caso, guardar_caso_meta
         pregunta = (form.get("pregunta") or "").strip()
+        titulo_reporte = (form.get("titulo_reporte") or "").strip()
         try:
             ventana = int(form.get("ventana_dias") or 7)
         except (TypeError, ValueError):
@@ -6342,7 +6346,8 @@ async def admin_reportes_post(request: Request):
                 return RedirectResponse(
                     f"/admin/reportes?err={escape(r.get('error', 'Solicitud inválida'))}",
                     status_code=303)
-            guardar_caso_meta(_get_db_path(), r["id"], pregunta=pregunta, ventana_dias=ventana)
+            guardar_caso_meta(_get_db_path(), r["id"], pregunta=pregunta,
+                              ventana_dias=ventana, titulo_reporte=titulo_reporte)
             _lanzar_bg_caso(_construir_expediente_caso, _get_db_path(), r["id"])
             return RedirectResponse(f"/admin/reportes/{r['id']}/mesa?msg="
                                     "Caso+abierto+·+armando+el+expediente…", status_code=303)
@@ -6547,6 +6552,12 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
 <div class="card">
   <div class="card-title">Pregunta del caso · ventana {escape(str(ventana))} días · {_estado_pill(r["estado"])}</div>
   <form method="post" action="/admin/reportes/{reporte_id}/mesa/pregunta">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Título del reporte (portada)</div>
+    <input type="text" name="titulo_reporte" maxlength="160" class="rep-in"
+           style="width:100%;box-sizing:border-box;margin-bottom:8px"
+           placeholder="Ej. Conflictividad en el corredor minero sur"
+           value="{escape(meta.get('titulo_reporte') or '')}" {ro}>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Pregunta-hipótesis</div>
     <textarea name="pregunta" rows="2" maxlength="500" class="rep-in" style="width:100%;box-sizing:border-box" {ro}>{escape(pregunta)}</textarea>
     <div style="margin-top:8px">
       <label style="margin-right:14px;font-size:13px"><input type="radio" name="ventana_dias" value="7" {'checked' if int(ventana)==7 else ''} {ro}> 7 días</label>
@@ -6667,6 +6678,7 @@ async def admin_caso_pregunta(request: Request, reporte_id: int):
     from ..storage.config_loader import guardar_caso_meta, obtener_caso_meta
     form = await request.form()
     pregunta = (form.get("pregunta") or "").strip()
+    titulo_reporte = (form.get("titulo_reporte") or "").strip()
     try:
         ventana = int(form.get("ventana_dias") or 7)
     except (TypeError, ValueError):
@@ -6678,7 +6690,8 @@ async def admin_caso_pregunta(request: Request, reporte_id: int):
         guardar_caso_meta(db, reporte_id, pregunta=pregunta, ventana_dias=ventana,
                           escenarios_candidatos=meta.get("escenarios_candidatos"),
                           indicaciones_detalle=meta.get("indicaciones_detalle"),
-                          proyeccion_analista=meta.get("proyeccion_analista"))
+                          proyeccion_analista=meta.get("proyeccion_analista"),
+                          titulo_reporte=titulo_reporte)
     except ValueError as e:
         return RedirectResponse(_mesa_url(reporte_id, err=escape(str(e))), status_code=303)
     _lanzar_bg_caso(_construir_expediente_caso, db, reporte_id)
@@ -6710,7 +6723,8 @@ async def admin_caso_buscar(request: Request, reporte_id: int):
                       terminos_busqueda=terminos,
                       escenarios_candidatos=meta.get("escenarios_candidatos"),
                       indicaciones_detalle=meta.get("indicaciones_detalle"),
-                      proyeccion_analista=meta.get("proyeccion_analista"))
+                      proyeccion_analista=meta.get("proyeccion_analista"),
+                      titulo_reporte=meta.get("titulo_reporte"))
     arts = buscar_articulos_caso(db, terminos, meta.get("ventana_dias") or 7)
     res = sincronizar_piezas_bd_osint(db, reporte_id, arts)
     msg = f"Búsqueda+actualizada+·+{res.get('n',0)}+piezas+BD+OSINT"
@@ -6739,7 +6753,8 @@ async def admin_caso_escenarios(request: Request, reporte_id: int):
                       ventana_dias=meta.get("ventana_dias") or 7,
                       terminos_busqueda=meta.get("terminos_busqueda"),
                       escenarios_candidatos=escenarios, indicaciones_detalle=indicaciones,
-                      proyeccion_analista=meta.get("proyeccion_analista"))
+                      proyeccion_analista=meta.get("proyeccion_analista"),
+                      titulo_reporte=meta.get("titulo_reporte"))
     return RedirectResponse(_mesa_url(reporte_id, msg="Escenarios+e+indicaciones+guardados"),
                             status_code=303)
 
@@ -7058,7 +7073,8 @@ async def admin_caso_proyeccion_post(request: Request, reporte_id: int):
                       terminos_busqueda=meta.get("terminos_busqueda"),
                       escenarios_candidatos=meta.get("escenarios_candidatos"),
                       indicaciones_detalle=meta.get("indicaciones_detalle"),
-                      proyeccion_analista=proy)
+                      proyeccion_analista=proy,
+                      titulo_reporte=meta.get("titulo_reporte"))
     return RedirectResponse(f"/admin/reportes/{reporte_id}/proyeccion?msg=Proyección+guardada",
                             status_code=303)
 

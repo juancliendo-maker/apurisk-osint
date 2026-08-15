@@ -215,6 +215,41 @@ def header_footer(canvas, doc):
 # PORTADA — full-bleed navy sólido (un solo color) + logo + metadata
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _ajustar_lineas(texto: str, fuente: str, cuerpo: float, ancho: float,
+                    max_lineas: int = 3):
+    """Envuelve `texto` por palabras al `ancho` dado. Devuelve la lista de líneas,
+    o None si no cabe en `max_lineas` (el llamador baja el cuerpo y reintenta)."""
+    palabras = (texto or "").split()
+    if not palabras:
+        return [""]
+    lineas, actual = [], ""
+    for w in palabras:
+        tentativa = (actual + " " + w).strip()
+        if pdfmetrics.stringWidth(tentativa, fuente, cuerpo) <= ancho:
+            actual = tentativa
+        else:
+            if actual:
+                lineas.append(actual)
+            actual = w
+            if pdfmetrics.stringWidth(actual, fuente, cuerpo) > ancho:
+                return None      # una sola palabra no cabe: hay que reducir cuerpo
+        if len(lineas) > max_lineas:
+            return None
+    if actual:
+        lineas.append(actual)
+    return lineas if len(lineas) <= max_lineas else None
+
+
+def _recortar_a_ancho(texto: str, fuente: str, cuerpo: float, ancho: float) -> str:
+    """Recorta con elipsis hasta que quepa. Último recurso: nunca desborda."""
+    s = texto or ""
+    if pdfmetrics.stringWidth(s, fuente, cuerpo) <= ancho:
+        return s
+    while s and pdfmetrics.stringWidth(s + "…", fuente, cuerpo) > ancho:
+        s = s[:-1]
+    return (s + "…") if s else ""
+
+
 def dibujar_portada(canvas, doc):
     """Portada full-bleed (callback onFirstPage): navy sólido + logo + meta.
 
@@ -242,22 +277,40 @@ def dibujar_portada(canvas, doc):
     c.setFillColor(BLANCO)
     c.setFont(FONT_TITLE, 28)
     c.drawCentredString(cx, y, p["titulo"])
-    # subtítulo
-    c.setFont(FONT_BODY, 14)
+    # subtítulo — se ajusta al ancho seguro de la portada: envuelve en líneas y,
+    # si aún no cabe, reduce el cuerpo. Un subtítulo largo (p. ej. el título
+    # editorial de un reporte por caso) nunca desborda el marco.
     c.setFillColorRGB(1, 1, 1, alpha=0.9)
-    c.drawCentredString(cx, y - 0.5 * inch, p["subtitulo"])
+    ancho_seguro = PAGE_W - 2 * MARGEN_LAT - 0.6 * inch
+    sub = str(p.get("subtitulo") or "")
+    cuerpo_sub = 14
+    lineas_sub = _ajustar_lineas(sub, FONT_BODY, cuerpo_sub, ancho_seguro, max_lineas=3)
+    while lineas_sub is None and cuerpo_sub > 9:
+        cuerpo_sub -= 1
+        lineas_sub = _ajustar_lineas(sub, FONT_BODY, cuerpo_sub, ancho_seguro, max_lineas=3)
+    if lineas_sub is None:   # texto extremo: se corta con elipsis, no desborda
+        lineas_sub = [_recortar_a_ancho(sub, FONT_BODY, cuerpo_sub, ancho_seguro)]
+    c.setFont(FONT_BODY, cuerpo_sub)
+    ys = y - 0.5 * inch
+    for ln in lineas_sub:
+        c.drawCentredString(cx, ys, ln)
+        ys -= cuerpo_sub + 3
+    # Si el subtítulo ocupó más de una línea, todo lo que sigue baja lo mismo:
+    # así un título editorial largo nunca se solapa con el rango ni la metadata.
+    desplaz = max(0, len(lineas_sub) - 1) * (cuerpo_sub + 3)
     # tema / rango (oro)
     c.setFillColor(ORO)
     c.setFont(FONT_BODY, 14)
-    c.drawCentredString(cx, y - 0.92 * inch, p["tema_rango"])
+    c.drawCentredString(cx, y - 0.92 * inch - desplaz, p["tema_rango"])
     # línea divisora horizontal oro
     c.setStrokeColor(ORO)
     c.setLineWidth(1.2)
-    c.line(cx - 2.2 * inch, y - 1.25 * inch, cx + 2.2 * inch, y - 1.25 * inch)
+    c.line(cx - 2.2 * inch, y - 1.25 * inch - desplaz,
+           cx + 2.2 * inch, y - 1.25 * inch - desplaz)
     # metadata (blanco 80%)
     c.setFont(FONT_BODY, 9)
     c.setFillColorRGB(1, 1, 1, alpha=0.8)
-    my = y - 1.7 * inch
+    my = y - 1.7 * inch - desplaz
     for label, valor in p["metadata"]:
         c.drawCentredString(cx, my, f"{label}: {valor}")
         my -= 0.24 * inch

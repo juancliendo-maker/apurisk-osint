@@ -49,7 +49,10 @@ _SIG_CASO = [
     ("IV. CONEXIONES Y CONTEXTO",     r"\bCONEXION(?:ES)?\b"),
 ]
 
-SIN_SOPORTE = "Sin material que lo sostenga en el expediente."
+SIN_SOPORTE = "escenario en evaluación"
+# Fórmula anterior: los análisis ya persistidos la llevan. La detección de
+# silencios debe reconocer ambas para no perder hallazgos de reportes viejos.
+SIN_SOPORTE_LEGACY = "Sin material que lo sostenga en el expediente."
 
 
 # ── Limpieza HTML → texto (deuda de la sub-fase 3) ────────────────────────────
@@ -393,7 +396,9 @@ def detectar_silencios(cuerpo_seccion_ii: str, escenarios: list) -> list:
         fin = posiciones[k + 1][0] if k + 1 < len(posiciones) else len(cuerpo)
         bloque = cuerpo[ini:fin]
         sin_ids = not _RE_MARCA.search(bloque)
-        declarado = _quitar_tildes(SIN_SOPORTE).lower()[:28] in _quitar_tildes(bloque).lower()
+        bloque_norm = _quitar_tildes(bloque).lower()
+        declarado = any(_quitar_tildes(f).lower()[:24] in bloque_norm
+                        for f in (SIN_SOPORTE, SIN_SOPORTE_LEGACY))
         if sin_ids or declarado:
             silencios.append(enun)
     return silencios
