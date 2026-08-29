@@ -419,9 +419,26 @@ def generar_analisis_caso(db_path: str, reporte_id: int) -> dict:
     from ..utils.llm_client import redactar_con_sistema
     from ..utils.timezone_pe import now_pe_iso
 
+    def _fallo(nota: str, extra: dict = None) -> dict:
+        """Un análisis fallido se PERSISTE con su motivo.
+
+        Antes el fallo solo iba al log del servidor: la mesa y la pantalla de
+        proyección seguían diciendo "se está generando" indefinidamente y el
+        analista no podía saber por qué el reporte no salía. Guardarlo hace que
+        la UI muestre la razón real y ofrezca reintentar.
+        """
+        obj = {"estado": "error", "nota": nota, "generado_en": now_pe_iso()}
+        if extra:
+            obj.update(extra)
+        try:
+            guardar_analisis_caso(db_path, reporte_id, obj)
+        except Exception as e:      # persistir el fallo nunca debe tumbar el caso
+            log.warning("CASO %s: no se pudo persistir el fallo: %s", reporte_id, e)
+        return obj
+
     meta = obtener_caso_meta(db_path, reporte_id)
     if not meta:
-        return {"estado": "error", "nota": "El caso no tiene metadatos"}
+        return _fallo("El caso no tiene metadatos")
     par = cargar_parametros_caso(db_path)
     piezas = listar_piezas_caso(db_path, reporte_id)
     citables = piezas_citables(piezas)
@@ -429,15 +446,14 @@ def generar_analisis_caso(db_path: str, reporte_id: int) -> dict:
     escenarios = meta.get("escenarios_candidatos") or []
 
     if not citables:
-        return {"estado": "error",
-                "nota": "El expediente no tiene piezas citables (incluidas y con "
-                        "extracción lista). Añade material antes de analizar."}
+        return _fallo("El expediente no tiene piezas citables: no hay piezas "
+                      "incluidas y con extracción lista. Añade material (búsqueda "
+                      "en BD, URLs o documentos) y vuelve a analizar.")
 
     mat = material_caso_para_llm(meta, citables, par)
     prompt = (par.get("prompt_maestro") or "").strip()
     if not prompt:
-        return {"estado": "error",
-                "nota": "CASO_PROMPT_MAESTRO no configurado"}
+        return _fallo("CASO_PROMPT_MAESTRO no configurado en la base de datos.")
 
     salida, err = redactar_con_sistema(
         prompt, mat["texto"], max_tokens=par.get("max_tokens", 4000),
@@ -445,11 +461,10 @@ def generar_analisis_caso(db_path: str, reporte_id: int) -> dict:
         timeout_s=par.get("timeout_s", 180))
     if not salida:
         # Honestidad: sin respuesta del modelo NO se generan secciones inventadas.
-        return {"estado": "error",
-                "nota": f"El modelo no respondió ({err}). No se generaron "
-                        f"secciones: el reporte no inventa contenido.",
-                "material": {"piezas_citables": len(citables), **{
-                    k: mat[k] for k in ("enviadas", "omitidas")}}}
+        return _fallo(f"El modelo no respondió ({err}). No se generaron secciones: "
+                      f"el reporte no inventa contenido.",
+                      {"material": {"piezas_citables": len(citables),
+                                    **{k: mat[k] for k in ("enviadas", "omitidas")}}})
 
     mapa = {c["id_cita"]: c["pieza"] for c in citables}
     secciones_brutas = parsear_secciones_caso(_sanitizar(salida))
