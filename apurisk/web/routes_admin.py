@@ -6952,11 +6952,30 @@ async def admin_caso_proyeccion(request: Request, reporte_id: int):
                        'Un silencio es un hallazgo: debería informar tu proyección.</div></div>')
         descriptivas = secs
     elif analisis:
-        descriptivas = (f'<div class="rep-vacio">El análisis descriptivo no se pudo generar: '
-                        f'{escape(str(analisis.get("nota") or ""))}</div>')
+        # El motor persiste el motivo del fallo: se muestra tal cual, con la
+        # salida a mano (reintentar) en vez de dejar el caso atascado.
+        descriptivas = (
+            f'<div class="alert-box alert-alto" style="margin-bottom:10px">'
+            f'<b>El análisis descriptivo no se generó.</b><br>'
+            f'{escape(str(analisis.get("nota") or ""))}</div>'
+            + (f'<div style="font-size:11.5px;color:var(--muted)">Corrige la causa '
+               f'(añade material en la mesa, o revisa la conexión con la API en '
+               f'<a href="/admin/ap24/test-api" style="color:var(--accent)">test-api</a>) '
+               f'y pulsa «Reintentar análisis».</div>' if en_proyeccion else ''))
     else:
         descriptivas = ('<div class="rep-vacio">El análisis descriptivo se está generando. '
-                        'Recarga en unos segundos.</div>')
+                        'Si tras recargar sigue este mensaje, pulsa «Reintentar análisis».</div>')
+
+    # Salida cuando el análisis no está listo: reintentar sin perder el caso.
+    hay_analisis_ok = bool(analisis and analisis.get("estado") == "ok")
+    reintento_html = ""
+    if en_proyeccion and not hay_analisis_ok:
+        reintento_html = (
+            f'<form method="post" action="/admin/reportes/{reporte_id}/proyeccion/reanalizar" '
+            f'style="margin-top:10px">'
+            f'<button type="submit" style="background:var(--accent);color:#00131f;border:none;'
+            f'border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">'
+            f'↻ Reintentar análisis</button></form>')
 
     # ── Insumo del motor (aproximación por tema) ──
     insumo = _insumo_motor_caso(db, reporte_id)
@@ -7011,6 +7030,7 @@ async def admin_caso_proyeccion(request: Request, reporte_id: int):
 <div class="card">
   <div class="card-title">Lo que describe el material (secciones I-IV · solo lectura)</div>
   {descriptivas}
+  {reintento_html}
   <div style="margin-top:10px"><a href="/admin/reportes/{reporte_id}/mesa/analisis" style="color:var(--accent);font-size:12px">Ver dump completo →</a></div>
 </div>
 
@@ -7077,6 +7097,32 @@ async def admin_caso_proyeccion_post(request: Request, reporte_id: int):
                       titulo_reporte=meta.get("titulo_reporte"))
     return RedirectResponse(f"/admin/reportes/{reporte_id}/proyeccion?msg=Proyección+guardada",
                             status_code=303)
+
+
+@router.post("/reportes/{reporte_id:int}/proyeccion/reanalizar")
+async def admin_caso_reanalizar(request: Request, reporte_id: int):
+    """Reintenta el análisis descriptivo de un caso ya aprobado.
+
+    Sin esto, un caso cuyo análisis falló (expediente vacío, API caída) quedaba
+    atascado en 'esperando_proyeccion' sin forma de recuperarlo."""
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_proyeccion(db, reporte_id)
+    if redir:
+        return redir
+
+    def _run():
+        from ..reports.caso_motor import generar_analisis_caso
+        res = generar_analisis_caso(db, reporte_id)
+        if res.get("estado") != "ok":
+            print(f"[caso] reintento de análisis rid={reporte_id} → {res.get('nota')}")
+
+    _lanzar_bg_caso(lambda _db, _rid: _run(), db, reporte_id)
+    return RedirectResponse(
+        f"/admin/reportes/{reporte_id}/proyeccion?msg=Reintentando+el+análisis…+recarga+en+unos+segundos",
+        status_code=303)
 
 
 @router.post("/reportes/{reporte_id:int}/proyeccion/finalizar")
@@ -7358,7 +7404,10 @@ def _construir_expediente_caso(db: str, reporte_id: int) -> None:
         db, reporte_id, pregunta=meta["pregunta"], ventana_dias=meta["ventana_dias"],
         terminos_busqueda=terminos, escenarios_candidatos=escenarios,
         indicaciones_detalle=meta.get("indicaciones_detalle"),
-        proyeccion_analista=meta.get("proyeccion_analista"))
+        proyeccion_analista=meta.get("proyeccion_analista"),
+        # El guardado es un upsert: sin este campo se borraría el título que el
+        # analista acaba de escribir en la solicitud.
+        titulo_reporte=meta.get("titulo_reporte"))
     arts = buscar_articulos_caso(db, terminos, meta["ventana_dias"])
     sincronizar_piezas_bd_osint(db, reporte_id, arts)
 
