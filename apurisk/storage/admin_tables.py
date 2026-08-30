@@ -859,6 +859,7 @@ _MIGRACIONES = [
     # puede editarlo en la mesa). Va en la portada bajo el título fijo y abre el
     # cuerpo; NO sustituye a la pregunta-hipótesis, que es otro campo.
     "ALTER TABLE reporte_caso_meta ADD COLUMN titulo_reporte TEXT",
+    "ALTER TABLE reporte_caso_meta ADD COLUMN cosecha_json TEXT",
 ]
 
 

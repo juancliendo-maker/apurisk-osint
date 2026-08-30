@@ -296,6 +296,10 @@ def _tabla_clase(hechos: list, con_enlace: bool) -> Table:
         # en «Fuente» no informa. Se declara su naturaleza probatoria.
         if h.get("procedencia") == "documento_analista":
             fuente = "Documento del analista"
+        elif h.get("procedencia") == "nota_analista":
+            fuente = "Nota del analista"
+        elif h.get("procedencia") == "alerta_plataforma":
+            fuente = h.get("fuente") or "Alerta de la plataforma"
         else:
             fuente = h.get("fuente") or h.get("nombre_archivo") or "—"
         id_txt = escape_txt(h.get("id_cita") or "—")

@@ -170,7 +170,7 @@ def material_caso_para_llm(meta: dict, citables: list, par: dict) -> dict:
     for c in citables:
         p = c["pieza"]
         texto = p.get("texto_extraido") or ""
-        if p.get("procedencia") == "url_externa":
+        if p.get("procedencia") in ("url_externa", "ingesta_manual", "alerta_plataforma"):
             texto = html_a_texto(texto)
         texto = texto.strip()[:tope_pieza]
         meta_linea = " | ".join(x for x in (
@@ -255,6 +255,21 @@ def atribucion_pieza(p: dict, ventana_dias: int, agregado_bd: bool = False) -> s
         nombre = (p.get("nombre_archivo") or _titulo_pieza(p)).strip()
         return (f"el documento {nombre}, incorporado al expediente por el "
                 f"analista, consigna que")
+    if proc == "alerta_plataforma":
+        fecha = _fecha_legible(p)
+        cuando = f", el {fecha}," if fecha else ""
+        return f"el sistema de alertas de la plataforma registró{cuando} que"
+    if proc == "ingesta_manual":
+        medio = _medio_pieza(p)
+        fecha = _fecha_legible(p)
+        if fecha:
+            return (f"{medio}, en material del {fecha} incorporado al archivo, "
+                    f"consigna que")
+        return f"{medio}, en material incorporado al archivo, consigna que"
+    if proc == "nota_analista":
+        titulo = _titulo_pieza(p)
+        return (f"la nota «{titulo}», incorporada al expediente por el analista, "
+                f"consigna que")
     return "el material del expediente consigna que"
 
 
@@ -269,6 +284,15 @@ def _atribucion_sufijo(p: dict, ventana_dias: int) -> str:
         return f"{medio}, {fecha}" if fecha else medio
     if proc == "documento_analista":
         return f"documento {(p.get('nombre_archivo') or _titulo_pieza(p)).strip()}"
+    if proc == "alerta_plataforma":
+        fecha = _fecha_legible(p)
+        return f"alerta de la plataforma, {fecha}" if fecha else "alerta de la plataforma"
+    if proc == "ingesta_manual":
+        medio = _medio_pieza(p)
+        fecha = _fecha_legible(p)
+        return f"{medio}, {fecha}" if fecha else medio
+    if proc == "nota_analista":
+        return f"nota «{_titulo_pieza(p)}»"
     return "expediente"
 
 
@@ -558,15 +582,20 @@ def _seccion_v(proyeccion: dict, horizontes: list) -> dict:
 def _clases_probatorias(hechos: list) -> dict:
     """Sección VI en DOS CLASES PROBATORIAS.
 
-    · FUENTE ABIERTA VERIFICABLE: piezas con URL pública (el lector puede
-      comprobarlas): bd_osint y url_externa.
-    · MATERIAL DEL EXPEDIENTE: documento_analista, sin URL — no verificable por
-      el lector; se declara como tal, no se mezcla con lo verificable.
-    Una clase vacía no aparece.
+    · FUENTE ABIERTA VERIFICABLE: piezas con URL pública que el lector puede
+      comprobar por su cuenta: bd_osint, url_externa, y las alertas o ingestas
+      manuales que conserven el enlace de origen.
+    · MATERIAL DEL EXPEDIENTE: lo aportado por el analista (documentos y notas)
+      y toda pieza sin URL — no verificable por el lector; se declara como tal y
+      no se mezcla con lo verificable.
+
+    El criterio es la comprobabilidad, no la procedencia: una alerta sin enlace
+    cae en expediente, igual que un documento. Una clase vacía no aparece.
     """
+    SIEMPRE_EXPEDIENTE = ("documento_analista", "nota_analista")
     verificable, expediente = [], []
     for h in hechos or []:
-        if h.get("procedencia") == "documento_analista" or not (h.get("url") or "").strip():
+        if h.get("procedencia") in SIEMPRE_EXPEDIENTE or not (h.get("url") or "").strip():
             expediente.append(h)
         else:
             verificable.append(h)
