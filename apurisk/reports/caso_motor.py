@@ -270,6 +270,14 @@ def atribucion_pieza(p: dict, ventana_dias: int, agregado_bd: bool = False) -> s
         titulo = _titulo_pieza(p)
         return (f"la nota «{titulo}», incorporada al expediente por el analista, "
                 f"consigna que")
+    if proc == "punto_quiebre":
+        fecha = _fecha_legible(p)
+        cuando = f" del {fecha}" if fecha else ""
+        return (f"el punto de quiebre «{_titulo_pieza(p)}»{cuando}, registrado por "
+                f"el analista, consigna que")
+    if proc == "piso_estructural":
+        return (f"el piso estructural sobre «{_titulo_pieza(p)}», registrado por el "
+                f"analista, consigna que")
     return "el material del expediente consigna que"
 
 
@@ -293,6 +301,12 @@ def _atribucion_sufijo(p: dict, ventana_dias: int) -> str:
         return f"{medio}, {fecha}" if fecha else medio
     if proc == "nota_analista":
         return f"nota «{_titulo_pieza(p)}»"
+    if proc == "punto_quiebre":
+        fecha = _fecha_legible(p)
+        base = f"punto de quiebre «{_titulo_pieza(p)}»"
+        return f"{base}, {fecha}" if fecha else base
+    if proc == "piso_estructural":
+        return f"piso estructural sobre «{_titulo_pieza(p)}»"
     return "expediente"
 
 
@@ -592,7 +606,10 @@ def _clases_probatorias(hechos: list) -> dict:
     El criterio es la comprobabilidad, no la procedencia: una alerta sin enlace
     cae en expediente, igual que un documento. Una clase vacía no aparece.
     """
-    SIEMPRE_EXPEDIENTE = ("documento_analista", "nota_analista")
+    # Lo que el analista registró en el panel no es comprobable por el lector
+    # externo: va al expediente aunque algún día llevara enlace.
+    SIEMPRE_EXPEDIENTE = ("documento_analista", "nota_analista",
+                          "punto_quiebre", "piso_estructural")
     verificable, expediente = [], []
     for h in hechos or []:
         if h.get("procedencia") in SIEMPRE_EXPEDIENTE or not (h.get("url") or "").strip():

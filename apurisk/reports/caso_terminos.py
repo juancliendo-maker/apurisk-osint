@@ -81,6 +81,67 @@ def _ngramas(texto: str, stop: set, min_len: int, n: int = 2) -> list:
     return [" ".join(crudo[i:i + n]) for i in range(len(crudo) - n + 1)]
 
 
+def catalogos_de_dominio() -> dict:
+    """Catálogos de dominio que la plataforma YA tiene escritos en el analizador
+    de casos: instituciones y actores del Perú, las 25 regiones con sus variantes
+    de tilde, y los sectores económicos con su vocabulario.
+
+    Se reutilizan en vez de duplicarlos: el mismo vocabulario que usa el resto de
+    la plataforma para clasificar es el que ahora dirige la búsqueda del caso.
+    """
+    try:
+        from ..analyzers.caso_analyzer import (ACTORES_PERU, REGIONES_PERU,
+                                               SECTORES_ECONOMICOS)
+        return {"actores": ACTORES_PERU, "regiones": list(REGIONES_PERU),
+                "sectores": SECTORES_ECONOMICOS}
+    except Exception as e:
+        print(f"[caso_terminos] catálogos de dominio no disponibles: {e}")
+        return {"actores": {}, "regiones": [], "sectores": {}}
+
+
+def regiones_del_caso(texto_caso: str) -> list:
+    """Regiones del Perú mencionadas en el caso, en su grafía canónica.
+
+    Es la dimensión geográfica del expediente —el «mapa» del caso—: `articulos` y
+    `alertas` traen columna `region` indexada, así que saber de qué regiones habla
+    el caso permite priorizar el material de esas zonas y reportar su reparto.
+    """
+    txt = normalizar(texto_caso)
+    if not txt:
+        return []
+    vistas, out = set(), []
+    for r in catalogos_de_dominio()["regiones"]:
+        n = normalizar(r)
+        if n and n in txt and n not in vistas:
+            vistas.add(n)
+            out.append(r)
+    return out
+
+
+def terminos_de_dominio(texto_caso: str) -> dict:
+    """Términos que aportan los catálogos de dominio al cruzarlos con el caso.
+
+    Un actor institucional entra con TODAS sus formas cuando el caso menciona
+    cualquiera de ellas: si el caso dice «PNP», entran también «policía nacional»
+    y «Mininter», que es material que el LIKE literal jamás habría encontrado.
+    """
+    txt = normalizar(texto_caso)
+    out = {"instituciones": [], "sectores": [], "regiones": []}
+    if not txt:
+        return out
+    cat = catalogos_de_dominio()
+    for nombre, formas in (cat["actores"] or {}).items():
+        if any(normalizar(f) and normalizar(f) in txt for f in formas):
+            out["instituciones"] += [f for f in formas if len(f) >= 4]
+    for sector, formas in (cat["sectores"] or {}).items():
+        if any(normalizar(f) and normalizar(f) in txt for f in formas):
+            out["sectores"] += [f for f in formas if len(f) >= 4]
+    out["regiones"] = regiones_del_caso(texto_caso)
+    for k in out:
+        out[k] = _sin_duplicados(out[k])
+    return out
+
+
 # ── Catálogos de la plataforma ───────────────────────────────────────────────
 def terminos_de_catalogos(db_path: str, texto_caso: str, pais: str = "PE",
                           par: dict = None) -> dict:
@@ -194,7 +255,7 @@ def derivar_terminos(db_path: str, titulo: str = "", pregunta: str = "",
     """
     par = par or {}
     min_len = int(par.get("terminos_min_long", 4))
-    tope = int(par.get("terminos_tope", 24))
+    tope = int(par.get("terminos_tope", 32))
     extra = {normalizar(w) for w in (par.get("terminos_stopwords_extra") or [])}
     stop = STOPWORDS_BASE | {w for w in extra if w}
 
@@ -202,6 +263,7 @@ def derivar_terminos(db_path: str, titulo: str = "", pregunta: str = "",
     texto_caso = " . ".join(x for x in ([titulo, pregunta] + escenarios) if x)
 
     cat = terminos_de_catalogos(db_path, texto_caso, pais=pais, par=par)
+    dom = terminos_de_dominio(texto_caso)
 
     # Bigramas: del título y la pregunta (el eje), luego de cada escenario.
     bigramas = _ngramas(f"{titulo} {pregunta}", stop, min_len)
@@ -211,21 +273,35 @@ def derivar_terminos(db_path: str, titulo: str = "", pregunta: str = "",
     sueltas = _palabras(texto_caso, stop, min_len)
 
     origen, terminos = {}, []
+    # Cuota por catálogo: un catálogo generoso (los sectores traen decenas de
+    # formas) no puede comerse el presupuesto y desplazar a los términos que de
+    # verdad discriminan el caso. Sin esto, añadir un catálogo EMPEORA la
+    # búsqueda en vez de mejorarla.
+    cuota = int(par.get("terminos_cuota_catalogo", 4))
 
-    def _add(lista, fuente):
+    def _add(lista, fuente, limite: int = None):
+        n = 0
         for t in lista:
             k = normalizar(t)
             if not k or k in origen or len(terminos) >= tope:
                 continue
+            if limite is not None and n >= limite:
+                return
             origen[k] = fuente
             terminos.append(t.strip())
+            n += 1
 
+    # Orden = prioridad: lo que más discrimina primero, porque el tope recorta
+    # por el final.
     _add(_sin_duplicados(bigramas), "frase del caso")
-    _add(cat["actores"], "catálogo de actores")
-    _add(cat["alias"], "alias de actor")
-    _add(cat["keywords"], "catálogo de keywords")
-    _add(cat["temas"], "tema de actor")
+    _add(cat["actores"], "catálogo de actores", cuota)
+    _add(cat["alias"], "alias de actor", cuota)
+    _add(dom["regiones"], "región", cuota)
     _add(sueltas, "palabra del caso")
+    _add(cat["keywords"], "catálogo de keywords", cuota)
+    _add(cat["temas"], "tema de actor", cuota)
+    _add(dom["instituciones"], "institución del país", cuota)
+    _add(dom["sectores"], "sector económico", cuota)
 
     return {
         "terminos": terminos,
@@ -234,10 +310,14 @@ def derivar_terminos(db_path: str, titulo: str = "", pregunta: str = "",
             "frases": len([1 for f in origen.values() if f == "frase del caso"]),
             "actores": len(cat["actores"]),
             "alias": len(cat["alias"]),
+            "instituciones": len([1 for f in origen.values() if f == "institución del país"]),
+            "regiones": len([1 for f in origen.values() if f == "región"]),
+            "sectores": len([1 for f in origen.values() if f == "sector económico"]),
             "keywords": len(cat["keywords"]),
             "temas": len(cat["temas"]),
             "palabras": len([1 for f in origen.values() if f == "palabra del caso"]),
         },
+        "regiones": dom["regiones"],
         # 'degradado' lo marca quien llama, si la IA no pudo ampliar la lista.
         "degradado": False,
     }

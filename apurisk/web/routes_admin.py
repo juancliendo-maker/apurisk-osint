@@ -6576,8 +6576,10 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
   <form method="post" action="/admin/reportes/{reporte_id}/mesa/buscar">
     <textarea name="terminos" rows="2" class="rep-in" style="width:100%;box-sizing:border-box" placeholder="un término por línea o separados por coma" {ro}>{escape(chr(10).join(terminos))}</textarea>
     <div style="font-size:11px;color:var(--muted);margin:6px 0 8px">«Sugerir términos» los deriva del caso y de los catálogos (actores, alias, keywords) sin usar la IA. «Volver a buscar» cosecha las fuentes de la plataforma y recarga SOLO lo del corpus: nunca toca tus URLs, documentos ni notas.</div>
+    {'' if en_revision else '<div style="font-size:11.5px;color:var(--warn,#e0a800);margin:8px 0 0">El expediente está congelado porque el caso ya fue aprobado. Para incorporar material nuevo hay que reabrir la mesa: el análisis descriptivo se invalida y habrá que generarlo otra vez (tu proyección se conserva).</div>'}
     {'<button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Volver a buscar</button> <button type="submit" name="derivar" value="1" style="background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:5px;padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer">Sugerir términos</button>' if en_revision else ''}
   </form>
+  {'' if en_revision else f'''<form method="post" action="/admin/reportes/{reporte_id}/mesa/reabrir" onsubmit="return confirm('Reabrir la mesa invalida el análisis descriptivo y habrá que generarlo de nuevo. ¿Continuar?')"><button type="submit" style="background:transparent;color:var(--warn,#e0a800);border:1px solid var(--warn,#e0a800);border-radius:5px;padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer">↩ Reabrir mesa para cosechar de nuevo</button></form>'''}
 </div>
 
 {panel_cosecha}
@@ -7309,6 +7311,33 @@ async def admin_caso_url(request: Request, reporte_id: int):
     return RedirectResponse(_mesa_url(reporte_id, msg=msg), status_code=303)
 
 
+@router.post("/reportes/{reporte_id:int}/mesa/reabrir")
+async def admin_caso_reabrir(request: Request, reporte_id: int):
+    """Devuelve el caso a la mesa para rehacer el expediente.
+
+    Un caso aprobado tiene el expediente congelado: sin esto, un caso cosechado
+    antes de que se conectara una fuente nueva no tendría forma de incorporarla.
+    Invalida el análisis descriptivo —se hizo sobre otro material— y hay que
+    volver a generarlo; la proyección del analista se conserva.
+    """
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    from ..storage.config_loader import obtener_reporte, reabrir_caso
+    r = obtener_reporte(db, reporte_id)
+    if not r or r.get("tipo") != "reporte_b_caso":
+        return RedirectResponse("/admin/reportes?err=Caso+no+encontrado", status_code=303)
+    res = reabrir_caso(db, reporte_id)
+    if not res.get("ok"):
+        return RedirectResponse(
+            _mesa_url(reporte_id, err=(res.get("error") or "No+se+pudo+reabrir").replace(" ", "+")),
+            status_code=303)
+    return RedirectResponse(_mesa_url(
+        reporte_id, msg="Caso+reabierto+·+cosecha+de+nuevo+y+vuelve+a+generar+el+análisis"),
+        status_code=303)
+
+
 @router.post("/reportes/{reporte_id:int}/mesa/nota")
 async def admin_caso_nota(request: Request, reporte_id: int):
     """Incorpora una NOTA del analista como pieza citable del expediente.
@@ -7483,6 +7512,24 @@ def _panel_cosecha_html(parte: dict) -> str:
             f'{escape(f.get("fuente") or "—")}{detalle}</td>'
             f'<td style="padding:6px 8px;border-top:1px solid #1f2937;text-align:right">'
             f'{estado}</td></tr>')
+    geo = parte.get("por_region") or {}
+    if geo:
+        tope = ", ".join(f"{escape(str(k))} ({v})" for k, v in list(geo.items())[:8])
+        filas.append(
+            '<tr><td colspan="2" style="padding:6px 8px;border-top:1px solid #1f2937">'
+            '<span style="color:var(--accent);font-size:11.5px;font-weight:600">'
+            'REPARTO GEOGRÁFICO</span>'
+            f'<div style="font-size:11.5px;color:var(--muted);margin-top:2px">{tope}</div>'
+            '</td></tr>')
+    med = parte.get("por_medio") or {}
+    if med:
+        lista = " · ".join(f"{escape(str(k))}: {v}" for k, v in list(med.items())[:8])
+        filas.append(
+            '<tr><td colspan="2" style="padding:6px 8px;border-top:1px solid #1f2937">'
+            '<span style="color:var(--accent);font-size:11.5px;font-weight:600">'
+            'MEDIOS Y COLECTORES</span>'
+            f'<div style="font-size:11.5px;color:var(--muted);margin-top:2px">{lista}</div>'
+            '</td></tr>')
     det = parte.get("detalle_terminos") or {}
     origen = ""
     if det:

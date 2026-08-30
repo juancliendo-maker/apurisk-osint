@@ -300,6 +300,10 @@ def _tabla_clase(hechos: list, con_enlace: bool) -> Table:
             fuente = "Nota del analista"
         elif h.get("procedencia") == "alerta_plataforma":
             fuente = h.get("fuente") or "Alerta de la plataforma"
+        elif h.get("procedencia") == "punto_quiebre":
+            fuente = "Punto de quiebre"
+        elif h.get("procedencia") == "piso_estructural":
+            fuente = "Piso estructural"
         else:
             fuente = h.get("fuente") or h.get("nombre_archivo") or "—"
         id_txt = escape_txt(h.get("id_cita") or "—")

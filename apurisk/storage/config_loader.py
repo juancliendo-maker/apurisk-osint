@@ -2680,7 +2680,8 @@ ESTADO_ESPERANDO_PROYECCION = "esperando_proyeccion"
 #   · corpus de la plataforma → bd_osint, alerta_plataforma, ingesta_manual
 #   · aportado por el analista → url_externa, documento_analista, nota_analista
 PROCEDENCIAS_PIEZA = ("bd_osint", "url_externa", "documento_analista",
-                      "alerta_plataforma", "ingesta_manual", "nota_analista")
+                      "alerta_plataforma", "ingesta_manual", "nota_analista",
+                      "punto_quiebre", "piso_estructural")
 ESTADOS_EXTRACCION = ("pendiente", "extrayendo", "listo", "fallo")
 
 _CASO_DEFAULTS = {"horizontes": [7, 15, 30], "max_piezas": 60,
@@ -2691,9 +2692,11 @@ _CASO_DEFAULTS = {"horizontes": [7, 15, 30], "max_piezas": 60,
                   "max_chars_material": 220000, "prompt_maestro": "",
                   "kent_vocab_raw": "",
                   # cosecha multi-fuente (ingesta desde toda la plataforma)
-                  "terminos_min_long": 4, "terminos_tope": 24,
+                  "terminos_min_long": 4, "terminos_tope": 32,
+                  "terminos_cuota_catalogo": 4,
                   "busqueda_variantes": 1, "cupo_por_categoria": 12,
                   "max_alertas": 15, "max_ingestas": 15,
+                  "max_quiebres": 8, "max_piso": 5,
                   "terminos_stopwords_extra": []}
 
 _CASO_MAPA_INT = {"CASO_MAX_PIEZAS": "max_piezas",
@@ -2704,10 +2707,13 @@ _CASO_MAPA_INT = {"CASO_MAX_PIEZAS": "max_piezas",
                   "CASO_MAX_CHARS_MATERIAL": "max_chars_material",
                   "CASO_TERMINOS_MIN_LONG": "terminos_min_long",
                   "CASO_TERMINOS_TOPE": "terminos_tope",
+                  "CASO_TERMINOS_CUOTA_CATALOGO": "terminos_cuota_catalogo",
                   "CASO_BUSQUEDA_VARIANTES": "busqueda_variantes",
                   "CASO_CUPO_POR_CATEGORIA": "cupo_por_categoria",
                   "CASO_MAX_ALERTAS": "max_alertas",
-                  "CASO_MAX_INGESTAS": "max_ingestas"}
+                  "CASO_MAX_INGESTAS": "max_ingestas",
+                  "CASO_MAX_QUIEBRES": "max_quiebres",
+                  "CASO_MAX_PISO": "max_piso"}
 _CASO_MAPA_STR = {"CASO_MODELO": "modelo", "CASO_PROMPT_MAESTRO": "prompt_maestro",
                   "CASO_KENT_VOCAB": "kent_vocab_raw"}
 
@@ -3185,7 +3191,68 @@ def sincronizar_piezas_bd_osint(db_path: str, reporte_id: int, articulos: list) 
     return _ejecutar_con_reintentos(db_path, _op)
 
 
-PROCEDENCIAS_CORPUS = ("bd_osint", "alerta_plataforma", "ingesta_manual")
+def buscar_quiebres_caso(db_path: str, terminos: list, par: dict = None,
+                         pais: str = "PE") -> list:
+    """Puntos de quiebre configurados por el analista que tocan el caso.
+
+    Un punto de quiebre es una fecha con nombre y notas —una hipótesis fechada
+    que el analista ya registró en el panel—. Tiene texto y autor, así que es
+    material citable del expediente, no una métrica.
+
+    No se filtra por la ventana del caso: un quiebre es justamente lo que explica
+    el presente desde antes, y descartarlo por antigüedad perdería su sentido.
+    """
+    par = par or {}
+    terms = [t.strip() for t in (terminos or []) if t and t.strip()]
+    if not terms:
+        return []
+    like_block, args = _like_variantes(terms, ("nombre", "notas"), par)
+    if not like_block:
+        return []
+    args = list(args) + [pais, int(par.get("max_quiebres", 8))]
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, nombre, notas, fecha FROM config_puntos_quiebre "
+                f"WHERE {like_block} AND activo=1 "
+                "AND (pais=? OR pais IS NULL OR pais='') "
+                "ORDER BY fecha DESC LIMIT ?", args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] buscar_quiebres_caso falló: {e}")
+        return []
+
+
+def buscar_piso_estructural_caso(db_path: str, terminos: list, par: dict = None,
+                                 pais: str = "PE") -> list:
+    """Piso estructural del país que toca el caso: el suelo que no se mueve.
+
+    Son notas del analista sobre condiciones de fondo por tema. Igual que los
+    quiebres, tienen texto y autoría: material del expediente, no métrica.
+    """
+    par = par or {}
+    terms = [t.strip() for t in (terminos or []) if t and t.strip()]
+    if not terms:
+        return []
+    like_block, args = _like_variantes(terms, ("tema", "notas"), par)
+    if not like_block:
+        return []
+    args = list(args) + [pais, int(par.get("max_piso", 5))]
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, tema, piso, notas, actualizado_en "
+                "FROM config_piso_estructural "
+                f"WHERE {like_block} AND (pais=? OR pais IS NULL OR pais='') "
+                "ORDER BY actualizado_en DESC LIMIT ?", args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] buscar_piso_estructural_caso falló: {e}")
+        return []
+
+
+PROCEDENCIAS_CORPUS = ("bd_osint", "alerta_plataforma", "ingesta_manual",
+                       "punto_quiebre", "piso_estructural")
 
 
 def cosechar_corpus_caso(db_path: str, reporte_id: int, terminos: list,
@@ -3208,6 +3275,8 @@ def cosechar_corpus_caso(db_path: str, reporte_id: int, terminos: list,
     arts = buscar_articulos_caso(db_path, terms, ventana_dias, par=par)
     alertas = buscar_alertas_caso(db_path, terms, ventana_dias, par=par)
     ingestas = buscar_ingestas_caso(db_path, terms, ventana_dias, par=par)
+    quiebres = buscar_quiebres_caso(db_path, terms, par=par)
+    piso = buscar_piso_estructural_caso(db_path, terms, par=par)
 
     def _op(c: sqlite3.Connection) -> dict:
         marcas = ",".join("?" * len(PROCEDENCIAS_CORPUS))
@@ -3218,7 +3287,8 @@ def cosechar_corpus_caso(db_path: str, reporte_id: int, terminos: list,
                            (int(reporte_id),)).fetchone()[0]
         cupo = max(0, par["max_piezas"] - usadas)
         tope_txt = par["max_texto_chars"]
-        ins = {"bd_osint": 0, "alerta_plataforma": 0, "ingesta_manual": 0}
+        ins = {"bd_osint": 0, "alerta_plataforma": 0, "ingesta_manual": 0,
+               "punto_quiebre": 0, "piso_estructural": 0}
 
         def _guardar(proc, ref, url, titulo, fuente, fecha, texto):
             c.execute(
@@ -3248,6 +3318,21 @@ def cosechar_corpus_caso(db_path: str, reporte_id: int, terminos: list,
             _guardar("ingesta_manual", None, g.get("url"), g.get("titulo"),
                      g.get("fuente"), g.get("published") or g.get("ingresada_en"),
                      g.get("resumen"))
+        for q in quiebres:
+            if sum(ins.values()) >= cupo:
+                break
+            _guardar("punto_quiebre", None, None,
+                     q.get("nombre") or "Punto de quiebre",
+                     "Puntos de quiebre · APURISK", q.get("fecha"), q.get("notas"))
+        for f_ in piso:
+            if sum(ins.values()) >= cupo:
+                break
+            etq = f_.get("piso")
+            _guardar("piso_estructural", None, None,
+                     f_.get("tema") or "Piso estructural",
+                     "Piso estructural · APURISK", f_.get("actualizado_en"),
+                     " ".join(x for x in [f_.get("notas"),
+                                          f"[piso: {etq}]" if etq else ""] if x))
         for a in arts:
             if sum(ins.values()) >= cupo:
                 break
@@ -3256,22 +3341,41 @@ def cosechar_corpus_caso(db_path: str, reporte_id: int, terminos: list,
                      (a.get("capturado_en") or a.get("published")), a.get("summary"))
 
         # Parte por fuente: encontradas vs incorporadas (la resta = fuera por tope)
-        por_cat = {}
+        por_cat, por_region, por_medio = {}, {}, {}
         for a in arts:
             cat = (a.get("category") or "sin categoría")
             por_cat[cat] = por_cat.get(cat, 0) + 1
+            reg = (a.get("region") or "").strip()
+            if reg:
+                por_region[reg] = por_region.get(reg, 0) + 1
+            med = (a.get("source_name") or "").strip()
+            if med:
+                por_medio[med] = por_medio.get(med, 0) + 1
+        for al in alertas:
+            reg = (al.get("region") or "").strip()
+            if reg:
+                por_region[reg] = por_region.get(reg, 0) + 1
         fuentes = [
             {"fuente": "Alertas de la plataforma", "procedencia": "alerta_plataforma",
              "encontradas": len(alertas), "incorporadas": ins["alerta_plataforma"]},
             {"fuente": "Ingestas manuales", "procedencia": "ingesta_manual",
              "encontradas": len(ingestas), "incorporadas": ins["ingesta_manual"]},
+            {"fuente": "Puntos de quiebre", "procedencia": "punto_quiebre",
+             "encontradas": len(quiebres), "incorporadas": ins["punto_quiebre"]},
+            {"fuente": "Piso estructural", "procedencia": "piso_estructural",
+             "encontradas": len(piso), "incorporadas": ins["piso_estructural"]},
             {"fuente": "Corpus OSINT (prensa y colectores)", "procedencia": "bd_osint",
              "encontradas": len(arts), "incorporadas": ins["bd_osint"],
              "por_categoria": por_cat},
         ]
         total = sum(ins.values())
         return {"ok": True, "n": total, "por_fuente": fuentes,
-                "descartadas": (len(arts) + len(alertas) + len(ingestas)) - total,
+                # Reparto geográfico del material: es el «mapa» del caso, la misma
+                # columna `region` que alimenta los mapas de riesgo del panel.
+                "por_region": dict(sorted(por_region.items(), key=lambda x: -x[1])),
+                "por_medio": dict(sorted(por_medio.items(), key=lambda x: -x[1])[:12]),
+                "descartadas": (len(arts) + len(alertas) + len(ingestas)
+                                + len(quiebres) + len(piso)) - total,
                 "tope": par["max_piezas"], "cupo_disponible": cupo,
                 "terminos_usados": len(terms), "cosechado_en": ahora}
     return _ejecutar_con_reintentos(db_path, _op)
@@ -3310,6 +3414,32 @@ def peso_expediente_caso(db_path: str, reporte_id: int) -> dict:
     except Exception as e:
         print(f"[config_loader] peso_expediente_caso falló: {e}")
     return out
+
+
+def reabrir_caso(db_path: str, reporte_id: int) -> dict:
+    """Devuelve un caso aprobado a 'esperando_revision' para rehacer la mesa.
+
+    Existe porque el expediente se congela al aprobar: un caso ya aprobado no
+    tiene forma de incorporar material nuevo —por ejemplo, fuentes de la
+    plataforma que se conectaron después de que ese caso se cosechara—.
+
+    Reabrir INVALIDA el análisis descriptivo: se hizo sobre otro material y
+    sostenerlo sería deshonesto. La proyección del analista NO se toca (es suya,
+    y la reescribe si lo cree necesario). Solo se admite desde
+    'esperando_proyeccion': un caso ya completado no se reabre.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        cur = c.execute(
+            f"UPDATE reportes_generados SET estado='{ESTADO_ESPERANDO_REVISION}' "
+            f"WHERE id=? AND tipo='reporte_b_caso' "
+            f"AND estado='{ESTADO_ESPERANDO_PROYECCION}'", (int(reporte_id),))
+        if not cur.rowcount:
+            return {"ok": False, "error": "El caso no está esperando proyección"}
+        # el análisis describía el expediente anterior: deja de ser válido
+        c.execute("UPDATE reporte_caso_meta SET analisis_json=NULL WHERE reporte_id=?",
+                  (int(reporte_id),))
+        return {"ok": True}
+    return _ejecutar_con_reintentos(db_path, _op)
 
 
 def aprobar_caso(db_path: str, reporte_id: int) -> dict:
