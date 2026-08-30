@@ -6509,6 +6509,8 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
 
     from ..storage.config_loader import peso_expediente_caso
     terminos = meta.get("terminos_busqueda") or []
+    from ..storage.config_loader import obtener_cosecha_caso
+    panel_cosecha = _panel_cosecha_html(obtener_cosecha_caso(db, reporte_id))
     escenarios = meta.get("escenarios_candidatos") or []
     pregunta = meta.get("pregunta") or r.get("caso") or ""
     ventana = meta.get("ventana_dias") or 7
@@ -6573,10 +6575,12 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
   <div class="card-title">Términos de búsqueda</div>
   <form method="post" action="/admin/reportes/{reporte_id}/mesa/buscar">
     <textarea name="terminos" rows="2" class="rep-in" style="width:100%;box-sizing:border-box" placeholder="un término por línea o separados por coma" {ro}>{escape(chr(10).join(terminos))}</textarea>
-    <div style="font-size:11px;color:var(--muted);margin:6px 0 8px">«Volver a buscar» re-corre la búsqueda en BD y recarga SOLO las piezas de BD OSINT (no toca URLs ni documentos).</div>
-    {'<button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Volver a buscar</button>' if en_revision else ''}
+    <div style="font-size:11px;color:var(--muted);margin:6px 0 8px">«Sugerir términos» los deriva del caso y de los catálogos (actores, alias, keywords) sin usar la IA. «Volver a buscar» cosecha las fuentes de la plataforma y recarga SOLO lo del corpus: nunca toca tus URLs, documentos ni notas.</div>
+    {'<button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Volver a buscar</button> <button type="submit" name="derivar" value="1" style="background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:5px;padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer">Sugerir términos</button>' if en_revision else ''}
   </form>
 </div>
+
+{panel_cosecha}
 
 <div class="card">
   <div class="card-title">Escenarios candidatos e indicaciones</div>
@@ -6601,6 +6605,14 @@ async def admin_caso_mesa(request: Request, reporte_id: int):
       <input type="file" name="archivo" multiple accept=".pdf,.docx,.txt,.md" class="rep-in" style="width:100%;box-sizing:border-box">
       <div style="font-size:11px;color:var(--muted);margin:6px 0 0">Se extrae el texto; el binario no se conserva.</div>
       <div style="margin-top:8px"><button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Subir y extraer</button></div>
+    </form>
+    <form method="post" action="/admin/reportes/{reporte_id}/mesa/nota" style="flex:1;min-width:280px">
+      <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Nota del analista</div>
+      <input type="text" name="titulo" maxlength="160" placeholder="Título de la nota (opcional)" class="rep-in" style="width:100%;box-sizing:border-box;margin-bottom:6px">
+      <textarea name="texto" rows="3" class="rep-in" style="width:100%;box-sizing:border-box" placeholder="Pega aquí el texto: un parte, un cable, una observación propia."></textarea>
+      <input type="text" name="fuente" maxlength="80" placeholder="Origen (opcional)" class="rep-in" style="width:100%;box-sizing:border-box;margin-top:6px">
+      <div style="font-size:11px;color:var(--muted);margin:6px 0 0">Entra como material del expediente: citable, y no verificable por el lector.</div>
+      <div style="margin-top:8px"><button type="submit" style="background:var(--accent);color:#00131f;border:none;border-radius:5px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">Incorporar nota</button></div>
     </form>
   </div>
 </div>''' if en_revision else ''}
@@ -6718,6 +6730,17 @@ async def admin_caso_buscar(request: Request, reporte_id: int):
     crudo = form.get("terminos") or ""
     terminos = [t.strip() for t in re.split(r"[\n,]", crudo) if t.strip()]
     meta = obtener_caso_meta(db, reporte_id) or {}
+    deriva = None
+
+    # «Sugerir términos» rellena desde los catálogos, sin gastar una llamada a la
+    # IA: el analista siempre tiene una forma de salir de un caso sin términos.
+    if form.get("derivar") or not terminos:
+        deriva = _terminos_deterministas(db, meta)
+        from ..reports.caso_terminos import fusionar_terminos
+        from ..storage.config_loader import cargar_parametros_caso
+        terminos = fusionar_terminos(deriva["terminos"], terminos,
+                                     cargar_parametros_caso(db))
+
     guardar_caso_meta(db, reporte_id, pregunta=meta.get("pregunta") or r.get("caso") or "—",
                       ventana_dias=meta.get("ventana_dias") or 7,
                       terminos_busqueda=terminos,
@@ -6725,12 +6748,16 @@ async def admin_caso_buscar(request: Request, reporte_id: int):
                       indicaciones_detalle=meta.get("indicaciones_detalle"),
                       proyeccion_analista=meta.get("proyeccion_analista"),
                       titulo_reporte=meta.get("titulo_reporte"))
-    arts = buscar_articulos_caso(db, terminos, meta.get("ventana_dias") or 7)
-    res = sincronizar_piezas_bd_osint(db, reporte_id, arts)
-    msg = f"Búsqueda+actualizada+·+{res.get('n',0)}+piezas+BD+OSINT"
+    res = _cosechar_y_registrar(db, reporte_id, terminos,
+                                meta.get("ventana_dias") or 7, deriva)
+    partes = [f"{f['fuente'].split(' (')[0]}:+{f['incorporadas']}"
+              for f in (res.get("por_fuente") or []) if f.get("incorporadas")]
+    msg = f"Cosecha+·+{res.get('n',0)}+piezas"
+    if partes:
+        msg += "+·+" + "+·+".join(partes).replace(" ", "+")
     desc = res.get("descartadas", 0)
     if desc:
-        msg += f"+·+{desc}+no+añadidas+(tope+de+{res.get('tope','?')}+piezas+alcanzado)"
+        msg += f"+·+{desc}+fuera+por+el+tope+de+{res.get('tope','?')}"
     return RedirectResponse(_mesa_url(reporte_id, msg=msg), status_code=303)
 
 
@@ -7282,6 +7309,46 @@ async def admin_caso_url(request: Request, reporte_id: int):
     return RedirectResponse(_mesa_url(reporte_id, msg=msg), status_code=303)
 
 
+@router.post("/reportes/{reporte_id:int}/mesa/nota")
+async def admin_caso_nota(request: Request, reporte_id: int):
+    """Incorpora una NOTA del analista como pieza citable del expediente.
+
+    Hasta ahora el analista solo podía aportar una URL o un archivo: para pegar
+    un texto —un cable, un parte, una observación propia— tenía que fabricar un
+    documento. La nota entra con su propia procedencia y, por no ser comprobable
+    por el lector, cae siempre en la clase MATERIAL DEL EXPEDIENTE.
+    """
+    sesion, err = _admin_guard(request)
+    if err:
+        return err
+    db = _get_db_path()
+    r, redir = _guard_caso_revision(db, reporte_id)
+    if redir:
+        return redir
+    from ..storage.config_loader import agregar_pieza_caso, cargar_parametros_caso
+    from ..utils.timezone_pe import now_pe_iso
+    form = await request.form()
+    titulo = (form.get("titulo") or "").strip()
+    texto = (form.get("texto") or "").strip()
+    fuente = (form.get("fuente") or "").strip() or None
+    if not texto:
+        return RedirectResponse(_mesa_url(reporte_id, err="La+nota+no+puede+estar+vacía"),
+                                status_code=303)
+    par = cargar_parametros_caso(db)
+    res = agregar_pieza_caso(
+        db, reporte_id, procedencia="nota_analista",
+        titulo=titulo or f"Nota del analista · {now_pe_iso()[:16].replace('T', ' ')}",
+        fuente=fuente, fecha_pieza=now_pe_iso(),
+        texto_extraido=texto[:par["max_texto_chars"]],
+        estado_extraccion="listo")
+    if not res.get("ok"):
+        return RedirectResponse(
+            _mesa_url(reporte_id, err=(res.get("error") or "No+se+pudo+añadir").replace(" ", "+")),
+            status_code=303)
+    return RedirectResponse(_mesa_url(reporte_id, msg="Nota+incorporada+al+expediente"),
+                            status_code=303)
+
+
 @router.post("/reportes/{reporte_id:int}/mesa/archivo")
 async def admin_caso_archivo(request: Request, reporte_id: int):
     """Sube uno o varios documentos como piezas 'documento_analista' y dispara su
@@ -7386,30 +7453,139 @@ def _derivar_ciega_caso(pregunta: str):
     return _lista(data.get("terminos")), _lista(data.get("escenarios"))
 
 
-def _construir_expediente_caso(db: str, reporte_id: int) -> None:
-    """Deriva términos/escenarios (ciego) y arma el expediente bd_osint.
+def _panel_cosecha_html(parte: dict) -> str:
+    """Parte de la última cosecha, por fuente. Honestidad de datos: una fuente que
+    vino vacía es un hallazgo y se muestra; no se oculta ni se disimula."""
+    if not parte:
+        return ('<div class="card"><div class="card-title">Cosecha de fuentes</div>'
+                '<div class="rep-vacio">Todavía no se ha cosechado el corpus. '
+                'Escribe términos y pulsa «Volver a buscar».</div></div>')
+    filas = []
+    for f in (parte.get("por_fuente") or []):
+        enc, inc = int(f.get("encontradas", 0)), int(f.get("incorporadas", 0))
+        fuera = max(0, enc - inc)
+        if enc == 0:
+            estado = '<span style="color:var(--muted)">sin resultados</span>'
+        elif fuera:
+            estado = (f'<span style="color:var(--warn,#e0a800)">{inc} de {enc}'
+                      f' · {fuera} fuera por el tope</span>')
+        else:
+            estado = f'<span style="color:var(--ok,#3fb950)">{inc} de {enc}</span>'
+        cats = f.get("por_categoria") or {}
+        detalle = ""
+        if cats:
+            detalle = ('<div style="font-size:11px;color:var(--muted);margin-top:2px">'
+                       + " · ".join(f"{escape(str(k))}: {v}" for k, v in
+                                    sorted(cats.items(), key=lambda x: -x[1]))
+                       + "</div>")
+        filas.append(
+            f'<tr><td style="padding:6px 8px;border-top:1px solid #1f2937">'
+            f'{escape(f.get("fuente") or "—")}{detalle}</td>'
+            f'<td style="padding:6px 8px;border-top:1px solid #1f2937;text-align:right">'
+            f'{estado}</td></tr>')
+    det = parte.get("detalle_terminos") or {}
+    origen = ""
+    if det:
+        piezas = [f"{v} {k}" for k, v in det.items() if v]
+        if piezas:
+            origen = ('<div style="font-size:11px;color:var(--muted);margin-top:8px">'
+                      'Términos derivados de: ' + " · ".join(piezas) + '</div>')
+    aviso = ""
+    if parte.get("terminos_degradados"):
+        aviso = ('<div style="font-size:11.5px;color:var(--warn,#e0a800);margin-top:8px">'
+                 'La IA no amplió los términos: se usaron solo los derivados del caso '
+                 'y de los catálogos. El expediente es válido, pero más estrecho.</div>')
+    cuando = (parte.get("cosechado_en") or "")[:16].replace("T", " ")
+    return (
+        '<div class="card"><div class="card-title">Cosecha de fuentes</div>'
+        '<table style="width:100%;border-collapse:collapse;font-size:12.5px">'
+        + "".join(filas) + "</table>"
+        + f'<div style="font-size:11px;color:var(--muted);margin-top:8px">'
+          f'{parte.get("n", 0)} piezas del corpus · {parte.get("terminos_usados", 0)} '
+          f'términos · tope {parte.get("tope", "?")} · {escape(cuando)} (Lima)</div>'
+        + origen + aviso + "</div>")
 
-    Guarda ambos JSON en reporte_caso_meta y sincroniza las piezas bd_osint desde
-    la búsqueda. No marca 'error' si la IA falla: la mesa debe abrir igual.
+
+def _terminos_deterministas(db: str, meta: dict) -> dict:
+    """Términos derivados SIN API desde lo que el analista ya escribió y desde los
+    catálogos de la plataforma (actores + alias, temas, keywords)."""
+    from ..reports.caso_terminos import derivar_terminos
+    from ..storage.config_loader import cargar_parametros_caso
+    return derivar_terminos(
+        db,
+        titulo=meta.get("titulo_reporte") or "",
+        pregunta=meta.get("pregunta") or "",
+        escenarios=meta.get("escenarios_candidatos") or [],
+        par=cargar_parametros_caso(db))
+
+
+def _cosechar_y_registrar(db: str, reporte_id: int, terminos: list,
+                          ventana_dias: int, deriva: dict = None) -> dict:
+    """Cosecha el corpus y deja el parte guardado para que la mesa lo muestre."""
+    from ..storage.config_loader import (cosechar_corpus_caso, guardar_cosecha_caso,
+                                         obtener_cosecha_caso)
+    res = cosechar_corpus_caso(db, reporte_id, terminos, ventana_dias)
+    if deriva:
+        res["origen_terminos"] = deriva.get("origen") or {}
+        res["detalle_terminos"] = deriva.get("detalle") or {}
+        res["terminos_degradados"] = bool(deriva.get("degradado"))
+    else:
+        # Volver a buscar con los mismos términos no re-deriva nada: se arrastra
+        # la procedencia anterior para que el aviso de degradación no se borre
+        # solo por repetir la búsqueda.
+        prev = obtener_cosecha_caso(db, reporte_id) or {}
+        for k in ("origen_terminos", "detalle_terminos", "terminos_degradados"):
+            if k in prev:
+                res[k] = prev[k]
+    try:
+        guardar_cosecha_caso(db, reporte_id, res)
+    except Exception as e:
+        print(f"[caso] no se pudo guardar el parte de cosecha rid={reporte_id}: {e}")
+    return res
+
+
+def _construir_expediente_caso(db: str, reporte_id: int) -> None:
+    """Deriva términos y escenarios, y cosecha el corpus de TODA la plataforma.
+
+    El caso nunca nace ciego: los términos base se derivan SIN API desde el
+    título, la pregunta, los escenarios y los catálogos (actores + alias, temas,
+    keywords). La IA, si responde, AMPLÍA esa lista y aporta los escenarios
+    candidatos — pero no es su única fuente. Si la API no está disponible el caso
+    igual arranca con términos y con material, y se declara degradado.
+
+    Los escenarios sí siguen siendo ciegos al corpus por doctrina: si naciesen
+    viendo el material, el hallazgo de silencio sería imposible.
     """
-    from ..storage.config_loader import (
-        obtener_caso_meta, guardar_caso_meta, buscar_articulos_caso,
-        sincronizar_piezas_bd_osint,
-    )
+    from ..storage.config_loader import obtener_caso_meta, guardar_caso_meta
+    from ..reports.caso_terminos import fusionar_terminos
+    from ..storage.config_loader import cargar_parametros_caso
     meta = obtener_caso_meta(db, reporte_id)
     if not meta:
         return
-    terminos, escenarios = _derivar_ciega_caso(meta.get("pregunta") or "")
+
+    # 1) La IA propone escenarios y amplía términos (ciega al corpus).
+    t_ia, escenarios = _derivar_ciega_caso(meta.get("pregunta") or "")
+
+    # 2) Base determinista — se calcula CON los escenarios ya derivados, para que
+    #    también aporten términos.
+    base_meta = dict(meta)
+    base_meta["escenarios_candidatos"] = escenarios or meta.get("escenarios_candidatos")
+    deriva = _terminos_deterministas(db, base_meta)
+    deriva["degradado"] = not bool(t_ia)
+
+    terminos = fusionar_terminos(deriva["terminos"], t_ia,
+                                 cargar_parametros_caso(db))
     guardar_caso_meta(
         db, reporte_id, pregunta=meta["pregunta"], ventana_dias=meta["ventana_dias"],
-        terminos_busqueda=terminos, escenarios_candidatos=escenarios,
+        terminos_busqueda=terminos,
+        escenarios_candidatos=escenarios or meta.get("escenarios_candidatos"),
         indicaciones_detalle=meta.get("indicaciones_detalle"),
         proyeccion_analista=meta.get("proyeccion_analista"),
         # El guardado es un upsert: sin este campo se borraría el título que el
         # analista acaba de escribir en la solicitud.
         titulo_reporte=meta.get("titulo_reporte"))
-    arts = buscar_articulos_caso(db, terminos, meta["ventana_dias"])
-    sincronizar_piezas_bd_osint(db, reporte_id, arts)
+
+    _cosechar_y_registrar(db, reporte_id, terminos, meta["ventana_dias"], deriva)
 
 
 def _lanzar_bg_caso(fn, db: str, reporte_id: int) -> None:

@@ -2674,7 +2674,13 @@ ESTADO_ESPERANDO_REVISION = "esperando_revision"
 # caso espera la PROYECCIÓN del analista (sección V). Como 'esperando_revision',
 # está EXENTO del watchdog: puede esperar días sin que nadie lo mate.
 ESTADO_ESPERANDO_PROYECCION = "esperando_proyeccion"
-PROCEDENCIAS_PIEZA = ("bd_osint", "url_externa", "documento_analista")
+# Procedencia de cada pieza del expediente. Determina la fórmula de atribución
+# que pone el SISTEMA (caso_motor.atribucion_pieza) y su clase probatoria en la
+# sección VI, así que añadir una obliga a darle ambas cosas.
+#   · corpus de la plataforma → bd_osint, alerta_plataforma, ingesta_manual
+#   · aportado por el analista → url_externa, documento_analista, nota_analista
+PROCEDENCIAS_PIEZA = ("bd_osint", "url_externa", "documento_analista",
+                      "alerta_plataforma", "ingesta_manual", "nota_analista")
 ESTADOS_EXTRACCION = ("pendiente", "extrayendo", "listo", "fallo")
 
 _CASO_DEFAULTS = {"horizontes": [7, 15, 30], "max_piezas": 60,
@@ -2683,14 +2689,25 @@ _CASO_DEFAULTS = {"horizontes": [7, 15, 30], "max_piezas": 60,
                   "modelo": "claude-sonnet-4-6", "max_tokens": 4000,
                   "timeout_s": 180, "max_chars_pieza_envio": 6000,
                   "max_chars_material": 220000, "prompt_maestro": "",
-                  "kent_vocab_raw": ""}
+                  "kent_vocab_raw": "",
+                  # cosecha multi-fuente (ingesta desde toda la plataforma)
+                  "terminos_min_long": 4, "terminos_tope": 24,
+                  "busqueda_variantes": 1, "cupo_por_categoria": 12,
+                  "max_alertas": 15, "max_ingestas": 15,
+                  "terminos_stopwords_extra": []}
 
 _CASO_MAPA_INT = {"CASO_MAX_PIEZAS": "max_piezas",
                   "CASO_MAX_TEXTO_PIEZA_CHARS": "max_texto_chars",
                   "CASO_MAX_TOKENS": "max_tokens",
                   "CASO_TIMEOUT_S": "timeout_s",
                   "CASO_MAX_CHARS_PIEZA_ENVIO": "max_chars_pieza_envio",
-                  "CASO_MAX_CHARS_MATERIAL": "max_chars_material"}
+                  "CASO_MAX_CHARS_MATERIAL": "max_chars_material",
+                  "CASO_TERMINOS_MIN_LONG": "terminos_min_long",
+                  "CASO_TERMINOS_TOPE": "terminos_tope",
+                  "CASO_BUSQUEDA_VARIANTES": "busqueda_variantes",
+                  "CASO_CUPO_POR_CATEGORIA": "cupo_por_categoria",
+                  "CASO_MAX_ALERTAS": "max_alertas",
+                  "CASO_MAX_INGESTAS": "max_ingestas"}
 _CASO_MAPA_STR = {"CASO_MODELO": "modelo", "CASO_PROMPT_MAESTRO": "prompt_maestro",
                   "CASO_KENT_VOCAB": "kent_vocab_raw"}
 
@@ -2828,6 +2845,31 @@ def guardar_caso_meta(db_path: str, reporte_id: int, pregunta: str,
              ahora, ahora))
         return {"ok": True, "reporte_id": int(reporte_id)}
     return _ejecutar_con_reintentos(db_path, _op)
+
+
+def guardar_cosecha_caso(db_path: str, reporte_id: int, parte: dict) -> dict:
+    """Persiste el parte de la última cosecha (qué trajo cada fuente).
+
+    Va por UPDATE de su propia columna y NO por el upsert de guardar_caso_meta:
+    así ninguna escritura de metadatos puede borrarlo por omitir el campo, que es
+    exactamente como se perdía antes el título del reporte.
+    """
+    def _op(c: sqlite3.Connection) -> dict:
+        c.execute("UPDATE reporte_caso_meta SET cosecha_json=? WHERE reporte_id=?",
+                  (json.dumps(parte or {}, ensure_ascii=False), int(reporte_id)))
+        return {"ok": True}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+def obtener_cosecha_caso(db_path: str, reporte_id: int) -> dict:
+    """Parte de la última cosecha, o {} si el caso nunca cosechó."""
+    try:
+        with _conn(db_path) as c:
+            r = c.execute("SELECT cosecha_json FROM reporte_caso_meta WHERE reporte_id=?",
+                          (int(reporte_id),)).fetchone()
+        return json.loads(r["cosecha_json"]) if r and r["cosecha_json"] else {}
+    except Exception:
+        return {}
 
 
 def obtener_caso_meta(db_path: str, reporte_id: int) -> dict | None:
@@ -2974,34 +3016,139 @@ def crear_solicitud_caso(db_path: str, pregunta: str, ventana_dias: int,
     return _ejecutar_con_reintentos(db_path, _op)
 
 
-def buscar_articulos_caso(db_path: str, terminos: list, ventana_dias: int,
-                          limite: int = 300) -> list:
-    """Artículos que hacen match (LIKE en title/summary) con alguno de los términos,
-    dentro de la ventana (ventana_dias, hora Lima). Recientes primero.
+def _like_variantes(terminos: list, campos: tuple, par: dict = None) -> tuple:
+    """(bloque SQL, args) que hace match de cualquier variante en cualquier campo.
 
-    Ventana con el mismo criterio que el resto del sistema: capturado_en o
-    published dentro del corte. Sin términos → []."""
+    Antes se comparaba el término literal contra title/summary. Eso perdía
+    plurales, tildes y grafías alternas: 'concesión' no encontraba 'concesiones'.
+    Ahora cada término se expande a sus variantes seguras y se comparan todas.
+    """
+    from ..reports.caso_terminos import variantes_de_termino
+    formas = []
+    for t in terminos:
+        formas += variantes_de_termino(t, par)
+    formas = sorted({f.lower() for f in formas if f and f.strip()})
+    if not formas:
+        return "", []
+    trozos, args = [], []
+    for f in formas:
+        trozos.append("(" + " OR ".join(f"lower({c}) LIKE ?" for c in campos) + ")")
+        args += [f"%{f}%"] * len(campos)
+    return "(" + " OR ".join(trozos) + ")", args
+
+
+def buscar_articulos_caso(db_path: str, terminos: list, ventana_dias: int,
+                          limite: int = 300, par: dict = None,
+                          diversificar: bool = True) -> list:
+    """Artículos del corpus que hacen match con los términos, dentro de la ventana.
+
+    Los OCHO colectores de la plataforma (ACLED, Congreso, crimen organizado,
+    Defensoría, GDELT, RSS, SUTRAN, Twitter) escriben todos aquí, separados por
+    `category`. Sin diversificar, un caso con mucha cobertura de prensa se
+    llevaba todo el cupo en 'medios' y no traía nada del Estado; por eso se
+    reparte un cupo por categoría antes de completar por recencia.
+
+    Sin términos → [] (el llamador debe derivarlos; ver caso_terminos).
+    """
     from datetime import timedelta
     from ..utils.timezone_pe import now_pe
+    par = par or {}
     terms = [t.strip() for t in (terminos or []) if t and t.strip()]
     if not terms:
         return []
     cutoff = (now_pe() - timedelta(days=int(ventana_dias))).isoformat(timespec="seconds")
-    like_block = " OR ".join(["(lower(title) LIKE ? OR lower(summary) LIKE ?)"] * len(terms))
-    args = []
-    for t in terms:
-        lk = f"%{t.lower()}%"; args += [lk, lk]
-    args += [cutoff, cutoff, int(limite)]
+    like_block, args = _like_variantes(terms, ("title", "summary"), par)
+    if not like_block:
+        return []
+    args = list(args) + [cutoff, cutoff, int(limite)]
     try:
         with _conn(db_path) as c:
             rows = c.execute(
-                "SELECT id, title, summary, url, source_name, capturado_en, published "
-                f"FROM articulos WHERE ({like_block}) "
+                "SELECT id, title, summary, url, source_name, category, "
+                "capturado_en, published "
+                f"FROM articulos WHERE {like_block} "
                 "AND (capturado_en >= ? OR published >= ?) "
                 "ORDER BY capturado_en DESC LIMIT ?", args).fetchall()
-        return [dict(r) for r in rows]
+        arts = [dict(r) for r in rows]
     except Exception as e:
         print(f"[config_loader] buscar_articulos_caso falló: {e}")
+        return []
+    if not diversificar:
+        return arts
+    # Cupo por categoría, luego se completa por recencia con el resto.
+    cupo = int(par.get("cupo_por_categoria", 12))
+    por_cat, resto = {}, []
+    for a in arts:
+        cat = (a.get("category") or "sin_categoria")
+        if len(por_cat.setdefault(cat, [])) < cupo:
+            por_cat[cat].append(a)
+        else:
+            resto.append(a)
+    salida = [a for lote in por_cat.values() for a in lote]
+    salida.sort(key=lambda a: (a.get("capturado_en") or a.get("published") or ""),
+                reverse=True)
+    return salida + resto
+
+
+def buscar_alertas_caso(db_path: str, terminos: list, ventana_dias: int,
+                        par: dict = None) -> list:
+    """Alertas de la plataforma que hacen match con los términos, en la ventana.
+
+    Las alertas son hallazgos que el motor ya detectó (regla + nivel + categoría)
+    y traen texto y fuente propios, así que SÍ son material citable — a
+    diferencia de factores/snapshots/scores, que son métricas sin texto ni fuente
+    y por eso entran como contexto del analista, nunca como pieza del expediente.
+    """
+    from datetime import timedelta
+    from ..utils.timezone_pe import now_pe
+    par = par or {}
+    terms = [t.strip() for t in (terminos or []) if t and t.strip()]
+    if not terms:
+        return []
+    cutoff = (now_pe() - timedelta(days=int(ventana_dias))).isoformat(timespec="seconds")
+    like_block, args = _like_variantes(terms, ("titulo", "resumen"), par)
+    if not like_block:
+        return []
+    args = list(args) + [cutoff, int(par.get("max_alertas", 15))]
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, titulo, resumen, fuente, url, nivel, categoria, regla, "
+                "region, timestamp FROM alertas "
+                f"WHERE {like_block} AND timestamp >= ? "
+                "ORDER BY timestamp DESC LIMIT ?", args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] buscar_alertas_caso falló: {e}")
+        return []
+
+
+def buscar_ingestas_caso(db_path: str, terminos: list, ventana_dias: int,
+                         par: dict = None) -> list:
+    """Ingestas manuales que hacen match: material que el analista ya incorporó
+    al archivo por otra vía y que hasta ahora el caso ignoraba."""
+    from datetime import timedelta
+    from ..utils.timezone_pe import now_pe
+    par = par or {}
+    terms = [t.strip() for t in (terminos or []) if t and t.strip()]
+    if not terms:
+        return []
+    cutoff = (now_pe() - timedelta(days=int(ventana_dias))).isoformat(timespec="seconds")
+    like_block, args = _like_variantes(terms, ("titulo", "resumen"), par)
+    if not like_block:
+        return []
+    args = list(args) + [cutoff, cutoff, int(par.get("max_ingestas", 15))]
+    try:
+        with _conn(db_path) as c:
+            rows = c.execute(
+                "SELECT id, titulo, resumen, url, fuente, categoria, published, "
+                "ingresada_en FROM ingestas_manuales "
+                f"WHERE {like_block} "
+                "AND (COALESCE(published,'') >= ? OR COALESCE(ingresada_en,'') >= ?) "
+                "ORDER BY COALESCE(published, ingresada_en) DESC LIMIT ?", args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[config_loader] buscar_ingestas_caso falló: {e}")
         return []
 
 
@@ -3035,6 +3182,98 @@ def sincronizar_piezas_bd_osint(db_path: str, reporte_id: int, articulos: list) 
         # descartadas: matches que no entraron por falta de cupo (para avisar en la mesa)
         descartadas = max(0, len(articulos) - ins)
         return {"ok": True, "n": ins, "descartadas": descartadas, "tope": par["max_piezas"]}
+    return _ejecutar_con_reintentos(db_path, _op)
+
+
+PROCEDENCIAS_CORPUS = ("bd_osint", "alerta_plataforma", "ingesta_manual")
+
+
+def cosechar_corpus_caso(db_path: str, reporte_id: int, terminos: list,
+                         ventana_dias: int) -> dict:
+    """Cosecha el corpus de la plataforma y lo vuelca al expediente del caso.
+
+    Reemplaza SOLO las piezas de corpus (las tres de PROCEDENCIAS_CORPUS). Lo que
+    cargó el analista —urls, documentos, notas— queda INTACTO: una nueva búsqueda
+    nunca destruye su material.
+
+    Devuelve un parte de cosecha por fuente (honestidad de datos): cuántas trajo
+    cada una, cuántas quedaron fuera por el tope, y si vino vacía. Una fuente sin
+    resultados es un hallazgo y se declara.
+    """
+    from ..utils.timezone_pe import now_pe_iso
+    par = cargar_parametros_caso(db_path)
+    ahora = now_pe_iso()
+    terms = [t.strip() for t in (terminos or []) if t and t.strip()]
+
+    arts = buscar_articulos_caso(db_path, terms, ventana_dias, par=par)
+    alertas = buscar_alertas_caso(db_path, terms, ventana_dias, par=par)
+    ingestas = buscar_ingestas_caso(db_path, terms, ventana_dias, par=par)
+
+    def _op(c: sqlite3.Connection) -> dict:
+        marcas = ",".join("?" * len(PROCEDENCIAS_CORPUS))
+        c.execute(f"DELETE FROM reporte_caso_piezas WHERE reporte_id=? "
+                  f"AND procedencia IN ({marcas})",
+                  (int(reporte_id), *PROCEDENCIAS_CORPUS))
+        usadas = c.execute("SELECT COUNT(*) FROM reporte_caso_piezas WHERE reporte_id=?",
+                           (int(reporte_id),)).fetchone()[0]
+        cupo = max(0, par["max_piezas"] - usadas)
+        tope_txt = par["max_texto_chars"]
+        ins = {"bd_osint": 0, "alerta_plataforma": 0, "ingesta_manual": 0}
+
+        def _guardar(proc, ref, url, titulo, fuente, fecha, texto):
+            c.execute(
+                "INSERT INTO reporte_caso_piezas (reporte_id, procedencia, "
+                "ref_articulo_id, url, titulo, fuente, fecha_pieza, "
+                "estado_extraccion, texto_extraido, incluido, creado_en, "
+                "actualizado_en) VALUES (?,?,?,?,?,?,?, 'listo', ?, 1, ?, ?)",
+                (int(reporte_id), proc, ref, url, titulo, fuente, fecha,
+                 (texto or "")[:tope_txt], ahora, ahora))
+            ins[proc] += 1
+
+        # Orden de prioridad al repartir el cupo: alertas (hallazgo del motor),
+        # ingestas (material ya curado por el analista), prensa.
+        for a in alertas:
+            if sum(ins.values()) >= cupo:
+                break
+            etq = " · ".join(x for x in [(a.get("nivel") or "").upper(),
+                                         a.get("categoria")] if x)
+            _guardar("alerta_plataforma", None, a.get("url"),
+                     a.get("titulo"), a.get("fuente") or "Alerta de la plataforma",
+                     a.get("timestamp"),
+                     " ".join(x for x in [a.get("resumen"),
+                                          f"[{etq}]" if etq else ""] if x))
+        for g in ingestas:
+            if sum(ins.values()) >= cupo:
+                break
+            _guardar("ingesta_manual", None, g.get("url"), g.get("titulo"),
+                     g.get("fuente"), g.get("published") or g.get("ingresada_en"),
+                     g.get("resumen"))
+        for a in arts:
+            if sum(ins.values()) >= cupo:
+                break
+            _guardar("bd_osint", a.get("id"), a.get("url"), a.get("title"),
+                     a.get("source_name"),
+                     (a.get("capturado_en") or a.get("published")), a.get("summary"))
+
+        # Parte por fuente: encontradas vs incorporadas (la resta = fuera por tope)
+        por_cat = {}
+        for a in arts:
+            cat = (a.get("category") or "sin categoría")
+            por_cat[cat] = por_cat.get(cat, 0) + 1
+        fuentes = [
+            {"fuente": "Alertas de la plataforma", "procedencia": "alerta_plataforma",
+             "encontradas": len(alertas), "incorporadas": ins["alerta_plataforma"]},
+            {"fuente": "Ingestas manuales", "procedencia": "ingesta_manual",
+             "encontradas": len(ingestas), "incorporadas": ins["ingesta_manual"]},
+            {"fuente": "Corpus OSINT (prensa y colectores)", "procedencia": "bd_osint",
+             "encontradas": len(arts), "incorporadas": ins["bd_osint"],
+             "por_categoria": por_cat},
+        ]
+        total = sum(ins.values())
+        return {"ok": True, "n": total, "por_fuente": fuentes,
+                "descartadas": (len(arts) + len(alertas) + len(ingestas)) - total,
+                "tope": par["max_piezas"], "cupo_disponible": cupo,
+                "terminos_usados": len(terms), "cosechado_en": ahora}
     return _ejecutar_con_reintentos(db_path, _op)
 
 
